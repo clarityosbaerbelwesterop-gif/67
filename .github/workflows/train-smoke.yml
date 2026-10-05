@@ -1,0 +1,50 @@
+name: Train smoke and benchmark
+
+# A minutes-long smoke training run plus the measured benchmark. This is a test
+# of the software, not a training farm (GitHub additional product terms).
+
+on:
+  workflow_dispatch:
+    inputs:
+      config:
+        description: Run config under training/configs/
+        default: smoke.json
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo build --release -p forge
+      - name: Validate config name
+        env:
+          CONFIG: ${{ inputs.config }}
+        run: |
+          [[ "$CONFIG" =~ ^[a-z0-9._-]+\.json$ ]] && [ -f "training/configs/$CONFIG" ] || { echo "bad config"; exit 1; }
+      - name: Train
+        env:
+          CONFIG: ${{ inputs.config }}
+        run: ./target/release/forge train --config "training/configs/$CONFIG" < /dev/null | tee train.jsonl
+      - name: Benchmark
+        run: ./target/release/forge bench --config training/configs/smoke.json --steps 5 | tee bench.jsonl
+      - name: Summary
+        run: |
+          echo '### Smoke training' >> "$GITHUB_STEP_SUMMARY"
+          grep '"type":"done"' train.jsonl >> "$GITHUB_STEP_SUMMARY" || true
+          grep '"type":"verdict"' bench.jsonl >> "$GITHUB_STEP_SUMMARY" || true
+      - uses: actions/upload-artifact@v4
+        with:
+          name: smoke-run
+          path: |
+            train.jsonl
+            bench.jsonl
+          retention-days: 14

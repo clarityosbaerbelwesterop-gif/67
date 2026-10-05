@@ -1,0 +1,18 @@
+{
+  "run": "smoke",
+  "model": { "vocab_size": 64, "dim": 64, "n_layers": 2, "n_heads": 4, "n_kv_heads": 2, "max_seq_len": 64 },
+  "data": "synthetic:13",
+  "batch": 8,
+  "seq_len": 32,
+  "grad_accum": 1,
+  "max_steps": 60,
+  "lr": 0.003,
+  "min_lr": 0.0003,
+  "warmup_steps": 10,
+  "seed": 1,
+  "out_dir": "runs",
+  "log_every": 20,
+  "eval_every": 30,
+  "eval_batches": 4,
+  "threads": 2
+}

@@ -131,5 +131,55 @@ impl Sampler {
     }
 }
 
+/// Mean loss and next-token accuracy of `weights` on `batches` windows of a split.
+pub fn evaluate_weights(
+    cfg: &ModelConfig,
+    weights: &BTreeMap<String, Tensor>,
+    data_spec: &str,
+    split: data::Split,
+    (batch, seq, batches): (usize, usize, usize),
+    seed: u64,
+    threads: usize,
+) -> Result<(f32, f32), String> {
+    let data = data::open(data_spec, cfg.vocab_size)?;
+    let (prog, rep) = compile(
+        model::build(cfg, batch, seq, model::Head::Eval),
+        CompileOptions::default(),
+    )
+    .map_err(|e| e.to_string())?;
+    let words = cfg.num_params() + rep.transient_words_peak as usize + 2 * batch * seq + (1 << 20);
+    let mut m = Machine::new(words, threads);
+    let mut lp = m.load(prog).map_err(|e| e.to_string())?;
+    for p in model::params(cfg) {
+        let t = weights
+            .get(&p.name)
+            .ok_or(format!("weights lack {}", p.name))?;
+        m.persistent_mut(&p.name)
+            .ok_or("unbound")?
+            .copy_from_slice(&t.data);
+    }
+    let mut rng = rng::Rng::new(seed);
+    let n = batch * seq;
+    for _ in 0..batches.max(1) {
+        let (x, y) = data.batch(&mut rng, split, batch, seq);
+        m.persistent_mut(&model::tokens_name(n))
+            .ok_or("unbound")?
+            .iter_mut()
+            .zip(&x)
+            .for_each(|(d, s)| *d = *s as f32);
+        m.persistent_mut(&model::targets_name(n))
+            .ok_or("unbound")?
+            .iter_mut()
+            .zip(&y)
+            .for_each(|(d, s)| *d = *s as f32);
+        m.run(&mut lp).map_err(|e| e.to_string())?;
+    }
+    let cnt = m.regs[forge_isa::regs::LOSS_COUNT as usize];
+    Ok((
+        m.regs[forge_isa::regs::LOSS as usize] / cnt,
+        m.regs[forge_isa::regs::CORRECT as usize] / cnt,
+    ))
+}
+
 #[cfg(test)]
 mod tests;

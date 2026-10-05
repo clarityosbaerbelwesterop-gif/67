@@ -1,0 +1,31 @@
+name: Build virtual silicon
+
+# Compiles the forge accelerator stack (ISA, kernels, compiler, trainer) to a
+# release binary and records which matrix engines the runner exposes.
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo build --release -p forge
+      - name: Engines on this runner
+        run: ./target/release/forge engines | tee -a "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: forge-linux-x86_64
+          path: target/release/forge
+          retention-days: 14
