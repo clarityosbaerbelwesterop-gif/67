@@ -1,0 +1,39 @@
+name: WebGPU parity
+
+# The WGSL kernels that run on the iPad are checked against the native engine
+# on every change: Dawn (npm `webgpu`) on Mesa lavapipe, a software Vulkan driver.
+
+on:
+  pull_request:
+    paths: ["webgpu/**", "core_engine/**", ".github/workflows/webgpu-parity.yml"]
+  push:
+    branches: [main]
+    paths: ["webgpu/**", "core_engine/**"]
+
+permissions:
+  contents: read
+
+jobs:
+  parity:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: sudo apt-get update -q && sudo apt-get install -y -q mesa-vulkan-drivers
+      - run: cargo build --release -p forge
+      - name: Train a smoke checkpoint
+        run: ./target/release/forge train --config training/configs/smoke.json < /dev/null > smoke.jsonl
+      - working-directory: webgpu
+        run: npm install --no-audit --no-fund
+      - name: Parity (WGSL vs native)
+        working-directory: webgpu
+        run: |
+          CK=$(python3 -c "import json;print(json.load(open('../runs/smoke/latest.json'))['dir'])")
+          node test/parity.mjs "../$CK"
