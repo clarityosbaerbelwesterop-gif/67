@@ -53,6 +53,17 @@
   }
  },
  "missing": [],
+ "primary_arm": "diloco-h250-fp32",
+ "bytes_ratio": 250.0,
+ "bpb_ratio": 1.2858,
+ "verdict": "FAIL",
+ "vs_baseline": {
+  "ddp": 0.0,
+  "diloco-h250-fp32": 0.2858,
+  "diloco-h250-int8": 0.2953,
+  "diloco-h250-topk1": 0.6227,
+  "diloco-h50-fp32": 0.114
+ },
  "bytes_ratio_ddp_over_diloco_h250": 250.0,
  "bpb_ratio_diloco_h250_over_ddp": 1.2858,
  "t1": "FAIL",

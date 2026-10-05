@@ -1,0 +1,39 @@
+{
+  "id": "t1b-diloco-long",
+  "status": "pre-registered",
+  "registered": "2026-10-05",
+  "after": "t1-diloco FAIL (results/t1/README.md): DiLoCo lost 11 % (H=50) and 29 % (H=250) against DDP at 2,000 steps; H=250 had only 8 outer steps and was unstable.",
+  "question": "With 2.5x longer training (5,000 steps) and H=100 (50 outer steps), does DiLoCo come within 5 % of DDP while each worker sends at least 100x fewer bytes?",
+  "method": "As t1-diloco (fabric/pilot.py, same model, data, schedule, 4 workers, new seeds). Outer step: SGD with Nesterov momentum unless an arm says otherwise.",
+  "spec": {
+    "model": {"name": "fabric-pilot", "vocab_size": 256, "d_model": 256, "n_layers": 4, "n_heads": 4, "n_kv_heads": 4, "max_seq": 256},
+    "workers": 4,
+    "batch": 8,
+    "seq": 256,
+    "steps": 5000,
+    "lr": 0.002,
+    "warmup": 100,
+    "weight_decay": 0.1,
+    "clip": 1.0,
+    "eval_every": 1000,
+    "eval_windows": 256
+  },
+  "arms": [
+    {"name": "ddp", "kind": "ddp"},
+    {"name": "diloco-h100", "kind": "diloco", "h": 100, "codec": "fp32", "outer_lr": 0.7, "outer_momentum": 0.9},
+    {"name": "diloco-h100-avg", "kind": "diloco", "h": 100, "codec": "fp32", "outer_lr": 1.0, "outer_momentum": 0.0},
+    {"name": "diloco-h100-int8", "kind": "diloco", "h": 100, "codec": "int8", "outer_lr": 0.7, "outer_momentum": 0.9},
+    {"name": "diloco-h250", "kind": "diloco", "h": 250, "codec": "fp32", "outer_lr": 0.7, "outer_momentum": 0.9}
+  ],
+  "seeds": [10, 11, 12],
+  "gate": {
+    "baseline_arm": "ddp",
+    "primary_arm": "diloco-h100",
+    "max_bpb_ratio": 1.05,
+    "min_bytes_ratio": 100,
+    "primary": "PASS if mean final_val_bpb(diloco-h100) <= 1.05 * mean final_val_bpb(ddp) over seeds 10-12 AND bytes(ddp)/bytes(diloco-h100) >= 100. FAIL otherwise.",
+    "secondary": "Descriptive only: h100-avg (plain averaging, no outer momentum), h100-int8 (compression), h250 (are more outer steps enough for long rounds?).",
+    "evaluator": "fabric/gate.py on the committed result files."
+  },
+  "limits": "Same small CPU model. A PASS says DiLoCo matches DDP at this scale when training is long enough, not that it does at 27B."
+}

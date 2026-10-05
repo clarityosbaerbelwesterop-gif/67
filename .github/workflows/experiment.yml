@@ -1,0 +1,122 @@
+name: experiment
+
+# Any pre-registered pilot experiment (experiments/<id>.json), arms x seeds on free CPU runners.
+# Start: write the experiment id into .github/run/experiment and push. The verdict job applies the
+# experiment's own gate (fabric/gate.py) and commits results/<id>/ with VERDICT.json.
+
+on:
+  push:
+    paths: [".github/run/experiment"]
+
+permissions:
+  contents: read
+
+env:
+  OSIRUS_REF: ccd0af3515c11359930081de2b8027371acde5a9   # native model + enwik8 loader
+
+jobs:
+  setup:
+    runs-on: ubuntu-latest
+    outputs:
+      id: ${{ steps.exp.outputs.id }}
+      matrix: ${{ steps.exp.outputs.matrix }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - id: exp
+        run: |
+          id="$(head -n1 .github/run/experiment | tr -cd 'a-z0-9-')"
+          test -f "experiments/$id.json" || { echo "no experiments/$id.json"; exit 1; }
+          python3 -c "import json,sys; e=json.load(open(sys.argv[1])); assert e['status']=='pre-registered', e['status']; print('matrix=' + json.dumps({'arm':[a['name'] for a in e['arms']], 'seed':e['seeds']}))" "experiments/$id.json" >> "$GITHUB_OUTPUT"
+          echo "id=$id" >> "$GITHUB_OUTPUT"
+
+  data:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/cache@v4
+        id: cache
+        with:
+          path: ~/.cache/rouge-data
+          key: enwik8-v1
+      - if: steps.cache.outputs.cache-hit != 'true'
+        run: |
+          mkdir -p ~/.cache/rouge-data
+          for i in 1 2 3 4 5; do
+            if curl -fsSL --retry 3 -o "$RUNNER_TEMP/enwik8.zip" https://mattmahoney.net/dc/enwik8.zip \
+               && unzip -p "$RUNNER_TEMP/enwik8.zip" enwik8 > ~/.cache/rouge-data/enwik8 \
+               && [ "$(stat -c%s ~/.cache/rouge-data/enwik8)" = 100000000 ]; then break; fi
+            sleep $((i * 30))
+          done
+          test "$(stat -c%s ~/.cache/rouge-data/enwik8)" = 100000000
+
+  arm:
+    needs: [setup, data]
+    runs-on: ubuntu-latest
+    timeout-minutes: 340
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.setup.outputs.matrix) }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/checkout@v4
+        with:
+          repository: clarityosbaerbelwesterop-gif/Osirus
+          ref: ${{ env.OSIRUS_REF }}
+          path: osirus
+          persist-credentials: false
+          sparse-checkout: |
+            training/rouge/native
+            research/rouge-architecture/benchmarks
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - uses: actions/cache/restore@v4
+        with:
+          path: ~/.cache/rouge-data
+          key: enwik8-v1
+          fail-on-cache-miss: true
+      - run: python -m pip install -q --index-url https://download.pytorch.org/whl/cpu torch==2.14.0
+      - name: Run the arm
+        run: |
+          id="${{ needs.setup.outputs.id }}"
+          python -m fabric.pilot --osirus osirus --experiment "experiments/$id.json" --arm "${{ matrix.arm }}" \
+            --seed ${{ matrix.seed }} --out "results/$id/${{ matrix.arm }}-s${{ matrix.seed }}.json"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ needs.setup.outputs.id }}-${{ matrix.arm }}-s${{ matrix.seed }}
+          path: results/${{ needs.setup.outputs.id }}/*.json
+
+  verdict:
+    needs: [setup, arm]
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - uses: actions/download-artifact@v4
+        with:
+          path: downloaded
+          pattern: ${{ needs.setup.outputs.id }}-*
+          merge-multiple: true
+      - name: Gate and commit
+        run: |
+          id="${{ needs.setup.outputs.id }}"
+          mkdir -p "results/$id"
+          cp downloaded/*.json "results/$id/" 2>/dev/null || true
+          python -m fabric.gate --experiment "experiments/$id.json"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add "results/$id"
+          git commit -m "results($id): run ${{ github.run_id }}" || exit 0
+          for attempt in 1 2 3 4; do
+            git pull -q --rebase origin "${GITHUB_REF_NAME}" && git push -q origin "HEAD:${GITHUB_REF_NAME}" && break
+            sleep $((attempt * 5))
+          done

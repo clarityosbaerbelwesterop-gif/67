@@ -23,29 +23,39 @@ def verdict(exp: dict, results: list[dict]) -> dict:
              for arm, rs in sorted(by_arm.items())}
     out = {"experiment": exp["id"], "arms": table, "missing": missing}
     if missing:
-        out["t1"] = "INCOMPLETE"
+        out["verdict"] = "INCOMPLETE"
         return out
-    ddp, dl = table["ddp"], table["diloco-h250-fp32"]
-    ratio = ddp["bytes_per_worker"] / dl["bytes_per_worker"]
-    out["bytes_ratio_ddp_over_diloco_h250"] = round(ratio, 1)
-    out["bpb_ratio_diloco_h250_over_ddp"] = round(dl["mean_bpb"] / ddp["mean_bpb"], 4)
-    out["t1"] = "PASS" if dl["mean_bpb"] <= ddp["mean_bpb"] * 1.03 and ratio >= 100 else "FAIL"
-    t2 = {}
-    for arm in ("diloco-h250-int8", "diloco-h250-topk1"):
-        t2[arm] = {"bpb_cost_vs_fp32": round(table[arm]["mean_bpb"] / dl["mean_bpb"] - 1, 4),
-                   "bytes_vs_fp32": round(table[arm]["bytes_per_worker"] / dl["bytes_per_worker"], 4)}
-    t2["int8_lossless"] = t2["diloco-h250-int8"]["bpb_cost_vs_fp32"] <= 0.01
-    out["t2"] = t2
+    gate = exp["gate"]
+    if "primary_arm" not in gate:                      # t1-diloco: its gate was written before this generalisation
+        gate = {"baseline_arm": "ddp", "primary_arm": "diloco-h250-fp32", "max_bpb_ratio": 1.03, "min_bytes_ratio": 100}
+    base, prim = table[gate["baseline_arm"]], table[gate["primary_arm"]]
+    ratio = base["bytes_per_worker"] / prim["bytes_per_worker"]
+    bpb_ratio = prim["mean_bpb"] / base["mean_bpb"]
+    out["primary_arm"], out["bytes_ratio"], out["bpb_ratio"] = gate["primary_arm"], round(ratio, 1), round(bpb_ratio, 4)
+    passed = bpb_ratio <= gate["max_bpb_ratio"] and ratio >= gate["min_bytes_ratio"]
+    out["verdict"] = "PASS" if passed else "FAIL"
+    out["vs_baseline"] = {arm: round(r["mean_bpb"] / base["mean_bpb"] - 1, 4) for arm, r in table.items()}
+    if exp["id"] == "t1-diloco":                       # field names of the committed t1 verdict
+        out["bytes_ratio_ddp_over_diloco_h250"], out["bpb_ratio_diloco_h250_over_ddp"], out["t1"] = out["bytes_ratio"], out["bpb_ratio"], out["verdict"]
+        dl = prim
+        t2 = {}
+        for arm in ("diloco-h250-int8", "diloco-h250-topk1"):
+            t2[arm] = {"bpb_cost_vs_fp32": round(table[arm]["mean_bpb"] / dl["mean_bpb"] - 1, 4),
+                       "bytes_vs_fp32": round(table[arm]["bytes_per_worker"] / dl["bytes_per_worker"], 4)}
+        t2["int8_lossless"] = t2["diloco-h250-int8"]["bpb_cost_vs_fp32"] <= 0.01
+        out["t2"] = t2
     return out
 
 
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--experiment", type=Path, default=HERE / "experiments" / "t1-diloco.json")
-    ap.add_argument("--results", type=Path, default=HERE / "results" / "t1")
-    ap.add_argument("--out", type=Path, default=HERE / "results" / "t1" / "VERDICT.json")
+    ap.add_argument("--results", type=Path, help="default: results/<experiment id>")
+    ap.add_argument("--out", type=Path, help="default: <results>/VERDICT.json")
     args = ap.parse_args()
     exp = json.loads(args.experiment.read_text())
+    args.results = args.results or HERE / "results" / ("t1" if exp["id"] == "t1-diloco" else exp["id"])
+    args.out = args.out or args.results / "VERDICT.json"
     results = [json.loads(p.read_text()) for p in sorted(args.results.glob("*.json")) if p.name != "VERDICT.json"]
     out = verdict(exp, results)
     args.out.write_text(json.dumps(out, indent=1) + "\n")
