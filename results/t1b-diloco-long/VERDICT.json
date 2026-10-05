@@ -1,0 +1,67 @@
+{
+ "experiment": "t1b-diloco-long",
+ "arms": {
+  "ddp": {
+   "mean_bpb": 1.70056,
+   "sd_bpb": 0.00539,
+   "bytes_per_worker": 65582080000,
+   "seeds": [
+    10,
+    11,
+    12
+   ]
+  },
+  "diloco-h100": {
+   "mean_bpb": 1.82929,
+   "sd_bpb": 0.00245,
+   "bytes_per_worker": 655820800,
+   "seeds": [
+    10,
+    11,
+    12
+   ]
+  },
+  "diloco-h100-avg": {
+   "mean_bpb": 1.84746,
+   "sd_bpb": 0.00985,
+   "bytes_per_worker": 655820800,
+   "seeds": [
+    10,
+    11,
+    12
+   ]
+  },
+  "diloco-h100-int8": {
+   "mean_bpb": 1.83213,
+   "sd_bpb": 0.00273,
+   "bytes_per_worker": 164205000,
+   "seeds": [
+    10,
+    11,
+    12
+   ]
+  },
+  "diloco-h250": {
+   "mean_bpb": 1.87694,
+   "sd_bpb": 0.00514,
+   "bytes_per_worker": 262328320,
+   "seeds": [
+    10,
+    11,
+    12
+   ]
+  }
+ },
+ "missing": [],
+ "primary_arm": "diloco-h100",
+ "bytes_ratio": 100.0,
+ "bpb_ratio": 1.0757,
+ "verdict": "FAIL",
+ "vs_baseline": {
+  "ddp": 0.0,
+  "diloco-h100": 0.0757,
+  "diloco-h100-avg": 0.0864,
+  "diloco-h100-int8": 0.0774,
+  "diloco-h250": 0.1037
+ }
+}

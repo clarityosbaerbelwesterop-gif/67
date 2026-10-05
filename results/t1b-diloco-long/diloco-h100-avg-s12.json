@@ -1,0 +1,16 @@
+{
+ "schema": "fabric.pilot/1",
+ "arm": "diloco-h100-avg",
+ "seed": 12,
+ "final_val_bpb": 1.85099,
+ "bytes_sent_per_worker": 655820800,
+ "wall_s": 10643.9,
+ "experiment": "t1b-diloco-long",
+ "smoke": false,
+ "source": {
+  "run_id": 37273497357,
+  "job_id": 111645385008,
+  "from": "FABRIC_RESULT line of the job log",
+  "note": "the verdict job that collects the artifacts was not started (GitHub Actions billing); curve, params and corpus hash are in the run artifact only"
+ }
+}
