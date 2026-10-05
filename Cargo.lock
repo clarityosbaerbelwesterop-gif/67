@@ -112,6 +112,7 @@ dependencies = [
  "forge-formats",
  "forge-hbvm",
  "forge-kernels",
+ "rayon",
  "serde",
  "serde_json",
 ]
