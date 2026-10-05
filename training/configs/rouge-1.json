@@ -1,0 +1,30 @@
+{
+  "run": "rouge-1",
+  "data": "data/out/general/train.meta.json",
+  "init_from": "runs/base-s/FINAL",
+  "max_steps": 1000,
+  "lr": 0.0003,
+  "min_lr": 3e-05,
+  "warmup_steps": 50,
+  "seed": 1,
+  "model": {
+    "vocab_size": 8192,
+    "dim": 512,
+    "n_layers": 8,
+    "n_heads": 8,
+    "n_kv_heads": 4,
+    "ffn_hidden": 1408,
+    "max_seq_len": 512
+  },
+  "batch": 8,
+  "seq_len": 256,
+  "grad_accum": 4,
+  "weight_decay": 0.1,
+  "grad_clip": 1.0,
+  "out_dir": "runs",
+  "log_every": 10,
+  "eval_every": 200,
+  "eval_batches": 16,
+  "ckpt_every": 500,
+  "threads": 0
+}

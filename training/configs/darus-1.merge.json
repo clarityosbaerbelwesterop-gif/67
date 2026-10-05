@@ -1,0 +1,19 @@
+{
+  "name": "darus-1",
+  "base": "runs/base-s/FINAL",
+  "children": [
+    "runs/rouge-1/FINAL",
+    "runs/quasnir-1/FINAL"
+  ],
+  "method": "ties",
+  "density": 0.5,
+  "lambda": 1.0,
+  "out": "runs/darus-1/FINAL",
+  "acceptance": {
+    "max_regression_vs_parents": 0.02,
+    "suites": [
+      "general",
+      "code"
+    ]
+  }
+}
