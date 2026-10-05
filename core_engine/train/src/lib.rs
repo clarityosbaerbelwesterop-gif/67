@@ -4,6 +4,7 @@
 pub mod ckpt;
 pub mod config;
 pub mod data;
+pub mod diloco;
 pub mod merge;
 pub mod model;
 pub mod rng;

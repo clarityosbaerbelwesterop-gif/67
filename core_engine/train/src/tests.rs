@@ -235,3 +235,77 @@ fn control_commands_are_applied_or_rejected() {
     assert_eq!(warns.len(), 3, "{warns:?}");
     std::fs::remove_dir_all(out).ok();
 }
+
+#[test]
+fn diloco_with_one_worker_equals_plain_training() {
+    use crate::diloco::{local, DiLoCo};
+    let out = std::env::temp_dir().join(format!("forge-dl1-{}", std::process::id()));
+    let (s1, _) = collect();
+    let (s2, _) = collect();
+    let mut plain = Trainer::new(cfg("plain", out.to_str().unwrap(), 20), s1).unwrap();
+    let mut dl = Trainer::new(cfg("dl", out.to_str().unwrap(), 20), s2).unwrap();
+    for _ in 0..8 {
+        plain.train_step().unwrap();
+    }
+    let mut g = local::group(1);
+    // outer lr 1, momentum 0: θ ← θ − (θ − θ_local) = θ_local, i.e. plain training.
+    let mut d = DiLoCo::new(&dl, 4, 1.0, 0.0);
+    d.round(&mut dl, &mut g[0]).unwrap();
+    d.round(&mut dl, &mut g[0]).unwrap();
+    for p in model::params(&dl.cfg.model) {
+        let (a, b) = (plain.param(&p.name).unwrap(), dl.param(&p.name).unwrap());
+        assert!(
+            a.iter().zip(b).all(|(x, y)| (x - y).abs() < 1e-5),
+            "{} diverged",
+            p.name
+        );
+    }
+    std::fs::remove_dir_all(out).ok();
+}
+
+#[test]
+fn diloco_workers_stay_in_sync_and_learn() {
+    use crate::diloco::{local, Collective, DiLoCo};
+    let out = std::env::temp_dir().join(format!("forge-dl2-{}", std::process::id()));
+    let world = 3;
+    let group = local::group(world);
+    let handles: Vec<_> = group
+        .into_iter()
+        .map(|mut coll| {
+            let out = out.clone();
+            std::thread::spawn(move || {
+                let (sink, _) = collect();
+                let mut c = cfg(&format!("w{}", coll.rank()), out.to_str().unwrap(), 1000);
+                c.seed = 100 + coll.rank() as u64; // different data windows and init per worker
+                c.threads = 1;
+                let mut tr = Trainer::new(c, sink).unwrap();
+                let mut d = DiLoCo::new(&tr, 10, 0.7, 0.9);
+                d.synchronise(&mut tr, &mut coll).unwrap();
+                let first = tr.evaluate().unwrap().0;
+                let mut last = 0.0;
+                for _ in 0..12 {
+                    last = d.round(&mut tr, &mut coll).unwrap();
+                }
+                (
+                    first,
+                    last,
+                    tr.evaluate().unwrap().0,
+                    d.global().to_vec(),
+                    d.bytes_communicated,
+                )
+            })
+        })
+        .collect();
+    let results: Vec<_> = handles.into_iter().map(|h| h.join().unwrap()).collect();
+    let g0 = &results[0].3;
+    for (first, _, val, g, bytes) in &results {
+        assert_eq!(g, g0, "workers must hold identical global parameters");
+        assert!(*val < 0.3 * first, "DiLoCo did not learn: {first} -> {val}");
+        assert_eq!(
+            *bytes,
+            12 * 4 * g0.len() as u64,
+            "one exchange per round of 10 steps"
+        );
+    }
+    std::fs::remove_dir_all(out).ok();
+}
