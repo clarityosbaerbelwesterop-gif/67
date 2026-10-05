@@ -1,0 +1,1556 @@
+[
+  {
+    "source": "github:nodejs/node/doc/api",
+    "license": "MIT",
+    "status": "ok",
+    "documents": 65
+  },
+  {
+    "source": "github:python/cpython/Doc@3.11",
+    "license": "PSF-2.0",
+    "status": "ok",
+    "documents": 351
+  },
+  {
+    "source": "github:python/peps",
+    "license": "Public Domain / CC0-1.0 (per-PEP statement checked)",
+    "status": "ok",
+    "documents": 547
+  },
+  {
+    "source": "github:rust-lang/book",
+    "branch": "main",
+    "license": "MIT OR Apache-2.0",
+    "status": "ok",
+    "documents": 111
+  },
+  {
+    "source": "github:rust-lang/nomicon",
+    "branch": "master",
+    "license": "MIT OR Apache-2.0",
+    "status": "ok",
+    "documents": 63
+  },
+  {
+    "source": "github:rust-lang/reference",
+    "branch": "master",
+    "license": "MIT OR Apache-2.0",
+    "status": "ok",
+    "documents": 120
+  },
+  {
+    "source": "github:rust-lang/rust-by-example",
+    "branch": "master",
+    "license": "MIT OR Apache-2.0",
+    "status": "ok",
+    "documents": 197
+  },
+  {
+    "source": "local:cpython-3.11-stdlib",
+    "path": "/usr/lib/python3.11",
+    "license": "PSF-2.0",
+    "status": "ok",
+    "documents": 635
+  },
+  {
+    "source": "npm:acorn",
+    "version": "8.19.0",
+    "license": "MIT",
+    "status": "ok",
+    "sha256": "c6fad21ffa1f2ba20338bf1dde1de911c2093c1aaf7b3af17c477661bd3bfaaf",
+    "documents": 3
+  },
+  {
+    "source": "npm:ajv",
+    "version": "8.20.0",
+    "license": "MIT",
+    "status": "ok",
+    "sha256": "b2f0b3a893bbb8cc5efb6814f08b1499e19e31d5dd73683f5893382f48f6e7b3",
+    "documents": 214
+  },
+  {
+    "source": "npm:async",
+    "version": "3.2.6",
+    "license": "MIT",
+    "status": "ok",
+    "sha256": "6bb45cfba08cd2eea39eb3ce6eaa94113070fe137ec0bd4a9f122be9a0250e6f",
+    "documents": 131
+  },
+  {
+    "source": "npm:axios",
+    "version": "1.20.0",
+    "license": "MIT",
+    "status": "ok",
+    "sha256": "5aa2dc9a5d6ced926e4b6ca8ef8e0253b118867e240db8650c49379e972c12ac",
+    "documents": 79
+  },
+  {
+    "source": "npm:bcryptjs",
+    "version": "3.0.3",
+    "license": "BSD-3-Clause",
+    "status": "ok",
+    "sha256": "419a1c3122155f61c46eda54e851ba238272f8bd3859005a91b891020b0efc2c",
+    "documents": 3
+  },
+  {
+    "source": "npm:body-parser",
+    "version": "2.3.0",
+    "license": "MIT",
+    "status": "ok",
+    "sha256": "031d7f6c5142e31be91d36a43f541f02a505943e3b871aa44ef5fb6939be258e",
+    "documents": 8
+  },
+  {
+    "source": "npm:chalk",
+    "version": "6.0.1",
+    "license": "MIT",
+    "status": "ok",
+    "sha256": "22a5b05d62a304c950f24dedb466ea07fb4b458e58bb37b2fe2c69ed2c9ba6c3",
+    "documents": 6
+  },
+  {
+    "source": "npm:commander",
+    "version": "15.0.0",
+    "license": "MIT",
+    "status": "ok",
+    "sha256": "632c1e039b31e98fa79c4fae5b10a5ffbbf9df0f21c9ffb3d74e95734b30696f",
+    "documents": 8
+  },
+  {
+    "source": "npm:cookie",
+    "version": "2.0.1",
+    "license": "MIT",
+    "status": "ok",
+    "sha256": "8516126668fc55128916561047c055db77d0401dee1db108adce7267b4b06ff0",
+    "documents": 2
+  },
+  {
+    "source": "npm:cors",
+    "version": "2.8.6",
+    "license": "MIT",
+    "status": "ok",
+    "sha256": "32242124397140800e1238a252b4cd74669d58c81b655d9d3721789b56c1c1ff",
+    "documents": 2
+  },
+  {
+    "source": "npm:csrf-csrf",
+    "version": "4.0.3",
+    "license": "ISC",
+    "status": "ok",
+    "sha256": "41fd4e59ee26e47d56a460d47e2a95ddc95314fb7cb1f6639d2e9db8276a062a",
+    "documents": 4
+  },
+  {
+    "source": "npm:date-fns",
+    "version": "4.4.0",
+    "license": "MIT",
+    "status": "ok",
+    "sha256": "eb106d1e9276213d6144b221c103e4abb7d92186734f7505f5a3860427b41a06",
+    "documents": 1346
+  },
+  {
+    "source": "npm:dayjs",
+    "version": "1.11.23",
+    "license": "MIT",
+    "status": "ok",
+    "sha256": "7da0ff55ddb6d4050b91ea0a11a8e9d92c048305155039387373f20be080e594",
+    "documents": 366
+  },
+  {
+    "source": "npm:debug",
+    "version": "4.4.3",
+    "license": "MIT",
+    "status": "ok",
+    "sha256": "89c1ac9c946ee8905a875837114528e97eeae35e03be3190584b2216af43e4a7",
+    "documents": 5
+  },
+  {
+    "source": "npm:dompurify",
+    "version": "3.4.16",
+    "license": "(MPL-2.0 OR Apache-2.0)",
+    "status": "rejected-licence"
+  },
+  {
+    "source": "npm:dotenv",
+    "version": "18.0.5",
+    "license": "BSD-2-Clause",
+    "status": "ok",
+    "sha256": "087464ec189e002a883be5bdb004b03b968e0c96420fd0b270d751838fc34b46",
+    "documents": 3
+  },
+  {
+    "source": "npm:escape-html",
+    "version": "1.0.3",
+    "license": "MIT",
+    "status": "ok",
+    "sha256": "a101155c3cbdfb1e4f98f2f83c8b5e392db6accfa606df0eba8b87a5762b0366",
+    "documents": 2
+  },
+  {
+    "source": "npm:esprima",
+    "version": "4.0.1",
+    "license": "BSD-2-Clause",
+    "status": "ok",
+    "sha256": "d8a1910e9cbecc95b4c5df75376c46a7a9261859c294ef91505c1442e093cc74",
+    "documents": 3
+  },
+  {
+    "source": "npm:express",
+    "version": "5.2.1",
+    "license": "MIT",
+    "status": "ok",
+    "sha256": "1773a16c02b4422653479b9c4d211268f7022bdac0d817b5698535bb485dd005",
+    "documents": 8
+  },
+  {
+    "source": "npm:express-rate-limit",
+    "version": "8.7.0",
+    "license": "MIT",
+    "status": "ok",
+    "sha256": "1e3ed770c901156477986dfc189fb0b5bd8d8a8e6481393954ed4f6265d139b0",
+    "documents": 3
+  },
+  {
+    "source": "npm:fastify",
+    "version": "5.12.5",
+    "license": "MIT",
+    "status": "ok",
+    "sha256": "f088913fd1dd3f42f090c574d068a5b59de233b352cd14f7fb1edc4667f51da5",
+    "documents": 331
+  },
+  {
+    "source": "npm:glob",
+    "version": "13.0.6",
+    "license": "BlueOak-1.0.0",
+    "status": "rejected-licence"
+  },
+  {
+    "source": "npm:graphql",
+    "version": "17.0.2",
+    "license": "MIT",
+    "status": "ok",
+    "sha256": "db22712b124edd915e68abaac27ab7f3898e9905f4c691f6e0b37245eacda587",
+    "documents": 697
+  },
+  {
+    "source": "npm:helmet",
+    "version": "8.3.0",
+    "license": "MIT",
+    "status": "ok",
+    "sha256": "b8a9ed18c15665bf2de38f409468904dd3d4bbb849b946f6b4557ee7e7ab449b",
+    "documents": 5
+  },
+  {
+    "source": "npm:highlight.js",
+    "version": "11.12.0",
+    "license": "BSD-3-Clause",
+    "status": "ok",
+    "sha256": "accbfaaab745088609b4eea2bdca2ad62f1f1dd27304e0f8df65cfe0fe042143",
+    "documents": 720
+  },
+  {
+    "source": "npm:hono",
+    "version": "4.13.13",
+    "license": "MIT",
+    "status": "ok",
+    "sha256": "3c656fb527641e841e1c4dae1d2faa238a4e17dde37f1620d5b72172caaddac0",
+    "documents": 381
+  },
+  {
+    "source": "npm:immer",
+    "version": "11.1.21",
+    "license": "MIT",
+    "status": "ok",
+    "sha256": "47978bdf5cc954ec855ba0f938524b8cf778efdbef0baac9c71f7a45666e0156",
+    "documents": 23
+  },
+  {
+    "source": "npm:joi",
+    "version": "18.2.9",
+    "license": "BSD-3-Clause",
+    "status": "ok",
+    "sha256": "2f88b529b9c3040627f53ca91c9d45e33b73d9a286e4f4ca5c9170f8f284efef",
+    "documents": 33
+  },
+  {
+    "source": "npm:jsonwebtoken",
+    "version": "9.0.3",
+    "license": "MIT",
+    "status": "ok",
+    "sha256": "d9af2628a7a4dda25acf1e19c7ecc2468e1e9e8d4619fe2cae829e89d96f6b82",
+    "documents": 13
+  },
+  {
+    "source": "npm:koa",
+    "version": "3.2.1",
+    "license": "MIT",
+    "status": "ok",
+    "sha256": "f66881dc0891744073dc18994b0e808921454b0acf297ccbba49f753d299997a",
+    "documents": 9
+  },
+  {
+    "source": "npm:lodash",
+    "version": "4.18.1",
+    "license": "MIT",
+    "status": "ok",
+    "sha256": "696942c2a488c9d7428e9ca5f12ccf03b52de01dcdbfe4d4751d392f0491ae16",
+    "documents": 1046
+  },
+  {
+    "source": "npm:marked",
+    "version": "18.0.14",
+    "license": "MIT",
+    "status": "ok",
+    "sha256": "f74bd78902b6e83c4c488d6ea979c15619a11dbd0d8e21f4246bdd357c19c091",
+    "documents": 6
+  },
+  {
+    "source": "npm:minimist",
+    "version": "1.2.8",
+    "license": "MIT",
+    "status": "ok",
+    "sha256": "350a76c115b393c19d24654834261e5dc9f0e8cc5e08f3937fa80140f3e4ce83",
+    "documents": 19
+  },
+  {
+    "source": "npm:mkdirp",
+    "version": "3.0.1",
+    "license": "MIT",
+    "status": "ok",
+    "sha256": "fc7a7c3d357bb9f265e78ef38d108f1aa2bd86e9e781d5bcc28250b3dcdc8ebf",
+    "documents": 15
+  },
+  {
+    "source": "npm:morgan",
+    "version": "1.12.1",
+    "license": "MIT",
+    "status": "ok",
+    "sha256": "ad86e5589b5a3e720e8462492788f7bbfd90bc712b5ecec6bd96f543e0e85232",
+    "documents": 2
+  },
+  {
+    "source": "npm:nanoid",
+    "version": "6.0.1",
+    "license": "MIT",
+    "status": "ok",
+    "sha256": "9e45013cba30ab148bd464202560bb4dfa1295da99033af78deeee3db2f1b973",
+    "documents": 7
+  },
+  {
+    "source": "npm:node-fetch",
+    "version": "3.3.2",
+    "license": "MIT",
+    "status": "ok",
+    "sha256": "615af90e363f8f276b4b54f8e6c163cf3686dce1d8867dd7e52cbed4d38d2dab",
+    "documents": 15
+  },
+  {
+    "source": "npm:pino",
+    "version": "10.4.0",
+    "license": "MIT",
+    "status": "ok",
+    "sha256": "f745d3dee0bddd39f11226335ee6dbbe3d49cc037168f2b31a8cdbe78f0e6216",
+    "documents": 172
+  },
+  {
+    "source": "npm:preact",
+    "version": "11.0.0",
+    "license": "MIT",
+    "status": "ok",
+    "sha256": "37774f9b023f4012d30b15d469b641c9e74510c35d2f3d8393501db887fa3abd",
+    "documents": 56
+  },
+  {
+    "source": "npm:qs",
+    "version": "6.16.0",
+    "license": "BSD-3-Clause",
+    "status": "ok",
+    "sha256": "f7a1bfc96c3a0c1172f1f3ef3c280f5ce8054841922e715f0d686da62d7beba4",
+    "documents": 16
+  },
+  {
+    "source": "npm:ramda",
+    "version": "0.32.0",
+    "license": "MIT",
+    "status": "ok",
+    "sha256": "e99a665207ddba7c1177c8062f607c37d31ac376674d41200418627428863967",
+    "documents": 740
+  },
+  {
+    "source": "npm:react",
+    "version": "19.3.0",
+    "license": "MIT",
+    "status": "ok",
+    "sha256": "5a4024110c49476e1538a70fd65b9e59d038fcc280b78eb933c24e10453afbf9",
+    "documents": 25
+  },
+  {
+    "source": "npm:redux",
+    "version": "5.0.1",
+    "license": "MIT",
+    "status": "ok",
+    "sha256": "adacd4f8a377e638a3feb568e45e8b8ff22c926516941db25b1acfc34d94398b",
+    "documents": 23
+  },
+  {
+    "source": "npm:rxjs",
+    "version": "7.8.2",
+    "license": "Apache-2.0",
+    "status": "ok",
+    "sha256": "2312f8ffd9726ffd7bd53ea12c5f13663d09a3dc3326f448c70b88f5ef6fac82",
+    "documents": 1006
+  },
+  {
+    "source": "npm:sanitize-html",
+    "version": "2.18.0",
+    "license": "MIT",
+    "status": "ok",
+    "sha256": "01b6afea073ee531f5c5535fcf1b56f7fcce5c85e05d26f62e82a6bfa3248674",
+    "documents": 2
+  },
+  {
+    "source": "npm:semver",
+    "version": "7.8.5",
+    "license": "ISC",
+    "status": "ok",
+    "sha256": "d85045d4300d7d57c891336b95df532e73f34c22ffcd222452b6d08b9d127d5d",
+    "documents": 50
+  },
+  {
+    "source": "npm:socket.io",
+    "version": "4.8.4",
+    "license": "MIT",
+    "status": "ok",
+    "sha256": "eac2f8dd36bd1ddc827407c6890cc9fa305e5f94038b9abdba98a4351934c6c2",
+    "documents": 13
+  },
+  {
+    "source": "npm:superstruct",
+    "version": "2.0.2",
+    "license": "MIT",
+    "status": "ok",
+    "sha256": "8b02b0ddf37ed32a62c80f03d5c21ed170f605800ab2ad1064f8499391f15f06",
+    "documents": 4
+  },
+  {
+    "source": "npm:underscore",
+    "version": "1.13.8",
+    "license": "MIT",
+    "status": "ok",
+    "sha256": "6547214df2878ae60cc552422ef14af38b8d4e3aa613be5bfe9c52b775d96f7a",
+    "documents": 493
+  },
+  {
+    "source": "npm:undici",
+    "version": "8.11.2",
+    "license": "MIT",
+    "status": "ok",
+    "sha256": "c69bf79440dfb262c7a43e35803731b2cfd7e6d264cfda6c54410d60f59bb8d7",
+    "documents": 161
+  },
+  {
+    "source": "npm:uuid",
+    "version": "14.0.2",
+    "license": "MIT",
+    "status": "ok",
+    "sha256": "30e122d0715991b19b98043ea8eb275e9083315c8b9cb9e9ba66c249ef936c6b",
+    "documents": 46
+  },
+  {
+    "source": "npm:validator",
+    "version": "13.15.35",
+    "license": "MIT",
+    "status": "ok",
+    "sha256": "f9a6b506bd9eda8df9d2a4120613426948d9f66cde1b6d5fad3406758d2f81f4",
+    "documents": 229
+  },
+  {
+    "source": "npm:vue",
+    "version": "3.5.43",
+    "license": "MIT",
+    "status": "ok",
+    "sha256": "9ab4d3b320a0ef7f0174039a622bb3a81c2c59d8808824250723b3b3f94511c6",
+    "documents": 20
+  },
+  {
+    "source": "npm:winston",
+    "version": "3.19.0",
+    "license": "MIT",
+    "status": "ok",
+    "sha256": "4183f422c69153b58b8595d3ec06c523087ca1a978006e1a6db63e199c18748e",
+    "documents": 35
+  },
+  {
+    "source": "npm:ws",
+    "version": "8.22.0",
+    "license": "MIT",
+    "status": "ok",
+    "sha256": "ca9b3798b2e11ce8fac6713f50ef0501aa12b09b330623c1dc409dff94e7abc8",
+    "documents": 17
+  },
+  {
+    "source": "npm:xss",
+    "version": "1.0.15",
+    "license": "MIT",
+    "status": "ok",
+    "sha256": "2574486d507bcc7585d2e9dbd717a9710484972a8ea60b1baa3cd57bf57aa439",
+    "documents": 9
+  },
+  {
+    "source": "npm:yargs",
+    "version": "18.2.0",
+    "license": "MIT",
+    "status": "ok",
+    "sha256": "44ddd9d39e41a7d73dd794b6d229f2b92fd655d394ef59e2ca34d31df6181d13",
+    "documents": 26
+  },
+  {
+    "source": "npm:yup",
+    "version": "1.7.1",
+    "license": "MIT",
+    "status": "ok",
+    "sha256": "296196395b10ac29d5a4173171bf1c6a42a99541f0a363fc3a82e9cfed2252fa",
+    "documents": 4
+  },
+  {
+    "source": "npm:zod",
+    "version": "4.6.5",
+    "license": "MIT",
+    "status": "ok",
+    "sha256": "a78c0c533de30dc1c4afc259ac43ac06e390cb0da8d2e32eae355301b50b36fc",
+    "documents": 336
+  },
+  {
+    "source": "pypi:aiosignal",
+    "file": "aiosignal-1.4.0.tar.gz",
+    "sha256": "f47eecd9468083c2029cc99945502cb7708b082c232f9aca65da147157b251c7",
+    "license": "Apache 2.0 | License :: OSI Approved :: Apache Software License",
+    "status": "ok",
+    "documents": 22
+  },
+  {
+    "source": "pypi:alembic",
+    "file": "alembic-1.20.0.tar.gz",
+    "sha256": "db505480647bc60386c5369402f4a57a506b7539c9e9ef5e270d45cbbe4939bf",
+    "license": "MIT",
+    "status": "ok",
+    "documents": 185
+  },
+  {
+    "source": "pypi:anyio",
+    "file": "anyio-4.15.1.tar.gz",
+    "sha256": "9f28306018cbd6d329e64a36d58256edff76dd996fe423bc957326e578b82a94",
+    "license": "MIT",
+    "status": "ok",
+    "documents": 110
+  },
+  {
+    "source": "pypi:apscheduler",
+    "file": "apscheduler-3.11.3.tar.gz",
+    "sha256": "cd2fcc9330039a81a5893472ad49facf23a6d5604cbe1d918c835c6de7834d5a",
+    "license": "MIT | License :: OSI Approved :: MIT License",
+    "status": "ok",
+    "documents": 116
+  },
+  {
+    "source": "pypi:argon2-cffi",
+    "file": "argon2_cffi-25.1.0.tar.gz",
+    "sha256": "694ae5cc8a42f4c4e2bf2ca0e64e51e23a040c6a517a85074683d3959e1346c1",
+    "license": "MIT",
+    "status": "ok",
+    "documents": 33
+  },
+  {
+    "source": "pypi:arrow",
+    "file": "arrow-1.4.0.tar.gz",
+    "sha256": "ed0cc050e98001b8779e84d461b0098c4ac597e88704a655582b21d116e526d7",
+    "license": "License :: OSI Approved :: Apache Software License",
+    "status": "ok",
+    "documents": 36
+  },
+  {
+    "source": "pypi:asgiref",
+    "file": "asgiref-3.12.1.tar.gz",
+    "sha256": "59dcb51c272ad209d59bed5708a64a333083e86017d7fcdd67498eeab7784340",
+    "license": "BSD-3-Clause | License :: OSI Approved :: BSD License",
+    "status": "ok",
+    "documents": 24
+  },
+  {
+    "source": "pypi:attrs",
+    "file": "attrs-26.1.0.tar.gz",
+    "sha256": "d03ceb89cb322a8fd706d4fb91940737b6642aa36998fe130a9bc96c985eff32",
+    "license": "MIT",
+    "status": "ok",
+    "documents": 79
+  },
+  {
+    "source": "pypi:babel",
+    "file": "babel-2.18.0.tar.gz",
+    "sha256": "b80b99a14bd085fcacfa15c9165f651fbb3406e66cc603abf11c5750937c992d",
+    "license": "BSD-3-Clause | License :: OSI Approved :: BSD License",
+    "status": "ok",
+    "documents": 123
+  },
+  {
+    "source": "pypi:backoff",
+    "file": "backoff-2.2.1.tar.gz",
+    "sha256": "03f829f5bb1923180821643f8753b0502c3b682293992485b0eef2807afa5cba",
+    "license": "MIT | License :: OSI Approved :: MIT License",
+    "status": "ok",
+    "documents": 11
+  },
+  {
+    "source": "pypi:bandit",
+    "file": "bandit-1.9.4.tar.gz",
+    "sha256": "b589e5de2afe70bd4d53fa0c1da6199f4085af666fde00e8a034f152a52cd628",
+    "license": "Apache-2.0",
+    "status": "ok",
+    "documents": 272
+  },
+  {
+    "source": "pypi:bcrypt",
+    "status": "unavailable"
+  },
+  {
+    "source": "pypi:beautifulsoup4",
+    "file": "beautifulsoup4-4.15.0.tar.gz",
+    "sha256": "288e3ca7d54b06f2ac191970bc275c1939cb46d450b255bf6718b04aa37ab4f7",
+    "license": "MIT License | License :: OSI Approved :: MIT License",
+    "status": "ok",
+    "documents": 45
+  },
+  {
+    "source": "pypi:black",
+    "file": "black-26.10.0.tar.gz",
+    "sha256": "b3476ce71b494fc6e39d77e75488e8339a87583029bbf608416e955c83582bd6",
+    "license": "MIT",
+    "status": "ok",
+    "documents": 399
+  },
+  {
+    "source": "pypi:bleach",
+    "file": "bleach-6.4.0.tar.gz",
+    "sha256": "4202482733d85cedd04e59fcb2f89f4e4c7c385a78d3c3c23c30446843a37452",
+    "license": "Apache Software License",
+    "status": "ok",
+    "documents": 75
+  },
+  {
+    "source": "pypi:blinker",
+    "file": "blinker-1.9.0.tar.gz",
+    "sha256": "b4ce2265a7abece45e7cc896e98dbebe6cead56bcf805a3d23136d145f5445bf",
+    "license": "License :: OSI Approved :: MIT License",
+    "status": "ok",
+    "documents": 15
+  },
+  {
+    "source": "pypi:boltons",
+    "file": "boltons-26.2.0.tar.gz",
+    "sha256": "d39cfd15c1a1c3bd4d705c82252fa9edb8e4f5e8cc039f8e39afac7b1b47e92c",
+    "license": "License :: OSI Approved :: BSD License",
+    "status": "ok",
+    "documents": 63
+  },
+  {
+    "source": "pypi:cachetools",
+    "file": "cachetools-7.2.0.tar.gz",
+    "sha256": "bcac1a1b8da6909994a2957238a57b8140dab7c5c5c69a43669654fe87a33c1d",
+    "license": "MIT",
+    "status": "ok",
+    "documents": 26
+  },
+  {
+    "source": "pypi:cattrs",
+    "file": "cattrs-26.2.1.tar.gz",
+    "sha256": "679132bfdc225c5ee40c024fc42519954767c387f950dc6751946c586bccdc6d",
+    "license": "MIT | License :: OSI Approved :: MIT License",
+    "status": "ok",
+    "documents": 150
+  },
+  {
+    "source": "pypi:charset-normalizer",
+    "file": "charset_normalizer-3.5.2.tar.gz",
+    "sha256": "39de2a259fc954455c57274dc94c79d5842774e1247a016aff30bc0efed0f4ef",
+    "license": "MIT",
+    "status": "ok",
+    "documents": 63
+  },
+  {
+    "source": "pypi:click",
+    "file": "click-8.5.0.tar.gz",
+    "sha256": "ba0d2089de75ea0310e2dde03160e6ca10009947fb95a182f9b54021bb272e34",
+    "license": "BSD-3-Clause",
+    "status": "ok",
+    "documents": 104
+  },
+  {
+    "source": "pypi:cloudpickle",
+    "status": "unavailable"
+  },
+  {
+    "source": "pypi:colorama",
+    "file": "colorama-0.4.6.tar.gz",
+    "sha256": "08695f5cb7ed6e0531a20572697297273c47b8cae5a63ffc6d6ed5c201be6e44",
+    "license": "License :: OSI Approved :: BSD License",
+    "status": "ok",
+    "documents": 26
+  },
+  {
+    "source": "pypi:coverage",
+    "file": "coverage-7.16.2.tar.gz",
+    "sha256": "ca64d9f1f384f151b9511bec01126072acd2f313439f8ed015a22d8790aab6fa",
+    "license": "Apache-2.0",
+    "status": "ok",
+    "documents": 242
+  },
+  {
+    "source": "pypi:croniter",
+    "file": "croniter-6.2.4.tar.gz",
+    "sha256": "fc124f751b1b04805c2a04b061898b436b45ab2320b045e1e052ea895de65189",
+    "license": "MIT | License :: OSI Approved :: MIT License",
+    "status": "ok",
+    "documents": 14
+  },
+  {
+    "source": "pypi:decorator",
+    "file": "decorator-5.3.1.tar.gz",
+    "sha256": "4cbcdd55a6efadb9dbea26b858f4fb3264567b52d69ca0d25b721b553f60ea82",
+    "license": "BSD-2-Clause",
+    "status": "ok",
+    "documents": 12
+  },
+  {
+    "source": "pypi:defusedxml",
+    "file": "defusedxml-0.7.1.tar.gz",
+    "sha256": "1bb3032db185915b62d7c6209c5a8792be6a32ab2fedacc84e01b52c51aa3e69",
+    "license": "PSFL",
+    "status": "rejected-licence"
+  },
+  {
+    "source": "pypi:dill",
+    "file": "dill-0.4.1.tar.gz",
+    "sha256": "423092df4182177d4d8ba8290c8a5b640c66ab35ec7da59ccfa00f6fa3eea5fa",
+    "license": "BSD-3-Clause | License :: OSI Approved :: BSD License",
+    "status": "ok",
+    "documents": 58
+  },
+  {
+    "source": "pypi:distlib",
+    "file": "distlib-0.4.3.tar.gz",
+    "sha256": "f152097224a0ae24be5a0f6bae1b9359af82133bce63f98a95f86cae1aede9ed",
+    "license": "PSF-2.0 | License :: OSI Approved :: Python Software Foundation License",
+    "status": "ok",
+    "documents": 58
+  },
+  {
+    "source": "pypi:distro",
+    "file": "distro-1.9.0.tar.gz",
+    "sha256": "2fa77c6fd8940f116ee1d6b94a2f90b13b5ea8d019b98bc8bafdcabcdd9bdbed",
+    "license": "Apache License, Version 2.0 | License :: OSI Approved :: Apache Software License",
+    "status": "ok",
+    "documents": 17
+  },
+  {
+    "source": "pypi:django-environ",
+    "file": "django_environ-0.14.0.tar.gz",
+    "sha256": "b6c48d93b9d2ff8a3ea14099e90c35aa4f101c1b4d5f262dfee0d27b06742ed7",
+    "license": "MIT",
+    "status": "ok",
+    "documents": 43
+  },
+  {
+    "source": "pypi:docopt",
+    "file": "docopt-0.6.2.tar.gz",
+    "sha256": "49b3a825280bd66b3aa83585ef59c4a8c82f2c8a522dbe754a8bc8d08c85c491",
+    "license": "MIT",
+    "status": "ok",
+    "documents": 23
+  },
+  {
+    "source": "pypi:email-validator",
+    "file": "email_validator-2.3.0.tar.gz",
+    "sha256": "9fc05c37f2f6cf439ff414f8fc46d917929974a82244c20eb10231ba60c54426",
+    "license": "Unlicense | License :: OSI Approved :: The Unlicense (Unlicense)",
+    "status": "ok",
+    "documents": 20
+  },
+  {
+    "source": "pypi:fastapi",
+    "file": "fastapi-0.142.2.tar.gz",
+    "sha256": "06366626f2e70576367714d9ab2fe8472e6c8456dba69b399f9f797ab5e92570",
+    "license": "MIT",
+    "status": "ok",
+    "documents": 1011
+  },
+  {
+    "source": "pypi:filelock",
+    "file": "filelock-4.0.12.tar.gz",
+    "sha256": "cf42711a7ac791818b299fab0332a088c65aeeefa36290de98db92c434303b0c",
+    "license": "MIT | License :: OSI Approved :: MIT License",
+    "status": "ok",
+    "documents": 81
+  },
+  {
+    "source": "pypi:fire",
+    "file": "fire-0.7.1.tar.gz",
+    "sha256": "3b208f05c736de98fb343310d090dcc4d8c78b2a89ea4f32b837c586270a9cbf",
+    "license": "Apache-2.0",
+    "status": "ok",
+    "documents": 52
+  },
+  {
+    "source": "pypi:flake8",
+    "file": "flake8-7.4.1.tar.gz",
+    "sha256": "84ea5afcaf344487b0ea5baaebb8100f4cfaebc01f755998f75876664029f587",
+    "license": "MIT",
+    "status": "ok",
+    "documents": 40
+  },
+  {
+    "source": "pypi:flask",
+    "file": "flask-3.1.3.tar.gz",
+    "sha256": "0ef0e52b8a9cd932855379197dd8f94047b359ca0a78695144304cb45f87c9eb",
+    "license": "BSD-3-Clause",
+    "status": "ok",
+    "documents": 167
+  },
+  {
+    "source": "pypi:frozenlist",
+    "status": "error: Command '['/usr/bin/python3', '-m', 'pip', 'download', '--no-deps', '--no-binary', ':all:', '-q', '-d', '/home/user/67/data/cache/pypi', 'frozenlist']' timed out after 300 seconds"
+  },
+  {
+    "source": "pypi:gunicorn",
+    "file": "gunicorn-26.2.0.tar.gz",
+    "sha256": "62b864895d9ebff0b2f9867ba04fe811c93121596540830c9c916d0769668447",
+    "license": "MIT",
+    "status": "ok",
+    "documents": 477
+  },
+  {
+    "source": "pypi:h11",
+    "file": "h11-0.16.0.tar.gz",
+    "sha256": "4e35b956cf45792e4caa5885e69fba00bdbc6ffafbfa020300e549b208ee5ff1",
+    "license": "MIT | License :: OSI Approved :: MIT License",
+    "status": "ok",
+    "documents": 42
+  },
+  {
+    "source": "pypi:html5lib",
+    "file": "html5lib-1.1.tar.gz",
+    "sha256": "b2e5b40261e20f354d198eae92afc10d750afb487ed5e50f9c4eaf07c184146f",
+    "license": "MIT License",
+    "status": "ok",
+    "documents": 63
+  },
+  {
+    "source": "pypi:httpcore",
+    "file": "httpcore-1.0.9.tar.gz",
+    "sha256": "6e34463af53fd2ab5d807f399a9b45ea31c3dfa2276f15a2c3f00afff6e176e8",
+    "license": "BSD-3-Clause | License :: OSI Approved :: BSD License",
+    "status": "ok",
+    "documents": 57
+  },
+  {
+    "source": "pypi:httpx",
+    "file": "httpx-0.28.1.tar.gz",
+    "sha256": "75e98c5f16b0f35b567856f597f06ff2270a374470a5c2392242528e3e3e42fc",
+    "license": "BSD-3-Clause | License :: OSI Approved :: BSD License",
+    "status": "ok",
+    "documents": 63
+  },
+  {
+    "source": "pypi:humanize",
+    "file": "humanize-4.16.0.tar.gz",
+    "sha256": "7dc2244a2f84a4bfb1d36c37bac80cd78e35cdc5c119206d87b018e1445f3a3f",
+    "license": "MIT",
+    "status": "ok",
+    "documents": 28
+  },
+  {
+    "source": "pypi:hypercorn",
+    "file": "hypercorn-0.18.0.tar.gz",
+    "sha256": "d63267548939c46b0247dc8e5b45a9947590e35e64ee73a23c074aa3cf88e9da",
+    "license": "MIT | License :: OSI Approved :: MIT License",
+    "status": "ok",
+    "documents": 71
+  },
+  {
+    "source": "pypi:idna",
+    "file": "idna-3.20.tar.gz",
+    "sha256": "a7db850025b95ded1eae8a46181a1a6c56c92c96f0e2b005d9ff8dc0210cab44",
+    "license": "BSD-3-Clause",
+    "status": "ok",
+    "documents": 25
+  },
+  {
+    "source": "pypi:inflect",
+    "file": "inflect-7.5.0.tar.gz",
+    "sha256": "faf19801c3742ed5a05a8ce388e0d8fe1a07f8d095c82201eb904f5d27ad571f",
+    "license": "License :: OSI Approved :: MIT License",
+    "status": "ok",
+    "documents": 27
+  },
+  {
+    "source": "pypi:iniconfig",
+    "file": "iniconfig-2.3.0.tar.gz",
+    "sha256": "c76315c77db068650d49c5b56314774a7804df16fee4402c1f19d6d15d8c4730",
+    "license": "MIT",
+    "status": "ok",
+    "documents": 10
+  },
+  {
+    "source": "pypi:invoke",
+    "file": "invoke-3.0.3.tar.gz",
+    "sha256": "437b6a622223824380bfb4e64f612711a6b648c795f565efc8625af66fb57f0c",
+    "license": "BSD-2-Clause",
+    "status": "ok",
+    "documents": 154
+  },
+  {
+    "source": "pypi:isort",
+    "status": "unavailable"
+  },
+  {
+    "source": "pypi:itsdangerous",
+    "file": "itsdangerous-2.2.0.tar.gz",
+    "sha256": "e0050c0b7da1eea53ffaf149c0cfbb5c6e2e2b69c4bef22c81fa6eb73e5f6173",
+    "license": "License :: OSI Approved :: BSD License",
+    "status": "ok",
+    "documents": 32
+  },
+  {
+    "source": "pypi:jeepney",
+    "file": "jeepney-0.9.0.tar.gz",
+    "sha256": "cf0e9e845622b81e4a28df94c40345400256ec608d0e55bb8a3feaa9163f5732",
+    "license": "MIT",
+    "status": "ok",
+    "documents": 72
+  },
+  {
+    "source": "pypi:jinja2",
+    "file": "jinja2-3.1.6.tar.gz",
+    "sha256": "0137fb05990d35f1275a587e9aee6d56da821fc83491a0fb838183be43f66d6d",
+    "license": "License :: OSI Approved :: BSD License",
+    "status": "ok",
+    "documents": 71
+  },
+  {
+    "source": "pypi:jsonschema",
+    "file": "jsonschema-4.26.0.tar.gz",
+    "sha256": "0c26707e2efad8aa1bfc5b7ce170f3fccc2e4918ff85989ba9ffa9facb2be326",
+    "license": "MIT",
+    "status": "ok",
+    "documents": 60
+  },
+  {
+    "source": "pypi:keyring",
+    "file": "keyring-25.7.0.tar.gz",
+    "sha256": "fe01bd85eb3f8fb3dd0405defdeac9a5b4f6f0439edbb3149577f244a2e8245b",
+    "license": "MIT",
+    "status": "ok",
+    "documents": 55
+  },
+  {
+    "source": "pypi:loguru",
+    "file": "loguru-0.7.3.tar.gz",
+    "sha256": "19480589e77d47b8d85b2c827ad95d49bf31b0dcde16593892eb51dd18706eb6",
+    "license": "License :: OSI Approved :: MIT License",
+    "status": "ok",
+    "documents": 20
+  },
+  {
+    "source": "pypi:mako",
+    "file": "mako-1.4.3.tar.gz",
+    "sha256": "cd6537fe88d5fec315c55c2f8529bc4ce7a9a352ad7db3eeaa6a66e2dd4ec37a",
+    "license": "MIT",
+    "status": "ok",
+    "documents": 100
+  },
+  {
+    "source": "pypi:markdown-it-py",
+    "file": "markdown_it_py-4.2.0.tar.gz",
+    "sha256": "04a21681d6fbb623de53f6f364d352309d4094dd4194040a10fd51833e418d49",
+    "license": "License :: OSI Approved :: MIT License",
+    "status": "ok",
+    "documents": 72
+  },
+  {
+    "source": "pypi:markupsafe",
+    "file": "markupsafe-3.0.4.tar.gz",
+    "sha256": "2e9ad7dd851bf45fab9f75cbff4cb493fee9979e8d8c7c9c3ee119022518edd6",
+    "license": "BSD-3-Clause",
+    "status": "ok",
+    "documents": 23
+  },
+  {
+    "source": "pypi:marshmallow",
+    "file": "marshmallow-4.3.1.tar.gz",
+    "sha256": "fb6b8048af08d4ab061610d5b7d3696a7e4c95337dbda880edb9f95812cabc20",
+    "license": "MIT",
+    "status": "ok",
+    "documents": 74
+  },
+  {
+    "source": "pypi:mccabe",
+    "file": "mccabe-0.7.0.tar.gz",
+    "sha256": "348e0240c33b60bbdf4e523192ef919f28cb2c3d7d5c7794f74009290f236325",
+    "license": "Expat license | License :: OSI Approved :: MIT License",
+    "status": "ok",
+    "documents": 8
+  },
+  {
+    "source": "pypi:mdurl",
+    "file": "mdurl-0.1.2.tar.gz",
+    "sha256": "bb413d29f5eea38f31dd4754dd7377d4465116fb207585f97bf925588687c1ba",
+    "license": "License :: OSI Approved :: MIT License",
+    "status": "ok",
+    "documents": 7
+  },
+  {
+    "source": "pypi:mock",
+    "file": "mock-5.2.0.tar.gz",
+    "sha256": "4e460e818629b4b173f32d08bf30d3af8123afbb8e04bb5707a1fd4799e503f0",
+    "license": "License :: OSI Approved :: BSD License",
+    "status": "ok",
+    "documents": 30
+  },
+  {
+    "source": "pypi:more-itertools",
+    "file": "more_itertools-11.1.0.tar.gz",
+    "sha256": "48e8f4d9e7e5878571ecf6f2b4e57634f93cd474cc8cfbd2376f2d11b396e30d",
+    "license": "MIT",
+    "status": "ok",
+    "documents": 20
+  },
+  {
+    "source": "pypi:msgpack",
+    "file": "msgpack-1.2.3.tar.gz",
+    "sha256": "32edb81a2b5eb7cd7c9d941b2bfbbb082fd2cd09e0e725930316af6b708db186",
+    "license": "Apache-2.0",
+    "status": "ok",
+    "documents": 27
+  },
+  {
+    "source": "pypi:multidict",
+    "file": "multidict-7.0.0.tar.gz",
+    "sha256": "a7fcd089a0af2e0ef053c0d39c22c9ebf2434dddcb91034fd2f59ec99623788e",
+    "license": "Apache License 2.0",
+    "status": "ok",
+    "documents": 71
+  },
+  {
+    "source": "pypi:mypy-extensions",
+    "file": "mypy_extensions-1.1.0.tar.gz",
+    "sha256": "52e68efc3284861e772bbcd66823fde5ae21fd2fdb51c62a211403730b916558",
+    "license": "MIT",
+    "status": "ok",
+    "documents": 3
+  },
+  {
+    "source": "pypi:natsort",
+    "file": "natsort-8.4.0.tar.gz",
+    "sha256": "45312c4a0e5507593da193dedd04abb1469253b601ecaf63445ad80f0a1ea581",
+    "license": "MIT | License :: OSI Approved :: MIT License",
+    "status": "ok",
+    "documents": 51
+  },
+  {
+    "source": "pypi:networkx",
+    "file": "networkx-3.6.1.tar.gz",
+    "sha256": "26b7c357accc0c8cde558ad486283728b65b6a95d85ee1cd66bafab4c8168509",
+    "license": "BSD-3-Clause",
+    "status": "ok",
+    "documents": 516
+  },
+  {
+    "source": "pypi:oauthlib",
+    "file": "oauthlib-4.0.0.tar.gz",
+    "sha256": "efb274799819440f95b4ab3b818869f1ce9ae26c5beacba0201d1a1b76b54f86",
+    "license": "BSD-3-Clause",
+    "status": "ok",
+    "documents": 159
+  },
+  {
+    "source": "pypi:outcome",
+    "file": "outcome-1.3.0.post0.tar.gz",
+    "sha256": "9dcf02e65f2971b80047b377468e72a268e15c0af3cf1238e6ff14f7f91143b8",
+    "license": "MIT OR Apache-2.0 | License :: OSI Approved :: MIT License | License :: OSI Approved :: Apache Software License",
+    "status": "ok",
+    "documents": 22
+  },
+  {
+    "source": "pypi:packaging",
+    "file": "packaging-26.3.tar.gz",
+    "sha256": "94edc256424af38762eb31306eed28beb9f0efc50a8837492c9d6fd6004aed79",
+    "license": "Apache-2.0 OR BSD-2-Clause",
+    "status": "ok",
+    "documents": 81
+  },
+  {
+    "source": "pypi:parse",
+    "file": "parse-1.22.2.tar.gz",
+    "sha256": "8ff0b98202798b8cefa4f8fac06b670d6d00e5ec6ecbbacaf97ac0d0e93a54e6",
+    "license": "MIT",
+    "status": "ok",
+    "documents": 12
+  },
+  {
+    "source": "pypi:passlib",
+    "file": "passlib-1.7.4.tar.gz",
+    "sha256": "defd50f72b65c5402ab2c573830a6978e5f202ad0d984793c8dde2c4152ebe04",
+    "license": "BSD",
+    "status": "ok",
+    "documents": 198
+  },
+  {
+    "source": "pypi:pathspec",
+    "file": "pathspec-1.1.1.tar.gz",
+    "sha256": "17db5ecd524104a120e173814c90367a96a98d07c45b2e10c2f3919fff91bf5a",
+    "license": "License :: OSI Approved :: Mozilla Public License 2.0 (MPL 2.0)",
+    "status": "rejected-licence"
+  },
+  {
+    "source": "pypi:platformdirs",
+    "file": "platformdirs-4.12.3.tar.gz",
+    "sha256": "427fc0bb321ae0c5b037fa03238ca74820437be162e78b4848c4d4055b9b766c",
+    "license": "MIT | License :: OSI Approved :: MIT License",
+    "status": "ok",
+    "documents": 24
+  },
+  {
+    "source": "pypi:pluggy",
+    "file": "pluggy-1.6.0.tar.gz",
+    "sha256": "7dcc130b76258d33b90f61b658791dede3486c3e6bfb003ee5c9bfb396dd22f3",
+    "license": "MIT | License :: OSI Approved :: MIT License",
+    "status": "ok",
+    "documents": 46
+  },
+  {
+    "source": "pypi:psutil",
+    "file": "psutil-7.2.2.tar.gz",
+    "sha256": "0746f5f8d406af344fd547f1c8daa5f5c33dbc293bb8d6a16d80b4bb88f59372",
+    "license": "BSD-3-Clause",
+    "status": "ok",
+    "documents": 84
+  },
+  {
+    "source": "pypi:py-cpuinfo",
+    "file": "py-cpuinfo-9.0.0.tar.gz",
+    "sha256": "3cdbbf3fac90dc6f118bfd64384f309edeadd902d7c8fb17f02ffa1fc3f49690",
+    "license": "MIT | License :: OSI Approved :: MIT License",
+    "status": "ok",
+    "documents": 54
+  },
+  {
+    "source": "pypi:pycodestyle",
+    "file": "pycodestyle-2.15.0.tar.gz",
+    "sha256": "318f5db083869b4c4dad922d0b11124fb27ab181b6730b93371da671e31bd50e",
+    "license": "MIT",
+    "status": "ok",
+    "documents": 18
+  },
+  {
+    "source": "pypi:pydantic",
+    "file": "pydantic-2.13.5.tar.gz",
+    "sha256": "51a9c5f7b2f8e636f04c6cada605d9b6a3bf1348fdf945a3d8869b19bba0ee08",
+    "license": "MIT",
+    "status": "ok",
+    "documents": 170
+  },
+  {
+    "source": "pypi:pyflakes",
+    "file": "pyflakes-4.0.2.tar.gz",
+    "sha256": "dcf9cfcece3d9dacc66b7dd2fa217c1a1b79e3075bf488909c15e0857203fd24",
+    "license": "MIT | License :: OSI Approved :: MIT License",
+    "status": "ok",
+    "documents": 30
+  },
+  {
+    "source": "pypi:pygments",
+    "file": "pygments-2.21.0.tar.gz",
+    "sha256": "610ca751c9bc2492b38eb9a38a7fbc93edbbb2d7182edaf34e66ae493dee5c8c",
+    "license": "BSD-2-Clause",
+    "status": "ok",
+    "documents": 207
+  },
+  {
+    "source": "pypi:pyjwt",
+    "file": "pyjwt-2.15.1.tar.gz",
+    "sha256": "4f259e80cdfb6b3fc18a7de51fd1ef9ec79652f25019bae68975ca2468a34df8",
+    "license": "MIT",
+    "status": "ok",
+    "documents": 43
+  },
+  {
+    "source": "pypi:pyopenssl",
+    "file": "pyopenssl-26.4.0.tar.gz",
+    "sha256": "28dfcce0162b9211413e26dfbfdf1d24317fbeba18fc93c12400a1856b2a0bc7",
+    "license": "Apache License, Version 2.0 | License :: OSI Approved :: Apache Software License",
+    "status": "ok",
+    "documents": 37
+  },
+  {
+    "source": "pypi:pyparsing",
+    "file": "pyparsing-3.3.3.tar.gz",
+    "sha256": "928ae7e20211f3b6f3915a72f06a0cfd29ab9d24279dd6346b6b1a7146397d36",
+    "license": "MIT",
+    "status": "ok",
+    "documents": 172
+  },
+  {
+    "source": "pypi:pyrsistent",
+    "file": "pyrsistent-0.20.0.tar.gz",
+    "sha256": "4c48f78f62ab596c679086084d0dd13254ae4f3d6c72a83ffdf5ebdef8f265a4",
+    "license": "MIT | License :: OSI Approved :: MIT License",
+    "status": "ok",
+    "documents": 42
+  },
+  {
+    "source": "pypi:pytest",
+    "file": "pytest-9.1.1.tar.gz",
+    "sha256": "1088fbde8f2b49d95a549a195707afa7a76a3ce9bcadc26b6d71f0ffda5fe313",
+    "license": "MIT",
+    "status": "ok",
+    "documents": 494
+  },
+  {
+    "source": "pypi:python-dateutil",
+    "file": "python-dateutil-2.9.0.post0.tar.gz",
+    "sha256": "37dd54208da7e1cd875388217d5e00ebd4179249f90fb72437e91a35459a0ad3",
+    "license": "Dual License | License :: OSI Approved :: BSD License | License :: OSI Approved :: Apache Software License",
+    "status": "ok",
+    "documents": 64
+  },
+  {
+    "source": "pypi:python-dotenv",
+    "file": "python_dotenv-1.2.4.tar.gz",
+    "sha256": "f0d53e69935a851c0dcc78f3ab7aaccd8cabef0b92382b576b824212902873c0",
+    "license": "BSD-3-Clause",
+    "status": "ok",
+    "documents": 36
+  },
+  {
+    "source": "pypi:python-multipart",
+    "file": "python_multipart-0.0.32.tar.gz",
+    "sha256": "be54b7f3fa167bb83e4fcd936b887b708f4e57fe75911c02aebf53efaf8d938e",
+    "license": "Apache-2.0 | License :: OSI Approved :: Apache Software License",
+    "status": "ok",
+    "documents": 16
+  },
+  {
+    "source": "pypi:python-slugify",
+    "file": "python_slugify-9.1.2.tar.gz",
+    "sha256": "bd36ca98e5ebb1cd2b9dfa2f27b948ce87402fb083b762cbd9d0fa3aed489a92",
+    "license": "MIT",
+    "status": "ok",
+    "documents": 26
+  },
+  {
+    "source": "pypi:pytz",
+    "file": "pytz-2026.5.tar.gz",
+    "sha256": "fa23724b9c486543b9ff54a327ee7569ac83ade54bb9afd0fc18676620401c86",
+    "license": "MIT | License :: OSI Approved :: MIT License",
+    "status": "ok",
+    "documents": 15
+  },
+  {
+    "source": "pypi:pyyaml",
+    "status": "error: Command '['/usr/bin/python3', '-m', 'pip', 'download', '--no-deps', '--no-binary', ':all:', '-q', '-d', '/home/user/67/data/cache/pypi', 'pyyaml']' timed out after 300 seconds"
+  },
+  {
+    "source": "pypi:referencing",
+    "file": "referencing-0.37.0.tar.gz",
+    "sha256": "44aefc3142c5b842538163acb373e24cce6632bd54bdb01b21ad5863489f50d8",
+    "license": "MIT",
+    "status": "ok",
+    "documents": 28
+  },
+  {
+    "source": "pypi:regex",
+    "file": "regex-2026.9.29.tar.gz",
+    "sha256": "8b5fcc4771732191b2b7d1dd68d8f0353f47f8d90b6150f6dce58bf1112442cb",
+    "license": "Apache-2.0 AND CNRI-Python",
+    "status": "ok",
+    "documents": 12
+  },
+  {
+    "source": "pypi:requests",
+    "file": "requests-2.34.2.tar.gz",
+    "sha256": "f288924cae4e29463698d6d60bc6a4da69c89185ad1e0bcc4104f584e960b9ed",
+    "license": "Apache-2.0 | License :: OSI Approved :: Apache Software License",
+    "status": "ok",
+    "documents": 42
+  },
+  {
+    "source": "pypi:requests-oauthlib",
+    "file": "requests-oauthlib-2.0.0.tar.gz",
+    "sha256": "b3dffaebd884d8cd778494369603a9e7b58d29111bf6b41bdc2dcd87203af4e9",
+    "license": "ISC | License :: OSI Approved :: BSD License",
+    "status": "ok",
+    "documents": 54
+  },
+  {
+    "source": "pypi:responses",
+    "file": "responses-0.26.3.tar.gz",
+    "sha256": "b0c11ca8131b8b227b8d5108e6ed39772222bd5aab030ed430e8f99057c4c409",
+    "license": "Apache-2.0",
+    "status": "ok",
+    "documents": 16
+  },
+  {
+    "source": "pypi:retrying",
+    "file": "retrying-1.4.2.tar.gz",
+    "sha256": "d102e75d53d8d30b88562d45361d6c6c934da06fab31bd81c0420acb97a8ba39",
+    "license": "Apache-2.0",
+    "status": "ok",
+    "documents": 9
+  },
+  {
+    "source": "pypi:rich",
+    "file": "rich-15.0.0.tar.gz",
+    "sha256": "edd07a4824c6b40189fb7ac9bc4c52536e9780fbbfbddf6f1e2502c31b068c36",
+    "license": "MIT | License :: OSI Approved :: MIT License",
+    "status": "ok",
+    "documents": 101
+  },
+  {
+    "source": "pypi:schedule",
+    "file": "schedule-1.2.2.tar.gz",
+    "sha256": "15fe9c75fe5fd9b9627f3f19cc0ef1420508f9f9a46f45cd0769ef75ede5f0b7",
+    "license": "MIT License | License :: OSI Approved :: MIT License",
+    "status": "ok",
+    "documents": 11
+  },
+  {
+    "source": "pypi:simplejson",
+    "file": "simplejson-4.2.0.tar.gz",
+    "sha256": "55b121b70a560f4610bd3a355ab2015aca4f39978f6a82353f24d2013fe85861",
+    "license": "MIT OR AFL-2.1",
+    "status": "ok",
+    "documents": 56
+  },
+  {
+    "source": "pypi:six",
+    "file": "six-1.17.0.tar.gz",
+    "sha256": "ff70335d468e7eb6ec65b95b99d3a2836546063f63acc5171de367e834932a81",
+    "license": "MIT | License :: OSI Approved :: MIT License",
+    "status": "ok",
+    "documents": 9
+  },
+  {
+    "source": "pypi:sniffio",
+    "file": "sniffio-1.3.1.tar.gz",
+    "sha256": "f4324edc670a0f49750a81b895f35c3adb843cca46f0530f79fc1babb23789dc",
+    "license": "MIT OR Apache-2.0 | License :: OSI Approved :: MIT License | License :: OSI Approved :: Apache Software License",
+    "status": "ok",
+    "documents": 17
+  },
+  {
+    "source": "pypi:sortedcontainers",
+    "file": "sortedcontainers-2.4.0.tar.gz",
+    "sha256": "25caa5a06cc30b6b83d11423433f65d1f9d76c4c6a0c90e3379eaa43b9bfdb88",
+    "license": "Apache 2.0",
+    "status": "ok",
+    "documents": 9
+  },
+  {
+    "source": "pypi:soupsieve",
+    "file": "soupsieve-2.10.tar.gz",
+    "sha256": "49e9380d7d2905463583bafe285e818c7366a9ed7b3aee221c1ac79c905d8bc0",
+    "license": "MIT | License :: OSI Approved :: MIT License",
+    "status": "ok",
+    "documents": 122
+  },
+  {
+    "source": "pypi:sqlalchemy",
+    "status": "error: Command '['/usr/bin/python3', '-m', 'pip', 'download', '--no-deps', '--no-binary', ':all:', '-q', '-d', '/home/user/67/data/cache/pypi', 'sqlalchemy']' timed out after 300 seconds"
+  },
+  {
+    "source": "pypi:starlette",
+    "file": "starlette-1.7.0.tar.gz",
+    "sha256": "c79f74ea63cff761804fbbfb182f1e0b440c2d07b164d24700c5a1bab5d6ff5d",
+    "license": "BSD-3-Clause",
+    "status": "ok",
+    "documents": 115
+  },
+  {
+    "source": "pypi:structlog",
+    "file": "structlog-26.1.0.tar.gz",
+    "sha256": "f63a716cbd1b1291cf7661de7794b455acfa4c43c5bcf1630e6ad5ddc1adb3b7",
+    "license": "MIT OR Apache-2.0 | License :: OSI Approved :: Apache Software License | License :: OSI Approved :: MIT License",
+    "status": "ok",
+    "documents": 74
+  },
+  {
+    "source": "pypi:tabulate",
+    "file": "tabulate-0.10.0.tar.gz",
+    "sha256": "e2cfde8f79420f6deeffdeda9aaec3b6bc5abce947655d17ac662b126e48a60d",
+    "license": "MIT",
+    "status": "ok",
+    "documents": 17
+  },
+  {
+    "source": "pypi:tenacity",
+    "file": "tenacity-9.1.4.tar.gz",
+    "sha256": "adb31d4c263f2bd041081ab33b498309a57c77f9acf2db65aadf0898179cf93a",
+    "license": "Apache 2.0 | License :: OSI Approved :: Apache Software License",
+    "status": "ok",
+    "documents": 29
+  },
+  {
+    "source": "pypi:toml",
+    "file": "toml-0.10.2.tar.gz",
+    "sha256": "b3bda1d108d5dd99f4a20d24d9c348e91c4db7ab1b749200bded2f839ccbe68f",
+    "license": "MIT",
+    "status": "ok",
+    "documents": 13
+  },
+  {
+    "source": "pypi:tomli",
+    "file": "tomli-2.4.1.tar.gz",
+    "sha256": "7c7e1a961a0b2f2472c1ac5b69affa0ae1132c39adcb67aba98568702b9cc23f",
+    "license": "MIT",
+    "status": "ok",
+    "documents": 5
+  },
+  {
+    "source": "pypi:toolz",
+    "file": "toolz-1.1.0.tar.gz",
+    "sha256": "27a5c770d068c110d9ed9323f24f1543e83b2f300a687b7891c1a6d56b697b5b",
+    "license": "BSD-3-Clause",
+    "status": "ok",
+    "documents": 39
+  },
+  {
+    "source": "pypi:trio",
+    "file": "trio-0.34.0.tar.gz",
+    "sha256": "63b9485408bdfdde544fced107045a8c0086cdc4bd0ef2f797b9e0dd111b964b",
+    "license": "MIT OR Apache-2.0",
+    "status": "ok",
+    "documents": 185
+  },
+  {
+    "source": "pypi:truststore",
+    "file": "truststore-0.10.4.tar.gz",
+    "sha256": "9d91bd436463ad5e4ee4aba766628dd6cd7010cf3e2461756b3303710eebc301",
+    "license": "MIT",
+    "status": "ok",
+    "documents": 19
+  },
+  {
+    "source": "pypi:typer",
+    "file": "typer-0.27.2.tar.gz",
+    "sha256": "269b7eb9d3c202ca84b4bc9618cb04ebb43d3d4d1e567e4c768607232c05f945",
+    "license": "MIT",
+    "status": "ok",
+    "documents": 639
+  },
+  {
+    "source": "pypi:typing_extensions",
+    "file": "typing_extensions-4.16.0.tar.gz",
+    "sha256": "dc983d19a509c94dba722ee6abd33940f7c05a89e243c47e907eb4db6f1a43e5",
+    "license": "PSF-2.0",
+    "status": "ok",
+    "documents": 4
+  },
+  {
+    "source": "pypi:tzlocal",
+    "file": "tzlocal-5.4.4.tar.gz",
+    "sha256": "8dbb8660838688a7b6ba4fed31d18dedf842afb4d47ca050d6d891c2c15f3be4",
+    "license": "MIT",
+    "status": "ok",
+    "documents": 14
+  },
+  {
+    "source": "pypi:urllib3",
+    "file": "urllib3-2.8.0.tar.gz",
+    "sha256": "63bf2ead4c879426ebf22ef2a781eeb4aa3b4ae798a0435506f8687fd5bb9b63",
+    "license": "MIT",
+    "status": "ok",
+    "documents": 108
+  },
+  {
+    "source": "pypi:uvicorn",
+    "file": "uvicorn-0.54.0.tar.gz",
+    "sha256": "a2e33cbfaa0306f8e6b0c13e0cb89d7d7a2da3e62b90c66e18c33d9807b28620",
+    "license": "BSD-3-Clause",
+    "status": "ok",
+    "documents": 86
+  },
+  {
+    "source": "pypi:validators",
+    "file": "validators-0.35.0.tar.gz",
+    "sha256": "992d6c48a4e77c81f1b4daba10d16c3a9bb0dbb79b3a19ea847ff0928e70497a",
+    "license": "MIT | License :: OSI Approved :: MIT License",
+    "status": "ok",
+    "documents": 113
+  },
+  {
+    "source": "pypi:virtualenv",
+    "file": "virtualenv-21.14.5.tar.gz",
+    "sha256": "c4cb6c13e46b57225a999c7e22a09b163393878facc7ac4c059a57f46faa1647",
+    "license": "MIT | License :: OSI Approved :: MIT License",
+    "status": "ok",
+    "documents": 181
+  },
+  {
+    "source": "pypi:waitress",
+    "file": "waitress-3.0.2.tar.gz",
+    "sha256": "682aaaf2af0c44ada4abfb70ded36393f0e307f4ab9456a215ce0020baefc31f",
+    "license": "ZPL 2.1 | License :: OSI Approved :: Zope Public License",
+    "status": "rejected-licence"
+  },
+  {
+    "source": "pypi:watchdog",
+    "file": "watchdog-6.0.0.tar.gz",
+    "sha256": "9ddf7c82fda3ae8e24decda1338ede66e1c99883db93711d8fb941eaa2d8c282",
+    "license": "Apache-2.0 | License :: OSI Approved :: Apache Software License",
+    "status": "ok",
+    "documents": 70
+  },
+  {
+    "source": "pypi:websockets",
+    "file": "websockets-17.2.tar.gz",
+    "sha256": "36c2fb94c990cc2545143b12690e2de6c16300f9dbe5b4f33fa300cf57dc8792",
+    "license": "BSD-3-Clause",
+    "status": "ok",
+    "documents": 58
+  },
+  {
+    "source": "pypi:werkzeug",
+    "file": "werkzeug-3.1.9.tar.gz",
+    "sha256": "55ca7c70a75689be937aa27f8ff4b018f06ff4838fc73045560bf0f5a1291060",
+    "license": "BSD-3-Clause",
+    "status": "ok",
+    "documents": 181
+  },
+  {
+    "source": "pypi:wheel",
+    "file": "wheel-0.48.0.tar.gz",
+    "sha256": "94800765601e9171bf5d58d066e640662842bcedcbab982b2c90787a2c987322",
+    "license": "MIT",
+    "status": "ok",
+    "documents": 42
+  },
+  {
+    "source": "pypi:whitenoise",
+    "file": "whitenoise-6.12.0.tar.gz",
+    "sha256": "f723ebb76a112e98816ff80fcea0a6c9b8ecde835f8ddda25df7a30a3c2db6ad",
+    "license": "MIT",
+    "status": "ok",
+    "documents": 25
+  },
+  {
+    "source": "pypi:wrapt",
+    "file": "wrapt-2.5.0.tar.gz",
+    "sha256": "c48cdb6c904dca76d9915a579e4a5fab6b0c25f650c1019ce78a78effaf7a345",
+    "license": "BSD-2-Clause",
+    "status": "ok",
+    "documents": 128
+  },
+  {
+    "source": "pypi:yarl",
+    "status": "error: Command '['/usr/bin/python3', '-m', 'pip', 'download', '--no-deps', '--no-binary', ':all:', '-q', '-d', '/home/user/67/data/cache/pypi', 'yarl']' timed out after 300 seconds"
+  }
+]

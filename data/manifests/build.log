@@ -1,0 +1,11 @@
+[15:17:44] fetched 21915 files from 188 sources in 391s
+[15:17:45] eval set humaneval: 164 items
+[15:17:45] eval set mbpp: 974 items
+[15:17:46] eval set gsm8k: 1319 items
+[15:18:18] kept code=16706 general=3411 {'dropped_quality': 833, 'dropped_duplicate': 336, 'dropped_contaminated': 30}
+[15:18:18] training SCP BPE on 2.5 MB, vocab 8192
+[15:19:21] tokenizer ready
+[15:20:22] store general: 11852983 train / 389601 val tokens
+[15:22:43] store code: 28012564 train / 512360 val tokens
+[15:25:51] store base: 39865547 train / 901961 val tokens
+[15:25:51] done in 877s

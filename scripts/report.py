@@ -7,7 +7,7 @@ import sys
 
 FORGE = "target/release/forge"
 MODELS = {"base": "runs/base-s/FINAL", "rouge-1": "runs/rouge-1/FINAL", "quasnir-1": "runs/quasnir-1/FINAL", "darus-1": "runs/darus-1/FINAL"}
-SUITES = {"general": "data/out/general/train.meta.json", "code": "data/out/code/train.meta.json"}
+SUITES = {"general": "data/stores/general/train.meta.json", "code": "data/stores/code/train.meta.json"}
 
 
 def evaluate(ckpt: str, data: str) -> dict:

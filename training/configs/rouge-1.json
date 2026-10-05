@@ -1,6 +1,6 @@
 {
   "run": "rouge-1",
-  "data": "data/out/general/train.meta.json",
+  "data": "data/stores/general/train.meta.json",
   "init_from": "runs/base-s/FINAL",
   "max_steps": 1000,
   "lr": 0.0003,

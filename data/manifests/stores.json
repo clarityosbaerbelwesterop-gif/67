@@ -1,0 +1,91 @@
+{
+  "filters": {
+    "dropped_quality": 833,
+    "dropped_duplicate": 336,
+    "dropped_contaminated": 30
+  },
+  "stores": {
+    "general": {
+      "store": "general",
+      "documents": {
+        "train": 3321,
+        "val": 90
+      },
+      "tokens": 11852983,
+      "val_tokens": 389601,
+      "dtype": "uint16",
+      "vocab_size": 8192,
+      "bin": "train.bin",
+      "val_bin": "train.val.bin",
+      "mix": {
+        "general": 3321
+      },
+      "mix_fractions": {
+        "general": 1.0
+      },
+      "sha256": {
+        "train.bin": "50d40f1c628763997968d54263d61884de2407df3aab39a535356e8b0e0cc8c9",
+        "train.val.bin": "f7369312966e1de7daa895002bc1ba32b43f69224ed74ddbcf69a23dbde34180",
+        "tokenizer.json": "fe1ee90ae9275c55bb8583c1c5dc231d1197e8c2ca8eea32ac57912518018012"
+      },
+      "pipeline": "SCP scp_model.bpe + data_pipeline.clean_corpus + CorpusStore layout; per-source val split; 13-gram decontamination"
+    },
+    "code": {
+      "store": "code",
+      "documents": {
+        "train": 16474,
+        "val": 232
+      },
+      "tokens": 28012564,
+      "val_tokens": 512360,
+      "dtype": "uint16",
+      "vocab_size": 8192,
+      "bin": "train.bin",
+      "val_bin": "train.val.bin",
+      "mix": {
+        "code": 16474
+      },
+      "mix_fractions": {
+        "code": 1.0
+      },
+      "sha256": {
+        "train.bin": "4aaa7e9c3b52e91149d060686f15ed1a772682c1353f5f8f362914a91073e7d5",
+        "train.val.bin": "6fe8f180015408b2d5e3453bf1bcf4e8bd629b00aa0a9ee3f9860ac9fbc62b4b",
+        "tokenizer.json": "fe1ee90ae9275c55bb8583c1c5dc231d1197e8c2ca8eea32ac57912518018012"
+      },
+      "pipeline": "SCP scp_model.bpe + data_pipeline.clean_corpus + CorpusStore layout; per-source val split; 13-gram decontamination"
+    },
+    "base": {
+      "store": "base",
+      "documents": {
+        "train": 19795,
+        "val": 322
+      },
+      "tokens": 39865547,
+      "val_tokens": 901961,
+      "dtype": "uint16",
+      "vocab_size": 8192,
+      "bin": "train.bin",
+      "val_bin": "train.val.bin",
+      "mix": {
+        "general": 3321,
+        "code": 16474
+      },
+      "mix_fractions": {
+        "general": 0.16776963879767617,
+        "code": 0.8322303612023239
+      },
+      "sha256": {
+        "train.bin": "300a99af098fc0ca6313afd6ac90c44c99fde6ea4af3fe80333b80a023eaafc2",
+        "train.val.bin": "18019c2f524ffadd23104c5d01e51b68c1f4da525d8350ed31c89e6091beccb7",
+        "tokenizer.json": "fe1ee90ae9275c55bb8583c1c5dc231d1197e8c2ca8eea32ac57912518018012"
+      },
+      "pipeline": "SCP scp_model.bpe + data_pipeline.clean_corpus + CorpusStore layout; per-source val split; 13-gram decontamination"
+    }
+  },
+  "evals_decontaminated_against": [
+    "gsm8k",
+    "humaneval",
+    "mbpp"
+  ]
+}

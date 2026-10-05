@@ -60,7 +60,7 @@ def main() -> int:
     ap.add_argument("--tokenizer", default=str(ROOT / "data/stores/base/tokenizer.json"))
     args = ap.parse_args()
     tok = tokenizer(Path(args.tokenizer))
-    probs = [json.loads(l) for l in (ROOT / "data/out/evals/humaneval.jsonl").read_text().splitlines() if l.strip()][: args.limit]
+    probs = [json.loads(l) for l in (ROOT / "data/stores/evals/humaneval.jsonl").read_text().splitlines() if l.strip()][: args.limit]
     with tempfile.NamedTemporaryFile("w", suffix=".jsonl", delete=False) as f:
         for p in probs:
             f.write(json.dumps(tok.encode(p["prompt"])) + "\n")
