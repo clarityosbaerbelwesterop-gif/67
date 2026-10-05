@@ -1,0 +1,14 @@
+{
+  "schema": "fabric.swarm-run/1",
+  "run": 37265998891,
+  "commit": "3596d73",
+  "what": "DiLoCo across 4 separate GitHub-hosted runners, 3 rounds x 100 inner steps, int8 deltas as artifacts; Osirus native model (3.28M parameters, byte-level), enwik8",
+  "started": "2026-10-05T05:01:57Z",
+  "finished": "2026-10-05T05:11:19Z",
+  "log": [
+    {"round": 1, "step": 100, "val_bpb": 3.4461, "bytes_per_worker": 3284100},
+    {"round": 2, "step": 200, "val_bpb": 3.07497, "bytes_per_worker": 3284100},
+    {"round": 3, "step": 300, "val_bpb": 2.87284, "bytes_per_worker": 3284100}
+  ],
+  "reading": "Proof of mechanism, not of quality: 4 machines that never talk directly train one model; validation loss falls every round; each worker sends 3.3 MB (int8) per round instead of 13.1 MB fp32 per step. Quality against synchronous training is test T1."
+}

@@ -39,6 +39,7 @@ Full-parameter training of Rouge 1 (27B), Quesnir and Darus needs real GPUs: at 
 | `docs/compute-atlas.md` | every GPU/TPU source, the limits, the ledger |
 | `docs/gemini-27-steps.md` | the Gemini plan, step by step: kept, adapted, dropped, and why |
 | `docs/scp-audit.md` | read-only audit of `swarm-compute-protocol-` |
+| `results/swarm/` | real multi-runner runs: 2026-10-05, 4 runners × 3 rounds, validation BPB 3.45 → 3.07 → 2.87, 3.3 MB per worker per round |
 
 The model and data come from a pinned Osirus commit: the native Rouge model in `training/rouge/native` and the enwik8 loader in `research/rouge-architecture/benchmarks`.
 
