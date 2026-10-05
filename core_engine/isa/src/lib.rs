@@ -16,7 +16,7 @@ mod machine;
 
 pub use builder::Builder;
 pub use compiler::{compile, CompileOptions, CompileReport};
-pub use machine::{Machine, MachineError, OpStats};
+pub use machine::{Loaded, Machine, MachineError, OpStats, TuneReport};
 
 use std::fmt;
 
