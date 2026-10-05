@@ -8,7 +8,7 @@
 //! Decoding is a 256-entry table built at compile time from the bit-level
 //! definition; encoding uses the crate's integer rounding engine.
 
-use crate::engine::{decode_magnitude_bits, for_each_rounding, round_magnitude, MiniFloat};
+use crate::engine::{decode_magnitude_bits, map_rounding, map_rounding_inplace, multiversion, round_magnitude_with, MiniFloat};
 use crate::Rounding;
 
 /// The two OFP8 encodings.
@@ -155,73 +155,57 @@ pub fn encode(kind: Kind, x: f32, r: Rounding, saturate: bool) -> u8 {
     let b = x.to_bits();
     let sign = (b >> 24) & 0x80;
     let abs = b & 0x7fff_ffff;
-    let mag = if abs >= 0x7f80_0000 {
-        if abs > 0x7f80_0000 {
-            s.nan
-        } else if saturate {
-            s.mf.max_code
-        } else {
-            s.overflow
-        }
-    } else {
-        let c = round_magnitude(abs, 0, s.mf, r);
-        if c > s.mf.max_code {
-            if saturate || r == Rounding::TowardZero {
-                s.mf.max_code
-            } else {
-                s.overflow
-            }
-        } else {
-            c
-        }
-    };
+    // Branch-free: the engine yields an out-of-range code for Inf/NaN, and the
+    // specials are patched in with selects. Without a shift every f32
+    // subnormal is an FP8 subnormal, so the non-normalising path is exact.
+    let c = round_magnitude_with::<false>(abs, 0, s.mf, r);
+    let clamp = saturate || (abs < 0x7f80_0000 && r == Rounding::TowardZero);
+    let ovf = if clamp { s.mf.max_code } else { s.overflow };
+    let mag = if c > s.mf.max_code { ovf } else { c };
+    let mag = if abs > 0x7f80_0000 { s.nan } else { mag };
     (sign | mag) as u8
 }
 
-/// Encode a slice. For `Stochastic(seed)`, element `i` uses
-/// [`crate::stochastic_bits`]`(seed, i)`.
-///
-/// # Panics
-/// If `x.len() != out.len()`.
-pub fn encode_slice(kind: Kind, x: &[f32], out: &mut [u8], r: Rounding, saturate: bool) {
-    assert_eq!(x.len(), out.len(), "fp8::encode_slice: length mismatch");
-    // Monomorphise on kind and saturate so the inner loop has constant specs.
-    macro_rules! go {
-        ($k:expr, $sat:expr) => {
-            for_each_rounding(x.len(), 0, r, |i, ri| out[i] = encode($k, x[i], ri, $sat))
-        };
-    }
-    match (kind, saturate) {
-        (Kind::E4M3, true) => go!(Kind::E4M3, true),
-        (Kind::E4M3, false) => go!(Kind::E4M3, false),
-        (Kind::E5M2, true) => go!(Kind::E5M2, true),
-        (Kind::E5M2, false) => go!(Kind::E5M2, false),
+multiversion! {
+    /// Encode a slice. For `Stochastic(seed)`, element `i` uses
+    /// [`crate::stochastic_bits`]`(seed, i)`.
+    ///
+    /// # Panics
+    /// If `x.len() != out.len()`.
+    pub fn encode_slice(kind: Kind, x: &[f32], out: &mut [u8], r: Rounding, saturate: bool) {
+        assert_eq!(x.len(), out.len(), "fp8::encode_slice: length mismatch");
+        // Monomorphise on kind and saturate so the inner loop has constant specs.
+        match (kind, saturate) {
+            (Kind::E4M3, true) => map_rounding(x, out, 0, r, |v, ri| encode(Kind::E4M3, v, ri, true)),
+            (Kind::E4M3, false) => map_rounding(x, out, 0, r, |v, ri| encode(Kind::E4M3, v, ri, false)),
+            (Kind::E5M2, true) => map_rounding(x, out, 0, r, |v, ri| encode(Kind::E5M2, v, ri, true)),
+            (Kind::E5M2, false) => map_rounding(x, out, 0, r, |v, ri| encode(Kind::E5M2, v, ri, false)),
+        }
     }
 }
 
-/// Decode a slice (table lookup).
-///
-/// # Panics
-/// If `codes.len() != out.len()`.
-pub fn decode_slice(kind: Kind, codes: &[u8], out: &mut [f32]) {
-    assert_eq!(codes.len(), out.len(), "fp8::decode_slice: length mismatch");
-    let t = lut(kind);
-    for (o, &c) in out.iter_mut().zip(codes) {
-        *o = f32::from_bits(t[usize::from(c)]);
+multiversion! {
+    /// Decode a slice (table lookup).
+    ///
+    /// # Panics
+    /// If `codes.len() != out.len()`.
+    pub fn decode_slice(kind: Kind, codes: &[u8], out: &mut [f32]) {
+        assert_eq!(codes.len(), out.len(), "fp8::decode_slice: length mismatch");
+        let t = lut(kind);
+        for (o, &c) in out.iter_mut().zip(codes) {
+            *o = f32::from_bits(t[usize::from(c)]);
+        }
     }
 }
 
-/// Fake-quantize in place with saturation; NaN stays NaN
-/// (see [`crate::fake_quant`]).
-pub fn fake_quant_slice(kind: Kind, x: &mut [f32], r: Rounding) {
-    macro_rules! go {
-        ($k:expr) => {
-            for_each_rounding(x.len(), 0, r, |i, ri| x[i] = decode($k, encode($k, x[i], ri, true)))
-        };
-    }
-    match kind {
-        Kind::E4M3 => go!(Kind::E4M3),
-        Kind::E5M2 => go!(Kind::E5M2),
+multiversion! {
+    /// Fake-quantize in place with saturation; NaN stays NaN
+    /// (see [`crate::fake_quant`]).
+    pub fn fake_quant_slice(kind: Kind, x: &mut [f32], r: Rounding) {
+        match kind {
+            Kind::E4M3 => map_rounding_inplace(x, 0, r, |v, ri| decode(Kind::E4M3, encode(Kind::E4M3, v, ri, true))),
+            Kind::E5M2 => map_rounding_inplace(x, 0, r, |v, ri| decode(Kind::E5M2, encode(Kind::E5M2, v, ri, true))),
+        }
     }
 }
 

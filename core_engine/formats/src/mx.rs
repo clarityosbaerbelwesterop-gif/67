@@ -21,7 +21,9 @@
 //! dequantization multiplies by `X`, which is exact for every element value
 //! and every scale.
 
-use crate::engine::{floor_log2_bits, for_each_rounding, pow2, round_magnitude, MiniFloat};
+use crate::engine::{
+    fast_path_ok, floor_log2_bits, map_rounding, map_rounding_inplace, multiversion, pow2, round_magnitude_with, MiniFloat,
+};
 use crate::{fp4, fp8, Rounding};
 
 /// Elements per shared scale.
@@ -171,21 +173,35 @@ pub fn scale_code(block: &[f32], elem: Elem) -> u8 {
 }
 
 /// Encode one finite element `x / 2^shift` (saturating). Returns the code as
-/// stored (FP4 in the low nibble).
+/// stored (FP4 in the low nibble). Branch-free.
 #[inline(always)]
-fn encode_elem(elem: Elem, x: f32, shift: i32, r: Rounding) -> u8 {
+fn encode_elem<const NORMALIZE: bool>(elem: Elem, x: f32, shift: i32, r: Rounding) -> u8 {
     let b = x.to_bits();
-    let abs = b & 0x7fff_ffff;
     let mf = elem.minifloat();
-    let mag = round_magnitude(abs, shift, mf, r).min(mf.max_code);
+    let mag = round_magnitude_with::<NORMALIZE>(b, shift, mf, r).min(mf.max_code);
     match elem {
         Elem::Fp8E4M3 | Elem::Fp8E5M2 => (((b >> 24) & 0x80) | mag) as u8,
         Elem::Fp4E2M1 => (((b >> 28) & 0x8) | mag) as u8,
         Elem::Int8 => {
-            let m = mag as i32;
-            (if b >> 31 != 0 { -m } else { m }) as u8
+            // two's complement negate when the sign bit is set: (m ^ -s) + s
+            let neg = (b >> 31) as i32;
+            ((mag as i32 ^ -neg) + neg) as u8
         }
     }
+}
+
+/// Map every element of one finite block through `f(v, rounding)` choosing
+/// the cheaper non-normalising engine path whenever it is exact for `shift`.
+macro_rules! with_engine_path {
+    ($elem:expr, $shift:expr, |$norm:ident| $body:expr) => {
+        if fast_path_ok($shift, $elem.minifloat()) {
+            const $norm: bool = false;
+            $body
+        } else {
+            const $norm: bool = true;
+            $body
+        }
+    };
 }
 
 const fn build_int8_lut() -> [u32; 256] {
@@ -229,36 +245,54 @@ pub fn quantize(x: &[f32], elem: Elem, r: Rounding) -> MxTensor {
         scales: vec![0u8; x.len().div_ceil(BLOCK)],
         data: vec![0u8; elem.data_len(x.len())],
     };
-    // Monomorphise the per-element loop on the element type.
-    macro_rules! go {
-        ($e:expr) => {
-            for (bi, block) in x.chunks(BLOCK).enumerate() {
-                let sc = scale_code(block, $e);
-                t.scales[bi] = sc;
-                if sc == SCALE_NAN {
-                    continue; // elements of a NaN block are irrelevant; keep 0
-                }
-                let shift = i32::from(sc) - 127;
-                let base = bi * BLOCK;
-                for_each_rounding(block.len(), base as u64, r, |i, ri| {
-                    let c = encode_elem($e, block[i], shift, ri);
-                    if $e == Elem::Fp4E2M1 {
-                        let g = base + i;
-                        t.data[g / 2] |= c << (4 * (g & 1));
-                    } else {
-                        t.data[base + i] = c;
-                    }
-                });
-            }
-        };
-    }
-    match elem {
-        Elem::Fp8E4M3 => go!(Elem::Fp8E4M3),
-        Elem::Fp8E5M2 => go!(Elem::Fp8E5M2),
-        Elem::Fp4E2M1 => go!(Elem::Fp4E2M1),
-        Elem::Int8 => go!(Elem::Int8),
-    }
+    quantize_into(x, elem, r, &mut t.scales, &mut t.data);
     t
+}
+
+multiversion! {
+    /// Quantize into caller-provided buffers: `scales.len() ==
+    /// x.len().div_ceil(BLOCK)`, `data.len() == elem.data_len(x.len())`.
+    /// Elements of a NaN-scale block are stored as 0.
+    ///
+    /// # Panics
+    /// If the buffer lengths are wrong.
+    pub fn quantize_into(x: &[f32], elem: Elem, r: Rounding, scales: &mut [u8], data: &mut [u8]) {
+        assert_eq!(scales.len(), x.len().div_ceil(BLOCK), "mx::quantize_into: scales length");
+        assert_eq!(data.len(), elem.data_len(x.len()), "mx::quantize_into: data length");
+        // Monomorphise the per-block loop on the element type.
+        macro_rules! go {
+            ($e:expr) => {{
+                let block_bytes = $e.data_len(BLOCK);
+                let mut tmp = [0u8; BLOCK];
+                let blocks = x.chunks(BLOCK).zip(scales.iter_mut().zip(data.chunks_mut(block_bytes)));
+                for (bi, (block, (sc_out, d))) in blocks.enumerate() {
+                    let sc = scale_code(block, $e);
+                    *sc_out = sc;
+                    let codes = &mut tmp[..block.len()];
+                    if sc == SCALE_NAN {
+                        codes.fill(0);
+                    } else {
+                        let shift = i32::from(sc) - 127;
+                        let base = (bi * BLOCK) as u64;
+                        with_engine_path!($e, shift, |NORM| map_rounding(block, codes, base, r, |v, ri| {
+                            encode_elem::<NORM>($e, v, shift, ri)
+                        }));
+                    }
+                    if $e == Elem::Fp4E2M1 {
+                        fp4::pack_nibbles(codes, d);
+                    } else {
+                        d.copy_from_slice(codes);
+                    }
+                }
+            }};
+        }
+        match elem {
+            Elem::Fp8E4M3 => go!(Elem::Fp8E4M3),
+            Elem::Fp8E5M2 => go!(Elem::Fp8E5M2),
+            Elem::Fp4E2M1 => go!(Elem::Fp4E2M1),
+            Elem::Int8 => go!(Elem::Int8),
+        }
+    }
 }
 
 /// Dequantize to a new vector of `t.len` values.
@@ -279,55 +313,80 @@ pub fn dequantize_into(t: &MxTensor, out: &mut [f32]) {
     assert_eq!(out.len(), t.len, "mx::dequantize_into: output length mismatch");
     assert_eq!(t.scales.len(), t.len.div_ceil(BLOCK), "mx: scales length does not match len");
     assert_eq!(t.data.len(), t.elem.data_len(t.len), "mx: data length does not match len");
-    for (bi, (o, &sc)) in out.chunks_mut(BLOCK).zip(&t.scales).enumerate() {
-        if sc == SCALE_NAN {
-            o.fill(f32::NAN);
-            continue;
+    dequantize_raw(t.elem, &t.scales, &t.data, out);
+}
+
+multiversion! {
+    /// Dequantize raw MX buffers (`scales`, `data` laid out as in
+    /// [`MxTensor`]) for `out.len()` elements.
+    ///
+    /// # Panics
+    /// If the buffer lengths do not match `out.len()`.
+    pub fn dequantize_raw(elem: Elem, scales: &[u8], data: &[u8], out: &mut [f32]) {
+        assert_eq!(scales.len(), out.len().div_ceil(BLOCK), "mx: scales length does not match len");
+        assert_eq!(data.len(), elem.data_len(out.len()), "mx: data length does not match len");
+        macro_rules! go {
+            ($e:expr) => {{
+                let blocks = out.chunks_mut(BLOCK).zip(scales.iter().zip(data.chunks($e.data_len(BLOCK))));
+                for (o, (&sc, d)) in blocks {
+                    if sc == SCALE_NAN {
+                        o.fill(f32::NAN);
+                        continue;
+                    }
+                    let s = e8m0_to_f32(sc);
+                    if $e == Elem::Fp4E2M1 {
+                        let mut pairs = o.chunks_exact_mut(2);
+                        for (v, &byte) in (&mut pairs).zip(d) {
+                            v[0] = fp4::decode(byte) * s;
+                            v[1] = fp4::decode(byte >> 4) * s;
+                        }
+                        if let [last] = pairs.into_remainder() {
+                            *last = fp4::decode(d[d.len() - 1]) * s;
+                        }
+                    } else {
+                        for (v, &c) in o.iter_mut().zip(d) {
+                            *v = decode_elem($e, c) * s;
+                        }
+                    }
+                }
+            }};
         }
-        let s = e8m0_to_f32(sc);
-        let base = bi * BLOCK;
-        match t.elem {
-            Elem::Fp4E2M1 => {
-                // base is even (BLOCK is even), so pairs align with bytes.
-                let bytes = &t.data[base / 2..(base + o.len()).div_ceil(2)];
-                for (j, v) in o.iter_mut().enumerate() {
-                    *v = fp4::decode(bytes[j / 2] >> (4 * (j & 1))) * s;
-                }
-            }
-            e => {
-                let codes = &t.data[base..base + o.len()];
-                for (v, &c) in o.iter_mut().zip(codes) {
-                    *v = decode_elem(e, c) * s;
-                }
-            }
+        match elem {
+            Elem::Fp8E4M3 => go!(Elem::Fp8E4M3),
+            Elem::Fp8E5M2 => go!(Elem::Fp8E5M2),
+            Elem::Fp4E2M1 => go!(Elem::Fp4E2M1),
+            Elem::Int8 => go!(Elem::Int8),
         }
     }
 }
 
-/// In-place quantize→dequantize, bit-identical to
-/// `dequantize(&quantize(x, elem, r))` but without allocating.
-pub fn fake_quant_slice(x: &mut [f32], elem: Elem, r: Rounding) {
-    macro_rules! go {
-        ($e:expr) => {
-            for (bi, block) in x.chunks_mut(BLOCK).enumerate() {
-                let sc = scale_code(block, $e);
-                if sc == SCALE_NAN {
-                    block.fill(f32::NAN);
-                    continue;
+multiversion! {
+    /// In-place quantize→dequantize, bit-identical to
+    /// `dequantize(&quantize(x, elem, r))` but without allocating.
+    pub fn fake_quant_slice(x: &mut [f32], elem: Elem, r: Rounding) {
+        macro_rules! go {
+            ($e:expr) => {
+                for (bi, block) in x.chunks_mut(BLOCK).enumerate() {
+                    let sc = scale_code(block, $e);
+                    if sc == SCALE_NAN {
+                        block.fill(f32::NAN);
+                        continue;
+                    }
+                    let shift = i32::from(sc) - 127;
+                    let s = pow2(shift);
+                    let base = (bi * BLOCK) as u64;
+                    with_engine_path!($e, shift, |NORM| map_rounding_inplace(block, base, r, |v, ri| {
+                        decode_elem($e, encode_elem::<NORM>($e, v, shift, ri)) * s
+                    }));
                 }
-                let shift = i32::from(sc) - 127;
-                let s = pow2(shift);
-                for_each_rounding(block.len(), (bi * BLOCK) as u64, r, |i, ri| {
-                    block[i] = decode_elem($e, encode_elem($e, block[i], shift, ri)) * s;
-                });
-            }
-        };
-    }
-    match elem {
-        Elem::Fp8E4M3 => go!(Elem::Fp8E4M3),
-        Elem::Fp8E5M2 => go!(Elem::Fp8E5M2),
-        Elem::Fp4E2M1 => go!(Elem::Fp4E2M1),
-        Elem::Int8 => go!(Elem::Int8),
+            };
+        }
+        match elem {
+            Elem::Fp8E4M3 => go!(Elem::Fp8E4M3),
+            Elem::Fp8E5M2 => go!(Elem::Fp8E5M2),
+            Elem::Fp4E2M1 => go!(Elem::Fp4E2M1),
+            Elem::Int8 => go!(Elem::Int8),
+        }
     }
 }
 

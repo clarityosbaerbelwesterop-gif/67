@@ -40,7 +40,7 @@ pub mod fp4;
 pub mod fp8;
 pub mod mx;
 
-pub use crate::engine::stochastic_bits;
+pub use crate::engine::{active_isa, set_isa_limit, stochastic_bits, Isa};
 
 /// Rounding mode for every encoder in this crate.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

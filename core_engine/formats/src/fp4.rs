@@ -5,7 +5,7 @@
 //! ignored on decode and zero on encode. Conversion always saturates.
 //! Packed helpers store two codes per byte, low nibble first (the MX layout).
 
-use crate::engine::{decode_magnitude_bits, for_each_rounding, round_magnitude, MiniFloat};
+use crate::engine::{decode_magnitude_bits, map_rounding, map_rounding_inplace, multiversion, round_magnitude_with, MiniFloat};
 use crate::Rounding;
 
 pub(crate) const E2M1: MiniFloat = MiniFloat { m_bits: 1, bias: 1, max_code: 7 };
@@ -41,22 +41,21 @@ pub fn encode(x: f32, r: Rounding) -> u8 {
     let b = x.to_bits();
     let abs = b & 0x7fff_ffff;
     let sign = (b >> 28) & 0x8;
-    if abs > 0x7f80_0000 {
-        return MAX_CODE;
-    }
-    // Inf saturates; skip the engine for it (it expects finite input).
-    let mag = if abs == 0x7f80_0000 { E2M1.max_code } else { round_magnitude(abs, 0, E2M1, r).min(E2M1.max_code) };
-    (sign | mag) as u8
+    // Inf yields an out-of-range code from the engine and saturates via min.
+    let mag = round_magnitude_with::<false>(abs, 0, E2M1, r).min(E2M1.max_code);
+    (if abs > 0x7f80_0000 { u32::from(MAX_CODE) } else { sign | mag }) as u8
 }
 
-/// Encode a slice, one code per output byte (low nibble). For
-/// `Stochastic(seed)`, element `i` uses [`crate::stochastic_bits`]`(seed, i)`.
-///
-/// # Panics
-/// If `x.len() != out.len()`.
-pub fn encode_slice(x: &[f32], out: &mut [u8], r: Rounding) {
-    assert_eq!(x.len(), out.len(), "fp4::encode_slice: length mismatch");
-    for_each_rounding(x.len(), 0, r, |i, ri| out[i] = encode(x[i], ri));
+multiversion! {
+    /// Encode a slice, one code per output byte (low nibble). For
+    /// `Stochastic(seed)`, element `i` uses [`crate::stochastic_bits`]`(seed, i)`.
+    ///
+    /// # Panics
+    /// If `x.len() != out.len()`.
+    pub fn encode_slice(x: &[f32], out: &mut [u8], r: Rounding) {
+        assert_eq!(x.len(), out.len(), "fp4::encode_slice: length mismatch");
+        map_rounding(x, out, 0, r, encode);
+    }
 }
 
 /// Decode a slice of one-code-per-byte values (high nibbles ignored).
@@ -75,42 +74,62 @@ pub const fn packed_len(n: usize) -> usize {
     n.div_ceil(2)
 }
 
-/// Encode a slice into packed nibbles: element `i` goes to byte `i / 2`,
-/// low nibble for even `i`. An unused final high nibble is zero.
-///
-/// # Panics
-/// If `out.len() != packed_len(x.len())`.
-pub fn encode_packed(x: &[f32], out: &mut [u8], r: Rounding) {
-    assert_eq!(out.len(), packed_len(x.len()), "fp4::encode_packed: length mismatch");
-    out.fill(0);
-    for_each_rounding(x.len(), 0, r, |i, ri| out[i / 2] |= encode(x[i], ri) << (4 * (i & 1)));
-}
-
-/// Decode `out.len()` packed FP4 values.
-///
-/// # Panics
-/// If `packed.len() != packed_len(out.len())`.
-pub fn decode_packed(packed: &[u8], out: &mut [f32]) {
-    assert_eq!(packed.len(), packed_len(out.len()), "fp4::decode_packed: length mismatch");
-    let mut pairs = out.chunks_exact_mut(2);
-    for (o, &p) in (&mut pairs).zip(packed) {
-        o[0] = decode(p);
-        o[1] = decode(p >> 4);
+/// Pack one code per byte into nibbles (`codes.len() == 2 * out.len()`, or
+/// one less: the missing high nibble is zero).
+#[inline(always)]
+pub(crate) fn pack_nibbles(codes: &[u8], out: &mut [u8]) {
+    debug_assert_eq!(out.len(), packed_len(codes.len()));
+    let mut pairs = codes.chunks_exact(2);
+    for (o, p) in out.iter_mut().zip(&mut pairs) {
+        *o = (p[0] & 0xf) | ((p[1] & 0xf) << 4);
     }
-    if let [last] = pairs.into_remainder() {
-        *last = decode(packed[packed.len() - 1]);
+    if let [last] = pairs.remainder() {
+        out[codes.len() / 2] = last & 0xf;
     }
 }
 
-/// Fake-quantize in place (saturating); NaN passes through unchanged
-/// (see [`crate::fake_quant`]).
-pub fn fake_quant_slice(x: &mut [f32], r: Rounding) {
-    for_each_rounding(x.len(), 0, r, |i, ri| {
-        let v = x[i];
-        if !v.is_nan() {
-            x[i] = decode(encode(v, ri));
+multiversion! {
+    /// Encode a slice into packed nibbles: element `i` goes to byte `i / 2`,
+    /// low nibble for even `i`. An unused final high nibble is zero.
+    ///
+    /// # Panics
+    /// If `out.len() != packed_len(x.len())`.
+    pub fn encode_packed(x: &[f32], out: &mut [u8], r: Rounding) {
+        assert_eq!(out.len(), packed_len(x.len()), "fp4::encode_packed: length mismatch");
+        const CHUNK: usize = 256;
+        let mut codes = [0u8; CHUNK];
+        for (ci, (xc, oc)) in x.chunks(CHUNK).zip(out.chunks_mut(CHUNK / 2)).enumerate() {
+            let codes = &mut codes[..xc.len()];
+            map_rounding(xc, codes, (ci * CHUNK) as u64, r, encode);
+            pack_nibbles(codes, oc);
         }
-    });
+    }
+}
+
+multiversion! {
+    /// Decode `out.len()` packed FP4 values.
+    ///
+    /// # Panics
+    /// If `packed.len() != packed_len(out.len())`.
+    pub fn decode_packed(packed: &[u8], out: &mut [f32]) {
+        assert_eq!(packed.len(), packed_len(out.len()), "fp4::decode_packed: length mismatch");
+        let mut pairs = out.chunks_exact_mut(2);
+        for (o, &p) in (&mut pairs).zip(packed) {
+            o[0] = decode(p);
+            o[1] = decode(p >> 4);
+        }
+        if let [last] = pairs.into_remainder() {
+            *last = decode(packed[packed.len() - 1]);
+        }
+    }
+}
+
+multiversion! {
+    /// Fake-quantize in place (saturating); NaN passes through unchanged
+    /// (see [`crate::fake_quant`]).
+    pub fn fake_quant_slice(x: &mut [f32], r: Rounding) {
+        map_rounding_inplace(x, 0, r, |v, ri| if v.is_nan() { v } else { decode(encode(v, ri)) });
+    }
 }
 
 #[cfg(test)]

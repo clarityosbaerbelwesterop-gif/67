@@ -1,6 +1,6 @@
 //! IEEE 754 binary16 (s.5.10, bias 15), including subnormals, ±Inf and NaN.
 
-use crate::engine::{round_magnitude, MiniFloat};
+use crate::engine::{map_rounding, map_rounding_inplace, multiversion, round_magnitude_with, MiniFloat};
 use crate::Rounding;
 
 /// Largest finite value, 65504.
@@ -80,22 +80,12 @@ pub fn encode(x: f32, r: Rounding) -> u16 {
     let b = x.to_bits();
     let sign = (b >> 16) & 0x8000;
     let a = b & 0x7fff_ffff;
-    let mag = if a > 0x7f80_0000 {
-        0x7e00 | ((a >> 13) & 0x03ff)
-    } else if a == 0x7f80_0000 {
-        u32::from(INFINITY)
-    } else {
-        let c = round_magnitude(a, 0, FP16, r);
-        if c > FP16.max_code {
-            if r == Rounding::TowardZero {
-                FP16.max_code
-            } else {
-                u32::from(INFINITY)
-            }
-        } else {
-            c
-        }
-    };
+    // Every f32 subnormal is far below the binary16 range: no normalisation.
+    let c = round_magnitude_with::<false>(a, 0, FP16, r);
+    let finite_tz = a < 0x7f80_0000 && r == Rounding::TowardZero;
+    let ovf = if finite_tz { FP16.max_code } else { u32::from(INFINITY) };
+    let mag = if c > FP16.max_code { ovf } else { c };
+    let mag = if a > 0x7f80_0000 { 0x7e00 | ((a >> 13) & 0x03ff) } else { mag };
     (sign | mag) as u16
 }
 
@@ -105,49 +95,42 @@ pub fn decode(h: u16) -> f32 {
     to_f32(h)
 }
 
-/// Encode a slice. For `Stochastic(seed)`, element `i` uses
-/// [`crate::stochastic_bits`]`(seed, i)`.
-///
-/// # Panics
-/// If `x.len() != out.len()`.
-pub fn encode_slice(x: &[f32], out: &mut [u16], r: Rounding) {
-    assert_eq!(x.len(), out.len(), "fp16::encode_slice: length mismatch");
-    match r {
-        Rounding::NearestEven => {
-            for (o, &v) in out.iter_mut().zip(x) {
-                *o = from_f32(v);
-            }
-        }
-        _ => crate::engine::for_each_rounding(x.len(), 0, r, |i, ri| out[i] = encode(x[i], ri)),
+multiversion! {
+    /// Encode a slice. For `Stochastic(seed)`, element `i` uses
+    /// [`crate::stochastic_bits`]`(seed, i)`.
+    ///
+    /// # Panics
+    /// If `x.len() != out.len()`.
+    pub fn encode_slice(x: &[f32], out: &mut [u16], r: Rounding) {
+        assert_eq!(x.len(), out.len(), "fp16::encode_slice: length mismatch");
+        map_rounding(x, out, 0, r, encode);
     }
 }
 
-/// Decode a slice.
-///
-/// # Panics
-/// If `h.len() != out.len()`.
-pub fn decode_slice(h: &[u16], out: &mut [f32]) {
-    assert_eq!(h.len(), out.len(), "fp16::decode_slice: length mismatch");
-    for (o, &v) in out.iter_mut().zip(h) {
-        *o = to_f32(v);
+multiversion! {
+    /// Decode a slice.
+    ///
+    /// # Panics
+    /// If `h.len() != out.len()`.
+    pub fn decode_slice(h: &[u16], out: &mut [f32]) {
+        assert_eq!(h.len(), out.len(), "fp16::decode_slice: length mismatch");
+        for (o, &v) in out.iter_mut().zip(h) {
+            *o = to_f32(v);
+        }
     }
 }
 
-/// Round every element to binary16 in place (see [`crate::fake_quant`]).
-pub fn fake_quant_slice(x: &mut [f32], r: Rounding) {
-    match r {
-        Rounding::NearestEven => {
-            for v in x.iter_mut() {
-                *v = to_f32(from_f32(*v));
-            }
-        }
-        _ => crate::engine::for_each_rounding(x.len(), 0, r, |i, ri| x[i] = to_f32(encode(x[i], ri))),
+multiversion! {
+    /// Round every element to binary16 in place (see [`crate::fake_quant`]).
+    pub fn fake_quant_slice(x: &mut [f32], r: Rounding) {
+        map_rounding_inplace(x, 0, r, |v, ri| to_f32(encode(v, ri)));
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::engine::round_magnitude;
 
     fn generic_rne(x: f32) -> u16 {
         let b = x.to_bits();
