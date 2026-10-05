@@ -104,9 +104,9 @@ impl DiLoCo {
         self.bytes_communicated += 4 * delta.len() as u64;
         // torch.optim.SGD(nesterov=True): v = μv + Δ; θ -= lr·(Δ + μv)
         let (mu, lr) = (self.momentum, self.outer_lr);
-        for i in 0..delta.len() {
-            self.velocity[i] = mu * self.velocity[i] + delta[i];
-            self.global[i] -= lr * (delta[i] + mu * self.velocity[i]);
+        for ((v, g), d) in self.velocity.iter_mut().zip(self.global.iter_mut()).zip(&delta) {
+            *v = mu * *v + d;
+            *g -= lr * (d + mu * *v);
         }
         self.write_back(tr);
         self.rounds += 1;
