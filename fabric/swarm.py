@@ -43,11 +43,11 @@ def cmd_init(args) -> None:
 
 def cmd_work(args) -> None:
     exp, spec, corpus, cfg, RougeModel = setup(args)
-    state = torch.load(args.state, weights_only=False)
+    state = torch.load(args.state, weights_only=True)
     model = RougeModel(cfg)
     assign(list(model.parameters()), state["outer"]["theta"])
     opt = adamw(model, spec["lr"], spec["weight_decay"])
-    private = torch.load(args.private, weights_only=False) if args.private and args.private.exists() else None
+    private = torch.load(args.private, weights_only=True) if args.private and args.private.exists() else None
     if private:
         opt.load_state_dict(private["opt"])
     codec = Codec(args.codec)
@@ -67,8 +67,8 @@ def cmd_work(args) -> None:
 
 def cmd_aggregate(args) -> None:
     exp, spec, corpus, cfg, RougeModel = setup(args)
-    state = torch.load(args.state, weights_only=False)
-    deltas = [torch.load(p, weights_only=False) for p in sorted(args.deltas.rglob("delta-*.pt"))]
+    state = torch.load(args.state, weights_only=True)
+    deltas = [torch.load(p, weights_only=True) for p in sorted(args.deltas.rglob("delta-*.pt"))]
     deltas = [d for d in deltas if d["round"] == state["round"]]          # a stale delta never counts
     outer = Outer.load(state["outer"])
     grad, used = average_payloads([d["payload"] for d in deltas], spec["workers"], args.min_workers or spec["workers"])

@@ -97,4 +97,4 @@ jobs:
         with:
           python-version: "3.11"
       - run: python -m pip install -q --index-url https://download.pytorch.org/whl/cpu torch==2.14.0
-      - run: python -c "import torch, json; s = torch.load('final/state.pt', weights_only=False); print('SWARM_LOG', json.dumps(s['log']))"
+      - run: python -c "import torch, json; s = torch.load('final/state.pt', weights_only=True); print('SWARM_LOG', json.dumps(s['log']))"
