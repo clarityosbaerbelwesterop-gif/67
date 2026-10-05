@@ -1,0 +1,53 @@
+{
+ "schema": "fabric.pilot/1",
+ "arm": "diloco-h50-fp32",
+ "kind": "diloco",
+ "seed": 0,
+ "h": 50,
+ "codec": "fp32",
+ "workers": 4,
+ "steps": 2000,
+ "tokens": 16384000,
+ "params": 3279104,
+ "final_val_bpb": 2.03686,
+ "curve": [
+  [
+   250,
+   2.87661
+  ],
+  [
+   500,
+   2.54047
+  ],
+  [
+   750,
+   2.35753
+  ],
+  [
+   1000,
+   2.24753
+  ],
+  [
+   1250,
+   2.16572
+  ],
+  [
+   1500,
+   2.11328
+  ],
+  [
+   1750,
+   2.06876
+  ],
+  [
+   2000,
+   2.03686
+  ]
+ ],
+ "bytes_sent_per_worker": 524656640,
+ "wall_s": 5083.8,
+ "corpus_sha256": "2b49720ec4d78c3c9fabaee6e4179a5e997302b3a70029f30f2d582218c024a8",
+ "torch": "2.14.0+cpu",
+ "experiment": "t1-diloco",
+ "smoke": false
+}

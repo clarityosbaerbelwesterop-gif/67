@@ -1,0 +1,53 @@
+{
+ "schema": "fabric.pilot/1",
+ "arm": "diloco-h250-topk1",
+ "kind": "diloco",
+ "seed": 1,
+ "h": 250,
+ "codec": "topk:0.01",
+ "workers": 4,
+ "steps": 2000,
+ "tokens": 16384000,
+ "params": 3279104,
+ "final_val_bpb": 3.12325,
+ "curve": [
+  [
+   250,
+   5.77074
+  ],
+  [
+   500,
+   4.64369
+  ],
+  [
+   750,
+   4.02972
+  ],
+  [
+   1000,
+   3.6637
+  ],
+  [
+   1250,
+   3.37839
+  ],
+  [
+   1500,
+   3.17352
+  ],
+  [
+   1750,
+   3.07741
+  ],
+  [
+   2000,
+   3.12325
+  ]
+ ],
+ "bytes_sent_per_worker": 1574016,
+ "wall_s": 3594.4,
+ "corpus_sha256": "2b49720ec4d78c3c9fabaee6e4179a5e997302b3a70029f30f2d582218c024a8",
+ "torch": "2.14.0+cpu",
+ "experiment": "t1-diloco",
+ "smoke": false
+}

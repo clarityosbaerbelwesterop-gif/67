@@ -1,0 +1,53 @@
+{
+ "schema": "fabric.pilot/1",
+ "arm": "ddp",
+ "kind": "ddp",
+ "seed": 0,
+ "h": 1,
+ "codec": "fp32-allreduce",
+ "workers": 4,
+ "steps": 2000,
+ "tokens": 16384000,
+ "params": 3279104,
+ "final_val_bpb": 1.83564,
+ "curve": [
+  [
+   250,
+   2.51706
+  ],
+  [
+   500,
+   2.24072
+  ],
+  [
+   750,
+   2.11518
+  ],
+  [
+   1000,
+   2.02815
+  ],
+  [
+   1250,
+   1.95319
+  ],
+  [
+   1500,
+   1.89448
+  ],
+  [
+   1750,
+   1.8541
+  ],
+  [
+   2000,
+   1.83564
+  ]
+ ],
+ "bytes_sent_per_worker": 26232832000,
+ "wall_s": 5121.8,
+ "corpus_sha256": "2b49720ec4d78c3c9fabaee6e4179a5e997302b3a70029f30f2d582218c024a8",
+ "torch": "2.14.0+cpu",
+ "experiment": "t1-diloco",
+ "smoke": false
+}

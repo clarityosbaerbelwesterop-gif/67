@@ -1,0 +1,70 @@
+{
+ "experiment": "t1-diloco",
+ "arms": {
+  "ddp": {
+   "mean_bpb": 1.82608,
+   "sd_bpb": 0.02386,
+   "bytes_per_worker": 26232832000,
+   "seeds": [
+    0,
+    1,
+    2
+   ]
+  },
+  "diloco-h250-fp32": {
+   "mean_bpb": 2.34804,
+   "sd_bpb": 0.21427,
+   "bytes_per_worker": 104931328,
+   "seeds": [
+    0,
+    1,
+    2
+   ]
+  },
+  "diloco-h250-int8": {
+   "mean_bpb": 2.36529,
+   "sd_bpb": 0.23838,
+   "bytes_per_worker": 26272800,
+   "seeds": [
+    0,
+    1,
+    2
+   ]
+  },
+  "diloco-h250-topk1": {
+   "mean_bpb": 2.96321,
+   "sd_bpb": 0.15619,
+   "bytes_per_worker": 1574016,
+   "seeds": [
+    0,
+    1,
+    2
+   ]
+  },
+  "diloco-h50-fp32": {
+   "mean_bpb": 2.03421,
+   "sd_bpb": 0.00231,
+   "bytes_per_worker": 524656640,
+   "seeds": [
+    0,
+    1,
+    2
+   ]
+  }
+ },
+ "missing": [],
+ "bytes_ratio_ddp_over_diloco_h250": 250.0,
+ "bpb_ratio_diloco_h250_over_ddp": 1.2858,
+ "t1": "FAIL",
+ "t2": {
+  "diloco-h250-int8": {
+   "bpb_cost_vs_fp32": 0.0073,
+   "bytes_vs_fp32": 0.2504
+  },
+  "diloco-h250-topk1": {
+   "bpb_cost_vs_fp32": 0.262,
+   "bytes_vs_fp32": 0.015
+  },
+  "int8_lossless": true
+ }
+}
