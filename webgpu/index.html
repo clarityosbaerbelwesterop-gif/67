@@ -1,0 +1,140 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Forge on this GPU</title>
+<style>
+  :root { --bg: #0b0d10; --panel: #14181d; --line: #252b33; --text: #e8edf2; --muted: #8b96a3; --accent: #4cc38a; --warn: #e5a83b; --bad: #e5534b; }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text); font: 16px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; padding: max(16px, env(safe-area-inset-top)) 16px 32px; }
+  main { max-width: 960px; margin: 0 auto; display: grid; gap: 16px; }
+  h1 { font-size: 22px; margin: 4px 0 0; }
+  p.sub { color: var(--muted); margin: 0; }
+  section { background: var(--panel); border: 1px solid var(--line); border-radius: 14px; padding: 16px; display: grid; gap: 12px; }
+  label { display: grid; gap: 6px; color: var(--muted); font-size: 14px; }
+  input[type=file], input[type=text], input[type=number], textarea { width: 100%; background: #0f1317; color: var(--text); border: 1px solid var(--line); border-radius: 10px; padding: 12px; font: inherit; min-height: 44px; }
+  textarea { min-height: 96px; resize: vertical; }
+  .row { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 12px; }
+  button { min-height: 48px; border-radius: 12px; border: 0; background: var(--accent); color: #05140c; font: 600 16px/1 inherit; padding: 0 20px; }
+  button:disabled { opacity: .45; }
+  .stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; }
+  .stat { background: #0f1317; border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; }
+  .stat b { display: block; font-size: 20px; font-variant-numeric: tabular-nums; }
+  .stat span { color: var(--muted); font-size: 13px; }
+  pre { white-space: pre-wrap; word-break: break-word; background: #0f1317; border: 1px solid var(--line); border-radius: 10px; padding: 12px; margin: 0; min-height: 80px; }
+  .msg { color: var(--muted); font-size: 14px; }
+  .msg.bad { color: var(--bad); } .msg.ok { color: var(--accent); }
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <h1>Forge on this GPU</h1>
+    <p class="sub">Runs a forge / SCP-1 checkpoint (Rouge 1, Quasnir, Darus) entirely on this device's GPU via WebGPU. Nothing is sent anywhere.</p>
+  </header>
+
+  <section>
+    <div class="stats">
+      <div class="stat"><span>GPU adapter</span><b id="adapter">—</b></div>
+      <div class="stat"><span>Model</span><b id="params">—</b></div>
+      <div class="stat"><span>Measured speed</span><b id="speed">—</b></div>
+    </div>
+    <p class="msg" id="msg">Load a checkpoint: model.safetensors and state.json from runs/&lt;model&gt;/FINAL, plus the shared tokenizer.json.</p>
+  </section>
+
+  <section>
+    <div class="row">
+      <label>model.safetensors<input type="file" id="weights" accept=".safetensors"></label>
+      <label>state.json<input type="file" id="state" accept=".json,application/json"></label>
+      <label>tokenizer.json (optional)<input type="file" id="tok" accept=".json,application/json"></label>
+    </div>
+    <label>…or load all three from a base URL (e.g. your headcenter or a static host)<input type="text" id="url" placeholder="https://…/runs/darus-1/FINAL/" autocomplete="off" autocapitalize="off"></label>
+    <button id="load">Load onto GPU</button>
+  </section>
+
+  <section>
+    <label>Prompt (text with a tokenizer, otherwise comma-separated token ids)<textarea id="prompt">def fibonacci(n):</textarea></label>
+    <div class="row">
+      <label>New tokens<input type="number" id="maxNew" value="64" min="1" max="1024"></label>
+      <label>Temperature (0 = greedy)<input type="number" id="temp" value="0.7" min="0" max="2" step="0.1"></label>
+      <label>Top-k<input type="number" id="topk" value="40" min="1" max="1000"></label>
+    </div>
+    <button id="run" disabled>Generate on this GPU</button>
+    <pre id="out"></pre>
+  </section>
+</main>
+<script type="module">
+import { ForgeModel, Tokenizer, openDevice, parseSafetensors } from "./forge-webgpu.mjs";
+
+const $ = (id) => document.getElementById(id);
+const say = (text, cls = "") => { $("msg").textContent = text; $("msg").className = `msg ${cls}`; };
+let model = null, tokenizer = null, gpu = null;
+
+async function getDevice() {
+  if (!gpu) {
+    gpu = await openDevice();
+    const info = gpu.adapter.info ?? {};
+    $("adapter").textContent = [info.vendor, info.architecture].filter(Boolean).join(" ") || "WebGPU";
+  }
+  return gpu.device;
+}
+
+async function readInputs() {
+  const base = $("url").value.trim();
+  if (base) {
+    const u = (f) => new URL(f, base.endsWith("/") ? base : base + "/").href;
+    const [w, s] = await Promise.all([fetch(u("model.safetensors")), fetch(u("state.json"))]);
+    if (!w.ok || !s.ok) throw new Error(`download failed (${w.status}/${s.status})`);
+    const t = await fetch(u("tokenizer.json")).catch(() => null);
+    return { weights: await w.arrayBuffer(), state: await s.json(), tok: t && t.ok ? await t.json() : null };
+  }
+  const [w, s, t] = [$("weights").files[0], $("state").files[0], $("tok").files[0]];
+  if (!w || !s) throw new Error("choose model.safetensors and state.json");
+  return { weights: await w.arrayBuffer(), state: JSON.parse(await s.text()), tok: t ? JSON.parse(await t.text()) : null };
+}
+
+$("load").onclick = async () => {
+  $("load").disabled = true;
+  try {
+    say("Loading…");
+    const device = await getDevice();
+    const { weights, state, tok } = await readInputs();
+    const cfg = state.config.model;
+    const tensors = parseSafetensors(weights);
+    model = new ForgeModel(device, cfg, tensors, cfg.max_seq_len);
+    tokenizer = tok ? new Tokenizer(tok) : null;
+    if (tokenizer && tokenizer.vocabSize !== cfg.vocab_size) throw new Error(`tokenizer vocab ${tokenizer.vocabSize} ≠ model vocab ${cfg.vocab_size}`);
+    const n = [...tensors.values()].reduce((a, t) => a + t.data.length, 0);
+    $("params").textContent = `${(n / 1e6).toFixed(1)}M params`;
+    say(`Loaded ${state.config.run ?? "checkpoint"} · sha256 ${String(state.model_sha256 ?? "").slice(0, 12)}…`, "ok");
+    $("run").disabled = false;
+  } catch (e) {
+    say(e.message, "bad");
+  } finally {
+    $("load").disabled = false;
+  }
+};
+
+$("run").onclick = async () => {
+  $("run").disabled = true;
+  try {
+    const text = $("prompt").value;
+    const prompt = tokenizer ? tokenizer.encode(text) : text.split(",").map((s) => parseInt(s.trim(), 10)).filter(Number.isFinite);
+    if (!prompt.length) throw new Error("empty prompt");
+    say("Generating on the GPU…");
+    const r = await model.generate(prompt, { maxNew: +$("maxNew").value, temperature: +$("temp").value, topK: +$("topk").value, seed: Date.now() % 1e9, stop: tokenizer?.eos ?? null });
+    $("out").textContent = tokenizer ? text + tokenizer.decode(r.ids) : [...prompt, ...r.ids].join(", ");
+    $("speed").textContent = `${r.tokensPerSecond.toFixed(1)} tok/s`;
+    say("Done.", "ok");
+  } catch (e) {
+    say(e.message, "bad");
+  } finally {
+    $("run").disabled = false;
+  }
+};
+
+if (!navigator.gpu) say("This browser has no WebGPU. On iPad use Safari on iPadOS 26 or later.", "bad");
+</script>
+</body>
+</html>

@@ -1,0 +1,12 @@
+{
+  "name": "forge-webgpu",
+  "private": true,
+  "type": "module",
+  "description": "Run forge / SCP-1 checkpoints on WebGPU (iPad Safari, Chrome, Node+Dawn).",
+  "scripts": {
+    "test": "node test/parity.mjs"
+  },
+  "devDependencies": {
+    "webgpu": "0.6.2"
+  }
+}

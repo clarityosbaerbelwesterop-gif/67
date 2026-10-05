@@ -243,6 +243,21 @@ fn generate_cmd(a: &Args) -> Result<(), String> {
     Ok(())
 }
 
+fn logits_cmd(a: &Args) -> Result<(), String> {
+    let (cfg, w, _) = ckpt_model(&a.need("--ckpt")?)?;
+    let ids: Vec<u32> = a
+        .need("--prompt-ids")?
+        .split(',')
+        .map(|s| s.trim().parse().map_err(|_| format!("bad id {s}")))
+        .collect::<Result<_, _>>()?;
+    let mut s = forge_train::Sampler::new(&cfg, &w, a.num("--ctx", cfg.max_seq_len)?, threads(a)?)?;
+    println!(
+        "{}",
+        json!({"type": "logits", "prompt_ids": ids, "logits": s.next_logits(&ids)?})
+    );
+    Ok(())
+}
+
 fn disasm(a: &Args) -> Result<(), String> {
     let cfg = load_config(&a.need("--config")?)?;
     let (p, rep) = compile(
@@ -284,6 +299,7 @@ fn main() {
         "merge" => merge_cmd(&a),
         "eval" => eval_cmd(&a),
         "generate" => generate_cmd(&a),
+        "logits" => logits_cmd(&a),
         "disasm" => disasm(&a),
         "engines" => {
             println!("{}", json!({"available": forge_kernels::available().iter().map(|v: &GemmVariant| v.name()).collect::<Vec<_>>()}));
