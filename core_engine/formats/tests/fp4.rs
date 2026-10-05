@@ -5,16 +5,25 @@ mod common;
 use common::{assert_unbiased, next_down, next_up, RefOut, Rng, E2M1};
 use forge_formats::{fp4, Rounding};
 
-const TABLE: [f32; 16] = [0.0, 0.5, 1.0, 1.5, 2.0, 3.0, 4.0, 6.0, -0.0, -0.5, -1.0, -1.5, -2.0, -3.0, -4.0, -6.0];
+const TABLE: [f32; 16] = [
+    0.0, 0.5, 1.0, 1.5, 2.0, 3.0, 4.0, 6.0, -0.0, -0.5, -1.0, -1.5, -2.0, -3.0, -4.0, -6.0,
+];
 
 #[test]
 fn decode_all_16_codes() {
     for c in 0..16u8 {
         let v = fp4::decode(c);
         assert_eq!(v.to_bits(), TABLE[c as usize].to_bits(), "code {c:#x}");
-        assert_eq!(v as f64 * if c & 8 != 0 { -1.0 } else { 1.0 }, E2M1.value(u32::from(c & 7)));
+        assert_eq!(
+            v as f64 * if c & 8 != 0 { -1.0 } else { 1.0 },
+            E2M1.value(u32::from(c & 7))
+        );
         for hi in 1..16u8 {
-            assert_eq!(fp4::decode(c | hi << 4).to_bits(), v.to_bits(), "high nibble ignored");
+            assert_eq!(
+                fp4::decode(c | hi << 4).to_bits(),
+                v.to_bits(),
+                "high nibble ignored"
+            );
         }
     }
     assert_eq!(fp4::MAX_FINITE, 6.0);
@@ -24,7 +33,12 @@ fn decode_all_16_codes() {
 #[test]
 fn encode_decode_identity_and_signed_zero() {
     for c in 0..16u8 {
-        for r in [Rounding::NearestEven, Rounding::TowardZero, Rounding::Stochastic(0), Rounding::Stochastic(u32::MAX)] {
+        for r in [
+            Rounding::NearestEven,
+            Rounding::TowardZero,
+            Rounding::Stochastic(0),
+            Rounding::Stochastic(u32::MAX),
+        ] {
             assert_eq!(fp4::encode(fp4::decode(c), r), c, "{c:#x} {r:?}");
         }
     }
@@ -38,7 +52,15 @@ fn encode_decode_identity_and_signed_zero() {
 #[test]
 fn midpoint_ties_go_to_even_codes() {
     let g = E2M1.grid();
-    let mids = [(0.25f32, 0u8), (0.75, 2), (1.25, 2), (1.75, 4), (2.5, 4), (3.5, 6), (5.0, 6)];
+    let mids = [
+        (0.25f32, 0u8),
+        (0.75, 2),
+        (1.25, 2),
+        (1.75, 4),
+        (2.5, 4),
+        (3.5, 6),
+        (5.0, 6),
+    ];
     for (m, want) in mids {
         assert_eq!(fp4::encode(m, Rounding::NearestEven), want, "mid {m}");
         assert_eq!(fp4::encode(-m, Rounding::NearestEven), want | 8, "mid -{m}");
@@ -53,7 +75,12 @@ fn midpoint_ties_go_to_even_codes() {
 
 #[test]
 fn saturation_nan_inf() {
-    for r in [Rounding::NearestEven, Rounding::TowardZero, Rounding::Stochastic(u32::MAX), Rounding::Stochastic(0)] {
+    for r in [
+        Rounding::NearestEven,
+        Rounding::TowardZero,
+        Rounding::Stochastic(u32::MAX),
+        Rounding::Stochastic(0),
+    ] {
         for x in [6.5f32, 7.0, 7.5, 8.0, 100.0, 1e30, f32::MAX, f32::INFINITY] {
             assert_eq!(fp4::encode(x, r), 0x7, "{x} {r:?}");
             assert_eq!(fp4::encode(-x, r), 0xf, "-{x} {r:?}");
@@ -107,7 +134,11 @@ fn slices_and_packing_match_scalar() {
     let mut rng = Rng::new(5);
     for n in [0usize, 1, 2, 3, 31, 32, 33, 1001] {
         let x: Vec<f32> = (0..n).map(|_| (rng.normal() * 3.0) as f32).collect();
-        for r in [Rounding::NearestEven, Rounding::TowardZero, Rounding::Stochastic(1234)] {
+        for r in [
+            Rounding::NearestEven,
+            Rounding::TowardZero,
+            Rounding::Stochastic(1234),
+        ] {
             let mut codes = vec![0u8; n];
             fp4::encode_slice(&x, &mut codes, r);
             let mut packed = vec![0u8; fp4::packed_len(n)];
@@ -118,7 +149,9 @@ fn slices_and_packing_match_scalar() {
             fp4::decode_packed(&packed, &mut z);
             for i in 0..n {
                 let ri = match r {
-                    Rounding::Stochastic(s) => Rounding::Stochastic(forge_formats::stochastic_bits(s, i as u64)),
+                    Rounding::Stochastic(s) => {
+                        Rounding::Stochastic(forge_formats::stochastic_bits(s, i as u64))
+                    }
                     o => o,
                 };
                 assert_eq!(codes[i], fp4::encode(x[i], ri));

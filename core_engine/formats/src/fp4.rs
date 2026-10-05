@@ -5,10 +5,17 @@
 //! ignored on decode and zero on encode. Conversion always saturates.
 //! Packed helpers store two codes per byte, low nibble first (the MX layout).
 
-use crate::engine::{decode_magnitude_bits, map_rounding, map_rounding_inplace, multiversion, round_magnitude_with, MiniFloat};
+use crate::engine::{
+    decode_magnitude_bits, map_rounding, map_rounding_inplace, multiversion, round_magnitude_with,
+    MiniFloat,
+};
 use crate::Rounding;
 
-pub(crate) const E2M1: MiniFloat = MiniFloat { m_bits: 1, bias: 1, max_code: 7 };
+pub(crate) const E2M1: MiniFloat = MiniFloat {
+    m_bits: 1,
+    bias: 1,
+    max_code: 7,
+};
 
 /// Code of +6.0, the largest magnitude.
 pub const MAX_CODE: u8 = 0x7;
@@ -27,6 +34,19 @@ const fn build_lut() -> [u32; 16] {
 
 pub(crate) static LUT: [u32; 16] = build_lut();
 
+/// Branch-free arithmetic decode of the low nibble of `c` to f32 bits
+/// (no table: vectorises without gathers). Equal to `LUT[c & 0xf]`.
+#[inline(always)]
+pub(crate) fn decode_bits(c: u32) -> u32 {
+    let sign = (c & 0x8) << 28;
+    let e = (c >> 1) & 0x3;
+    let m = c & 0x1;
+    // e == 0: subnormal, m * 0.5 (0.5 = 0x3f00_0000); else (1 + m/2) * 2^(e-1).
+    let normal = ((e + 126) << 23) | (m << 22);
+    let sub = m * 0x3f00_0000;
+    sign | if e == 0 { sub } else { normal }
+}
+
 /// Decode the low nibble of `code`.
 #[inline(always)]
 pub fn decode(code: u8) -> f32 {
@@ -43,7 +63,11 @@ pub fn encode(x: f32, r: Rounding) -> u8 {
     let sign = (b >> 28) & 0x8;
     // Inf yields an out-of-range code from the engine and saturates via min.
     let mag = round_magnitude_with::<false>(abs, 0, E2M1, r).min(E2M1.max_code);
-    (if abs > 0x7f80_0000 { u32::from(MAX_CODE) } else { sign | mag }) as u8
+    (if abs > 0x7f80_0000 {
+        u32::from(MAX_CODE)
+    } else {
+        sign | mag
+    }) as u8
 }
 
 multiversion! {
@@ -106,6 +130,20 @@ multiversion! {
     }
 }
 
+/// Decode packed nibbles into `out` (`packed.len() == packed_len(out.len())`).
+#[inline(always)]
+pub(crate) fn unpack_decode(packed: &[u8], out: &mut [f32]) {
+    debug_assert_eq!(packed.len(), packed_len(out.len()));
+    let mut pairs = out.chunks_exact_mut(2);
+    for (o, &p) in (&mut pairs).zip(packed) {
+        o[0] = f32::from_bits(decode_bits(u32::from(p)));
+        o[1] = f32::from_bits(decode_bits(u32::from(p >> 4)));
+    }
+    if let [last] = pairs.into_remainder() {
+        *last = decode(packed[packed.len() - 1]);
+    }
+}
+
 multiversion! {
     /// Decode `out.len()` packed FP4 values.
     ///
@@ -113,14 +151,7 @@ multiversion! {
     /// If `packed.len() != packed_len(out.len())`.
     pub fn decode_packed(packed: &[u8], out: &mut [f32]) {
         assert_eq!(packed.len(), packed_len(out.len()), "fp4::decode_packed: length mismatch");
-        let mut pairs = out.chunks_exact_mut(2);
-        for (o, &p) in (&mut pairs).zip(packed) {
-            o[0] = decode(p);
-            o[1] = decode(p >> 4);
-        }
-        if let [last] = pairs.into_remainder() {
-            *last = decode(packed[packed.len() - 1]);
-        }
+        unpack_decode(packed, out);
     }
 }
 
@@ -145,6 +176,13 @@ mod tests {
             assert_eq!(decode(c as u8 | 0xf0), w, "high nibble ignored");
         }
         assert_eq!(decode(0x8).to_bits(), 0x8000_0000);
+    }
+
+    #[test]
+    fn arithmetic_decode_matches_tables() {
+        for c in 0..=255u32 {
+            assert_eq!(decode_bits(c), LUT[(c & 0xf) as usize], "{c:#x}");
+        }
     }
 
     #[test]

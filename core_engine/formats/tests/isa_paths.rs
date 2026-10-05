@@ -6,7 +6,9 @@ mod common;
 
 use common::Rng;
 use forge_formats::fp8::Kind;
-use forge_formats::{bf16, fake_quant, fp16, fp4, fp8, mx, set_isa_limit, stochastic_bits, Format, Isa, Rounding};
+use forge_formats::{
+    bf16, fake_quant, fp16, fp4, fp8, mx, set_isa_limit, stochastic_bits, Format, Isa, Rounding,
+};
 
 fn input(n: usize) -> Vec<f32> {
     let mut rng = Rng::new(0x15a);
@@ -61,7 +63,11 @@ fn same_bits(a: &[f32], b: &[f32]) -> bool {
     a.len() == b.len() && a.iter().zip(b).all(|(x, y)| x.to_bits() == y.to_bits())
 }
 
-const MODES: [Rounding; 3] = [Rounding::NearestEven, Rounding::TowardZero, Rounding::Stochastic(0xabc)];
+const MODES: [Rounding; 3] = [
+    Rounding::NearestEven,
+    Rounding::TowardZero,
+    Rounding::Stochastic(0xabc),
+];
 
 #[test]
 fn all_isa_levels_match_scalar_definitions() {
@@ -70,8 +76,10 @@ fn all_isa_levels_match_scalar_definitions() {
     let xm = mx_input(n);
     // Reference MX results computed at the baseline level.
     set_isa_limit(Isa::Baseline);
-    let mx_ref: Vec<Vec<mx::MxTensor>> =
-        mx::Elem::ALL.iter().map(|&e| MODES.iter().map(|&r| mx::quantize(&xm, e, r)).collect()).collect();
+    let mx_ref: Vec<Vec<mx::MxTensor>> = mx::Elem::ALL
+        .iter()
+        .map(|&e| MODES.iter().map(|&r| mx::quantize(&xm, e, r)).collect())
+        .collect();
 
     for isa in [Isa::Baseline, Isa::Avx2, Isa::Avx512] {
         set_isa_limit(isa);
@@ -83,17 +91,31 @@ fn all_isa_levels_match_scalar_definitions() {
             let mut h = vec![0u16; n];
             bf16::encode_slice(&x, &mut h, r);
             for i in 0..n {
-                assert_eq!(h[i], bf16::encode(x[i], elem_r(r, i)), "{active:?} bf16 {r:?} {i}");
+                assert_eq!(
+                    h[i],
+                    bf16::encode(x[i], elem_r(r, i)),
+                    "{active:?} bf16 {r:?} {i}"
+                );
             }
             let mut y = vec![0f32; n];
             bf16::decode_slice(&h, &mut y);
-            assert!(same_bits(&y, &h.iter().map(|&c| bf16::to_f32(c)).collect::<Vec<_>>()));
+            assert!(same_bits(
+                &y,
+                &h.iter().map(|&c| bf16::to_f32(c)).collect::<Vec<_>>()
+            ));
             fp16::encode_slice(&x, &mut h, r);
             for i in 0..n {
-                assert_eq!(h[i], fp16::encode(x[i], elem_r(r, i)), "{active:?} fp16 {r:?} {i}");
+                assert_eq!(
+                    h[i],
+                    fp16::encode(x[i], elem_r(r, i)),
+                    "{active:?} fp16 {r:?} {i}"
+                );
             }
             fp16::decode_slice(&h, &mut y);
-            assert!(same_bits(&y, &h.iter().map(|&c| fp16::to_f32(c)).collect::<Vec<_>>()));
+            assert!(same_bits(
+                &y,
+                &h.iter().map(|&c| fp16::to_f32(c)).collect::<Vec<_>>()
+            ));
 
             // fp8
             let mut b = vec![0u8; n];
@@ -101,17 +123,28 @@ fn all_isa_levels_match_scalar_definitions() {
                 for sat in [false, true] {
                     fp8::encode_slice(kind, &x, &mut b, r, sat);
                     for i in 0..n {
-                        assert_eq!(b[i], fp8::encode(kind, x[i], elem_r(r, i), sat), "{active:?} {kind:?} {r:?} {i}");
+                        assert_eq!(
+                            b[i],
+                            fp8::encode(kind, x[i], elem_r(r, i), sat),
+                            "{active:?} {kind:?} {r:?} {i}"
+                        );
                     }
                     fp8::decode_slice(kind, &b, &mut y);
-                    assert!(same_bits(&y, &b.iter().map(|&c| fp8::decode(kind, c)).collect::<Vec<_>>()));
+                    assert!(same_bits(
+                        &y,
+                        &b.iter().map(|&c| fp8::decode(kind, c)).collect::<Vec<_>>()
+                    ));
                 }
             }
 
             // fp4
             fp4::encode_slice(&x, &mut b, r);
             for i in 0..n {
-                assert_eq!(b[i], fp4::encode(x[i], elem_r(r, i)), "{active:?} fp4 {r:?} {i}");
+                assert_eq!(
+                    b[i],
+                    fp4::encode(x[i], elem_r(r, i)),
+                    "{active:?} fp4 {r:?} {i}"
+                );
             }
             let mut p = vec![0u8; fp4::packed_len(n)];
             fp4::encode_packed(&x, &mut p, r);
@@ -119,10 +152,19 @@ fn all_isa_levels_match_scalar_definitions() {
                 assert_eq!((p[i / 2] >> (4 * (i % 2))) & 0xf, b[i]);
             }
             fp4::decode_packed(&p, &mut y);
-            assert!(same_bits(&y, &b.iter().map(|&c| fp4::decode(c)).collect::<Vec<_>>()));
+            assert!(same_bits(
+                &y,
+                &b.iter().map(|&c| fp4::decode(c)).collect::<Vec<_>>()
+            ));
 
             // fake_quant for scalar formats
-            for f in [Format::Bf16, Format::Fp16, Format::Fp8(Kind::E4M3), Format::Fp8(Kind::E5M2), Format::Fp4] {
+            for f in [
+                Format::Bf16,
+                Format::Fp16,
+                Format::Fp8(Kind::E4M3),
+                Format::Fp8(Kind::E5M2),
+                Format::Fp4,
+            ] {
                 let mut z = x.clone();
                 fake_quant(&mut z, f, r);
                 for i in 0..n {
@@ -134,7 +176,10 @@ fn all_isa_levels_match_scalar_definitions() {
                         _ if x[i].is_nan() => x[i],
                         _ => fp4::decode(fp4::encode(x[i], ri)),
                     };
-                    assert!(want.to_bits() == z[i].to_bits() || (want.is_nan() && z[i].is_nan()), "{active:?} {f:?} {i}");
+                    assert!(
+                        want.to_bits() == z[i].to_bits() || (want.is_nan() && z[i].is_nan()),
+                        "{active:?} {f:?} {i}"
+                    );
                 }
             }
         }
@@ -148,9 +193,9 @@ fn all_isa_levels_match_scalar_definitions() {
                 let mut z = xm.clone();
                 fake_quant(&mut z, Format::Mx(e), r);
                 assert!(same_bits(&y, &z), "{active:?} {e:?} {r:?} fake_quant");
-                for i in 0..n {
+                for (i, yi) in y.iter().enumerate() {
                     let s = mx::e8m0_to_f32(t.scales[i / 32]);
-                    assert_eq!(y[i].to_bits(), (mx::decode_elem(e, t.code(i)) * s).to_bits());
+                    assert_eq!(yi.to_bits(), (mx::decode_elem(e, t.code(i)) * s).to_bits());
                 }
             }
             // MX with NaN/Inf blocks too
@@ -161,7 +206,10 @@ fn all_isa_levels_match_scalar_definitions() {
             set_isa_limit(isa);
             assert_eq!(t, t0);
             let y = mx::dequantize(&t);
-            assert!(y.iter().zip(&y0).all(|(a, b)| a.to_bits() == b.to_bits() || (a.is_nan() && b.is_nan())));
+            assert!(y
+                .iter()
+                .zip(&y0)
+                .all(|(a, b)| a.to_bits() == b.to_bits() || (a.is_nan() && b.is_nan())));
         }
     }
     set_isa_limit(Isa::Avx512);

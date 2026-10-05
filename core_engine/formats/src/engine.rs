@@ -94,7 +94,12 @@ pub(crate) fn round_shift(m: u32, d: u32, r: Rounding) -> u32 {
 /// Non-finite `abs` yields some code above `max_code` without panicking, so
 /// callers may compute it unconditionally and select.
 #[inline(always)]
-pub(crate) fn round_magnitude_with<const NORMALIZE: bool>(abs: u32, exp_shift: i32, f: MiniFloat, r: Rounding) -> u32 {
+pub(crate) fn round_magnitude_with<const NORMALIZE: bool>(
+    abs: u32,
+    exp_shift: i32,
+    f: MiniFloat,
+    r: Rounding,
+) -> u32 {
     let abs = abs & 0x7fff_ffff;
     let ef = (abs >> 23) as i32;
     let m0 = (abs & 0x007f_ffff) | (u32::from(ef != 0) << 23);
@@ -208,7 +213,12 @@ pub const fn stochastic_bits(seed: u32, index: u64) -> u32 {
 /// hoisted out of the loop. For `Stochastic(seed)`, element `i` gets
 /// `Stochastic(stochastic_bits(seed, base + i))`.
 #[cfg(test)]
-pub(crate) fn for_each_rounding(n: usize, base: u64, r: Rounding, mut f: impl FnMut(usize, Rounding)) {
+pub(crate) fn for_each_rounding(
+    n: usize,
+    base: u64,
+    r: Rounding,
+    mut f: impl FnMut(usize, Rounding),
+) {
     let g = RoundGen::new(r, base, n);
     (0..n).for_each(|i| f(i, g.at(i)));
 }
@@ -230,7 +240,10 @@ impl RoundGen {
             Rounding::Stochastic(seed) => {
                 let last = base.wrapping_add(n as u64).wrapping_sub(1);
                 if n == 0 || base >> 32 == last >> 32 {
-                    RoundGen::Keyed { key: sr_key(seed, (base >> 32) as u32), lo: base as u32 }
+                    RoundGen::Keyed {
+                        key: sr_key(seed, (base >> 32) as u32),
+                        lo: base as u32,
+                    }
                 } else {
                     RoundGen::Wide { seed, base }
                 }
@@ -244,8 +257,12 @@ impl RoundGen {
     pub(crate) fn at(self, i: usize) -> Rounding {
         match self {
             RoundGen::Fixed(r) => r,
-            RoundGen::Keyed { key, lo } => Rounding::Stochastic(sr_bits(key, lo.wrapping_add(i as u32))),
-            RoundGen::Wide { seed, base } => Rounding::Stochastic(stochastic_bits(seed, base.wrapping_add(i as u64))),
+            RoundGen::Keyed { key, lo } => {
+                Rounding::Stochastic(sr_bits(key, lo.wrapping_add(i as u32)))
+            }
+            RoundGen::Wide { seed, base } => {
+                Rounding::Stochastic(stochastic_bits(seed, base.wrapping_add(i as u64)))
+            }
         }
     }
 }
@@ -254,26 +271,66 @@ impl RoundGen {
 /// loop), with the rounding-mode dispatch hoisted out of the loop.
 /// Element `i` has global index `base + i` for stochastic rounding.
 #[inline(always)]
-pub(crate) fn map_rounding<T>(x: &[f32], out: &mut [T], base: u64, r: Rounding, f: impl Fn(f32, Rounding) -> T) {
+pub(crate) fn map_rounding<T>(
+    x: &[f32],
+    out: &mut [T],
+    base: u64,
+    r: Rounding,
+    f: impl Fn(f32, Rounding) -> T,
+) {
     debug_assert_eq!(x.len(), out.len());
     match RoundGen::new(r, base, x.len()) {
         RoundGen::Fixed(Rounding::NearestEven) => {
-            out.iter_mut().zip(x).for_each(|(o, &v)| *o = f(v, Rounding::NearestEven));
+            out.iter_mut()
+                .zip(x)
+                .for_each(|(o, &v)| *o = f(v, Rounding::NearestEven));
         }
         RoundGen::Fixed(Rounding::TowardZero) => {
-            out.iter_mut().zip(x).for_each(|(o, &v)| *o = f(v, Rounding::TowardZero));
+            out.iter_mut()
+                .zip(x)
+                .for_each(|(o, &v)| *o = f(v, Rounding::TowardZero));
         }
-        g => out.iter_mut().zip(x).enumerate().for_each(|(i, (o, &v))| *o = f(v, g.at(i))),
+        RoundGen::Keyed { key, lo } => {
+            out.iter_mut().zip(x).enumerate().for_each(|(i, (o, &v))| {
+                *o = f(
+                    v,
+                    Rounding::Stochastic(sr_bits(key, lo.wrapping_add(i as u32))),
+                );
+            })
+        }
+        g => out
+            .iter_mut()
+            .zip(x)
+            .enumerate()
+            .for_each(|(i, (o, &v))| *o = f(v, g.at(i))),
     }
 }
 
 /// In-place variant of [`map_rounding`].
 #[inline(always)]
-pub(crate) fn map_rounding_inplace(x: &mut [f32], base: u64, r: Rounding, f: impl Fn(f32, Rounding) -> f32) {
+pub(crate) fn map_rounding_inplace(
+    x: &mut [f32],
+    base: u64,
+    r: Rounding,
+    f: impl Fn(f32, Rounding) -> f32,
+) {
     match RoundGen::new(r, base, x.len()) {
-        RoundGen::Fixed(Rounding::NearestEven) => x.iter_mut().for_each(|v| *v = f(*v, Rounding::NearestEven)),
-        RoundGen::Fixed(Rounding::TowardZero) => x.iter_mut().for_each(|v| *v = f(*v, Rounding::TowardZero)),
-        g => x.iter_mut().enumerate().for_each(|(i, v)| *v = f(*v, g.at(i))),
+        RoundGen::Fixed(Rounding::NearestEven) => {
+            x.iter_mut().for_each(|v| *v = f(*v, Rounding::NearestEven))
+        }
+        RoundGen::Fixed(Rounding::TowardZero) => {
+            x.iter_mut().for_each(|v| *v = f(*v, Rounding::TowardZero))
+        }
+        RoundGen::Keyed { key, lo } => x.iter_mut().enumerate().for_each(|(i, v)| {
+            *v = f(
+                *v,
+                Rounding::Stochastic(sr_bits(key, lo.wrapping_add(i as u32))),
+            );
+        }),
+        g => x
+            .iter_mut()
+            .enumerate()
+            .for_each(|(i, v)| *v = f(*v, g.at(i))),
     }
 }
 
@@ -371,13 +428,33 @@ pub(crate) fn has_avx2() -> bool {
 mod tests {
     use super::*;
 
-    const E4M3: MiniFloat = MiniFloat { m_bits: 3, bias: 7, max_code: 0x7e };
+    const E4M3: MiniFloat = MiniFloat {
+        m_bits: 3,
+        bias: 7,
+        max_code: 0x7e,
+    };
     const FMTS: [MiniFloat; 5] = [
         E4M3,
-        MiniFloat { m_bits: 2, bias: 15, max_code: 0x7b },
-        MiniFloat { m_bits: 1, bias: 1, max_code: 7 },
-        MiniFloat { m_bits: 7, bias: 0, max_code: 127 },
-        MiniFloat { m_bits: 10, bias: 15, max_code: 0x7bff },
+        MiniFloat {
+            m_bits: 2,
+            bias: 15,
+            max_code: 0x7b,
+        },
+        MiniFloat {
+            m_bits: 1,
+            bias: 1,
+            max_code: 7,
+        },
+        MiniFloat {
+            m_bits: 7,
+            bias: 0,
+            max_code: 127,
+        },
+        MiniFloat {
+            m_bits: 10,
+            bias: 15,
+            max_code: 0x7bff,
+        },
     ];
 
     /// Straightforward 64-bit reference of `round_shift`.
@@ -391,7 +468,11 @@ mod tests {
                 q + u64::from(rem > half || (rem == half && q & 1 == 1))
             }
             Rounding::Stochastic(bits) => {
-                let add = if d >= 32 { u64::from(bits) << (d - 32) } else { u64::from(bits) >> (32 - d) };
+                let add = if d >= 32 {
+                    u64::from(bits) << (d - 32)
+                } else {
+                    u64::from(bits) >> (32 - d)
+                };
                 (m + add) >> d
             }
         }
@@ -450,10 +531,16 @@ mod tests {
         // d > 32: the dropped fraction is resolved to 2^-32 only
         assert_eq!(round_shift(1, 40, Rounding::Stochastic(u32::MAX)), 0);
         assert_eq!(round_shift(1 << 8, 40, Rounding::Stochastic(u32::MAX)), 1);
-        assert_eq!(round_shift(1 << 8, 40, Rounding::Stochastic(u32::MAX - 1)), 0);
+        assert_eq!(
+            round_shift(1 << 8, 40, Rounding::Stochastic(u32::MAX - 1)),
+            0
+        );
         // fraction 0.75: rounds up iff bits >= 2^30
         assert_eq!(round_shift(3 << 22, 24, Rounding::Stochastic(1 << 30)), 1);
-        assert_eq!(round_shift(3 << 22, 24, Rounding::Stochastic((1 << 30) - 1)), 0);
+        assert_eq!(
+            round_shift(3 << 22, 24, Rounding::Stochastic((1 << 30) - 1)),
+            0
+        );
         assert_eq!(round_shift(0, 63, Rounding::Stochastic(u32::MAX)), 0);
         assert_eq!(round_shift((1 << 24) - 1, 63, Rounding::NearestEven), 0);
         assert_eq!(round_shift((1 << 24) - 1, 32, Rounding::NearestEven), 0);
@@ -469,7 +556,11 @@ mod tests {
             for f in FMTS {
                 for shift in [-127, -120, -100, -10, 0, 10, 100, 127] {
                     if fast_path_ok(shift, f) {
-                        for r in [Rounding::NearestEven, Rounding::TowardZero, Rounding::Stochastic(b.rotate_left(7))] {
+                        for r in [
+                            Rounding::NearestEven,
+                            Rounding::TowardZero,
+                            Rounding::Stochastic(b.rotate_left(7)),
+                        ] {
                             assert_eq!(
                                 round_magnitude_with::<false>(b, shift, f, r),
                                 round_magnitude(b, shift, f, r),
@@ -485,7 +576,14 @@ mod tests {
         assert!(compared > 100_000);
         assert!(fast_path_ok(0, E4M3));
         assert!(!fast_path_ok(-127, E4M3));
-        assert!(!fast_path_ok(0, MiniFloat { m_bits: 7, bias: 127, max_code: 0x7f7f }));
+        assert!(!fast_path_ok(
+            0,
+            MiniFloat {
+                m_bits: 7,
+                bias: 127,
+                max_code: 0x7f7f
+            }
+        ));
     }
 
     #[test]
@@ -500,22 +598,37 @@ mod tests {
         assert_eq!(c(f32::from_bits(1)), 0);
         // shift: 3 * 2^-100 scaled by 2^-100 -> 3
         let x = 3.0 * 2f32.powi(-100);
-        assert_eq!(round_magnitude(x.to_bits(), -100, E4M3, Rounding::NearestEven), 0x44);
+        assert_eq!(
+            round_magnitude(x.to_bits(), -100, E4M3, Rounding::NearestEven),
+            0x44
+        );
         // f32 subnormal scaled into the normal range needs normalisation
         let tiny = f32::from_bits(0x0000_0300); // 3 * 2^-141
-        assert_eq!(round_magnitude(tiny.to_bits(), -141, E4M3, Rounding::NearestEven), 0x44);
+        assert_eq!(
+            round_magnitude(tiny.to_bits(), -141, E4M3, Rounding::NearestEven),
+            0x44
+        );
         // non-finite inputs give an out-of-range code instead of panicking
         for f in FMTS {
             assert!(round_magnitude(0x7f80_0000, 0, f, Rounding::NearestEven) > f.max_code);
-            assert!(round_magnitude_with::<false>(0x7fff_ffff, 0, f, Rounding::Stochastic(u32::MAX)) > f.max_code);
+            assert!(
+                round_magnitude_with::<false>(0x7fff_ffff, 0, f, Rounding::Stochastic(u32::MAX))
+                    > f.max_code
+            );
         }
     }
 
     #[test]
     fn decode_magnitude() {
         assert_eq!(f32::from_bits(decode_magnitude_bits(0x7e, E4M3)), 448.0);
-        assert_eq!(f32::from_bits(decode_magnitude_bits(0x01, E4M3)), 2f32.powi(-9));
-        assert_eq!(f32::from_bits(decode_magnitude_bits(0x07, E4M3)), 7.0 * 2f32.powi(-9));
+        assert_eq!(
+            f32::from_bits(decode_magnitude_bits(0x01, E4M3)),
+            2f32.powi(-9)
+        );
+        assert_eq!(
+            f32::from_bits(decode_magnitude_bits(0x07, E4M3)),
+            7.0 * 2f32.powi(-9)
+        );
         assert_eq!(f32::from_bits(decode_magnitude_bits(0x00, E4M3)), 0.0);
     }
 
@@ -541,7 +654,12 @@ mod tests {
         // Not a statistical proof, just a sanity check against gross bias,
         // for several seeds and for both index words.
         let n = 1u64 << 16;
-        for (seed, base) in [(12345u32, 0u64), (0, 0), (u32::MAX, 1 << 32), (7, (1 << 32) - 100)] {
+        for (seed, base) in [
+            (12345u32, 0u64),
+            (0, 0),
+            (u32::MAX, 1 << 32),
+            (7, (1 << 32) - 100),
+        ] {
             let mut ones = [0u32; 32];
             for i in 0..n {
                 let b = stochastic_bits(seed, base + i);
@@ -565,7 +683,11 @@ mod tests {
             let mut got = vec![];
             for_each_rounding(7, base, Rounding::Stochastic(99), |i, r| got.push((i, r)));
             for (i, r) in got {
-                assert_eq!(r, Rounding::Stochastic(stochastic_bits(99, base + i as u64)), "base {base} i {i}");
+                assert_eq!(
+                    r,
+                    Rounding::Stochastic(stochastic_bits(99, base + i as u64)),
+                    "base {base} i {i}"
+                );
             }
         }
         let mut n = 0;

@@ -78,11 +78,21 @@ fn encode_decode_identity_for_every_non_nan_code() {
             }
             let v = fp8::decode(kind, c);
             let is_inf = v.is_infinite();
-            let rmodes = [Rounding::NearestEven, Rounding::TowardZero, Rounding::Stochastic(0), Rounding::Stochastic(u32::MAX), Rounding::Stochastic(0x8000_0000)];
+            let rmodes = [
+                Rounding::NearestEven,
+                Rounding::TowardZero,
+                Rounding::Stochastic(0),
+                Rounding::Stochastic(u32::MAX),
+                Rounding::Stochastic(0x8000_0000),
+            ];
             for r in rmodes {
                 assert_eq!(fp8::encode(kind, v, r, false), c, "{kind:?} {c:#04x} {r:?}");
                 if !is_inf {
-                    assert_eq!(fp8::encode(kind, v, r, true), c, "{kind:?} {c:#04x} {r:?} sat");
+                    assert_eq!(
+                        fp8::encode(kind, v, r, true),
+                        c,
+                        "{kind:?} {c:#04x} {r:?} sat"
+                    );
                 }
             }
         }
@@ -108,7 +118,11 @@ fn nan_decoded_codes_reencode_to_nan() {
 fn signed_zero() {
     for (kind, _) in KINDS {
         for sat in [false, true] {
-            for r in [Rounding::NearestEven, Rounding::TowardZero, Rounding::Stochastic(u32::MAX)] {
+            for r in [
+                Rounding::NearestEven,
+                Rounding::TowardZero,
+                Rounding::Stochastic(u32::MAX),
+            ] {
                 assert_eq!(fp8::encode(kind, 0.0, r, sat), 0x00);
                 assert_eq!(fp8::encode(kind, -0.0, r, sat), 0x80);
             }
@@ -116,9 +130,15 @@ fn signed_zero() {
         assert_eq!(fp8::decode(kind, 0x00).to_bits(), 0x0000_0000);
         assert_eq!(fp8::decode(kind, 0x80).to_bits(), 0x8000_0000);
         // underflow keeps the sign
-        assert_eq!(fp8::encode(kind, -1e-30, Rounding::NearestEven, false), 0x80);
+        assert_eq!(
+            fp8::encode(kind, -1e-30, Rounding::NearestEven, false),
+            0x80
+        );
         assert_eq!(fp8::encode(kind, 1e-30, Rounding::NearestEven, false), 0x00);
-        assert_eq!(fp8::encode(kind, -f32::from_bits(1), Rounding::TowardZero, true), 0x80);
+        assert_eq!(
+            fp8::encode(kind, -f32::from_bits(1), Rounding::TowardZero, true),
+            0x80
+        );
     }
 }
 
@@ -128,7 +148,11 @@ fn ties_to_even_exactly_on_midpoints() {
         let g = f.grid();
         for c in 0..=f.max_code {
             let lo = g.vals[c as usize];
-            let hi = if c == f.max_code { g.beyond } else { g.vals[c as usize + 1] };
+            let hi = if c == f.max_code {
+                g.beyond
+            } else {
+                g.vals[c as usize + 1]
+            };
             let mid = ((lo + hi) / 2.0) as f32;
             assert_eq!(mid as f64, (lo + hi) / 2.0, "midpoint exact in f32");
             for neg in [false, true] {
@@ -141,8 +165,14 @@ fn ties_to_even_exactly_on_midpoints() {
                     assert_eq!(enc(next_down(mid), false), sb | c as u8);
                     assert_eq!(enc(next_up(mid), false), sb | (c + 1) as u8);
                     // TowardZero always picks the lower neighbour inside the interval
-                    assert_eq!(fp8::encode(kind, s * mid, Rounding::TowardZero, false), sb | c as u8);
-                    assert_eq!(fp8::encode(kind, s * next_down(hi as f32), Rounding::TowardZero, false), sb | c as u8);
+                    assert_eq!(
+                        fp8::encode(kind, s * mid, Rounding::TowardZero, false),
+                        sb | c as u8
+                    );
+                    assert_eq!(
+                        fp8::encode(kind, s * next_down(hi as f32), Rounding::TowardZero, false),
+                        sb | c as u8
+                    );
                 } else {
                     // Midpoint between max and the first overflow value.
                     let below = enc(next_down(mid), false);
@@ -152,7 +182,11 @@ fn ties_to_even_exactly_on_midpoints() {
                         Kind::E4M3 => 0x7f, // max 0x7e is even -> tie stays at max
                         Kind::E5M2 => 0x7c, // max 0x7b is odd -> tie overflows
                     };
-                    let want = if kind == Kind::E4M3 { c as u8 } else { overflow };
+                    let want = if kind == Kind::E4M3 {
+                        c as u8
+                    } else {
+                        overflow
+                    };
                     assert_eq!(at, sb | want, "{kind:?} top midpoint");
                     assert_eq!(enc(next_up(mid), false), sb | overflow);
                     assert_eq!(enc(mid, true), sb | c as u8);
@@ -183,9 +217,17 @@ fn dense_sweep_matches_reference_and_is_monotonic() {
                     assert!(y >= prev, "{kind:?} {r:?} not monotonic at {x:e}");
                     prev = y;
                     // reference check on a sub-sampled set (the reference is slow-ish)
-                    if b % 7 == 0 {
-                        assert_eq!(c, ref_encode(kind, f, &g, x, r, sat), "{kind:?} {r:?} sat={sat} x={x:e}");
-                        assert_eq!(fp8::encode(kind, -x, r, sat), c | 0x80, "sign symmetry {x:e}");
+                    if b.is_multiple_of(7) {
+                        assert_eq!(
+                            c,
+                            ref_encode(kind, f, &g, x, r, sat),
+                            "{kind:?} {r:?} sat={sat} x={x:e}"
+                        );
+                        assert_eq!(
+                            fp8::encode(kind, -x, r, sat),
+                            c | 0x80,
+                            "sign symmetry {x:e}"
+                        );
                         checked += 1;
                     }
                     b += 61;
@@ -205,25 +247,66 @@ fn overflow_saturate_vs_non_saturate() {
             let v = s * x;
             // E4M3
             if x > 464.0 {
-                assert_eq!(fp8::encode(Kind::E4M3, v, Rounding::NearestEven, false), sb | 0x7f, "{v}");
-                assert_eq!(fp8::encode(Kind::E4M3, v, Rounding::NearestEven, true), sb | 0x7e, "{v}");
-                assert_eq!(fp8::encode(Kind::E4M3, v, Rounding::TowardZero, false), sb | 0x7e, "{v}");
-                assert_eq!(fp8::encode(Kind::E4M3, v, Rounding::Stochastic(0), false), sb | 0x7f, "{v}");
-                assert_eq!(fp8::encode(Kind::E4M3, v, Rounding::Stochastic(0), true), sb | 0x7e, "{v}");
+                assert_eq!(
+                    fp8::encode(Kind::E4M3, v, Rounding::NearestEven, false),
+                    sb | 0x7f,
+                    "{v}"
+                );
+                assert_eq!(
+                    fp8::encode(Kind::E4M3, v, Rounding::NearestEven, true),
+                    sb | 0x7e,
+                    "{v}"
+                );
+                assert_eq!(
+                    fp8::encode(Kind::E4M3, v, Rounding::TowardZero, false),
+                    sb | 0x7e,
+                    "{v}"
+                );
+                assert_eq!(
+                    fp8::encode(Kind::E4M3, v, Rounding::Stochastic(0), false),
+                    sb | 0x7f,
+                    "{v}"
+                );
+                assert_eq!(
+                    fp8::encode(Kind::E4M3, v, Rounding::Stochastic(0), true),
+                    sb | 0x7e,
+                    "{v}"
+                );
             }
             // E5M2: overflow from 61440 (tie with odd max) upwards
             if x >= 61440.0 {
-                assert_eq!(fp8::encode(Kind::E5M2, v, Rounding::NearestEven, false), sb | 0x7c, "{v}");
+                assert_eq!(
+                    fp8::encode(Kind::E5M2, v, Rounding::NearestEven, false),
+                    sb | 0x7c,
+                    "{v}"
+                );
                 assert_eq!(fp8::decode(Kind::E5M2, sb | 0x7c), s * f32::INFINITY);
-                assert_eq!(fp8::encode(Kind::E5M2, v, Rounding::NearestEven, true), sb | 0x7b, "{v}");
-                assert_eq!(fp8::encode(Kind::E5M2, v, Rounding::TowardZero, false), sb | 0x7b, "{v}");
+                assert_eq!(
+                    fp8::encode(Kind::E5M2, v, Rounding::NearestEven, true),
+                    sb | 0x7b,
+                    "{v}"
+                );
+                assert_eq!(
+                    fp8::encode(Kind::E5M2, v, Rounding::TowardZero, false),
+                    sb | 0x7b,
+                    "{v}"
+                );
             }
         }
     }
     // Just inside the range: no overflow.
-    assert_eq!(fp8::encode(Kind::E4M3, 464.0, Rounding::NearestEven, false), 0x7e);
-    assert_eq!(fp8::encode(Kind::E4M3, 449.0, Rounding::NearestEven, false), 0x7e);
-    assert_eq!(fp8::encode(Kind::E5M2, 61439.0, Rounding::NearestEven, false), 0x7b);
+    assert_eq!(
+        fp8::encode(Kind::E4M3, 464.0, Rounding::NearestEven, false),
+        0x7e
+    );
+    assert_eq!(
+        fp8::encode(Kind::E4M3, 449.0, Rounding::NearestEven, false),
+        0x7e
+    );
+    assert_eq!(
+        fp8::encode(Kind::E5M2, 61439.0, Rounding::NearestEven, false),
+        0x7b
+    );
     // Stochastic rounding between max and the overflow point: either max or overflow.
     for bits in [0u32, 1 << 31, u32::MAX] {
         let c = fp8::encode(Kind::E4M3, 470.0, Rounding::Stochastic(bits), false);
@@ -231,7 +314,10 @@ fn overflow_saturate_vs_non_saturate() {
         let c = fp8::encode(Kind::E4M3, 470.0, Rounding::Stochastic(bits), true);
         assert_eq!(c, 0x7e);
     }
-    assert_eq!(fp8::encode(Kind::E4M3, 470.0, Rounding::Stochastic(u32::MAX), false), 0x7f);
+    assert_eq!(
+        fp8::encode(Kind::E4M3, 470.0, Rounding::Stochastic(u32::MAX), false),
+        0x7f
+    );
 }
 
 #[test]
@@ -242,7 +328,11 @@ fn nan_and_inf_inputs() {
         let sign = rng.next_u32() & 0x8000_0000;
         let x = f32::from_bits(sign | 0x7f80_0000 | payload);
         assert!(x.is_nan());
-        for r in [Rounding::NearestEven, Rounding::TowardZero, Rounding::Stochastic(rng.next_u32())] {
+        for r in [
+            Rounding::NearestEven,
+            Rounding::TowardZero,
+            Rounding::Stochastic(rng.next_u32()),
+        ] {
             for sat in [false, true] {
                 let c4 = fp8::encode(Kind::E4M3, x, r, sat);
                 assert_eq!(c4 & 0x7f, 0x7f);
@@ -253,7 +343,11 @@ fn nan_and_inf_inputs() {
             }
         }
     }
-    for r in [Rounding::NearestEven, Rounding::TowardZero, Rounding::Stochastic(u32::MAX)] {
+    for r in [
+        Rounding::NearestEven,
+        Rounding::TowardZero,
+        Rounding::Stochastic(u32::MAX),
+    ] {
         assert_eq!(fp8::encode(Kind::E4M3, f32::INFINITY, r, false), 0x7f);
         assert_eq!(fp8::encode(Kind::E4M3, f32::NEG_INFINITY, r, false), 0xff);
         assert_eq!(fp8::encode(Kind::E4M3, f32::INFINITY, r, true), 0x7e);
@@ -282,13 +376,21 @@ fn stochastic_rounding_is_unbiased() {
         ];
         for x in xs {
             let draws: Vec<f64> = (0..n)
-                .map(|_| fp8::decode(kind, fp8::encode(kind, x, Rounding::Stochastic(rng.next_u32()), true)) as f64)
+                .map(|_| {
+                    fp8::decode(
+                        kind,
+                        fp8::encode(kind, x, Rounding::Stochastic(rng.next_u32()), true),
+                    ) as f64
+                })
                 .collect();
             // every draw is one of the two neighbours
             let g = f.grid();
             let (lo, hi) = g.bracket((x as f64).abs());
             for &d in &draws {
-                assert!(d.abs() == lo || d.abs() == hi, "{kind:?} {x}: draw {d} not in {{{lo}, {hi}}}");
+                assert!(
+                    d.abs() == lo || d.abs() == hi,
+                    "{kind:?} {x}: draw {d} not in {{{lo}, {hi}}}"
+                );
             }
             assert_unbiased(&format!("{kind:?}"), x as f64, &draws);
         }
@@ -319,14 +421,20 @@ fn slices_match_scalar() {
     let x: Vec<f32> = (0..10_007).map(|_| (rng.normal() * 100.0) as f32).collect();
     for (kind, _) in KINDS {
         for sat in [false, true] {
-            for r in [Rounding::NearestEven, Rounding::TowardZero, Rounding::Stochastic(42)] {
+            for r in [
+                Rounding::NearestEven,
+                Rounding::TowardZero,
+                Rounding::Stochastic(42),
+            ] {
                 let mut codes = vec![0u8; x.len()];
                 fp8::encode_slice(kind, &x, &mut codes, r, sat);
                 let mut y = vec![0f32; x.len()];
                 fp8::decode_slice(kind, &codes, &mut y);
                 for i in 0..x.len() {
                     let ri = match r {
-                        Rounding::Stochastic(s) => Rounding::Stochastic(forge_formats::stochastic_bits(s, i as u64)),
+                        Rounding::Stochastic(s) => {
+                            Rounding::Stochastic(forge_formats::stochastic_bits(s, i as u64))
+                        }
                         o => o,
                     };
                     assert_eq!(codes[i], fp8::encode(kind, x[i], ri, sat));

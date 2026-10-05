@@ -92,21 +92,50 @@ fn datasets() -> Vec<(&'static str, Vec<f32>)> {
     let n = 32 * 512 + 17;
     let mut sets = vec![];
     sets.push(("normal", (0..n).map(|_| rng.normal() as f32).collect()));
-    sets.push(("uniform", (0..n).map(|_| (rng.uniform() * 2.0 - 1.0) as f32 * 1e3).collect()));
-    sets.push(("lognormal", (0..n).map(|_| ((rng.normal() * 4.0).exp() * if rng.uniform() < 0.5 { -1.0 } else { 1.0 }) as f32).collect()));
+    sets.push((
+        "uniform",
+        (0..n)
+            .map(|_| (rng.uniform() * 2.0 - 1.0) as f32 * 1e3)
+            .collect(),
+    ));
+    sets.push((
+        "lognormal",
+        (0..n)
+            .map(|_| {
+                ((rng.normal() * 4.0).exp() * if rng.uniform() < 0.5 { -1.0 } else { 1.0 }) as f32
+            })
+            .collect(),
+    ));
     sets.push((
         "outliers",
-        (0..n).map(|i| if i % 97 == 0 { (rng.normal() * 1e4) as f32 } else { (rng.normal() * 1e-2) as f32 }).collect(),
+        (0..n)
+            .map(|i| {
+                if i % 97 == 0 {
+                    (rng.normal() * 1e4) as f32
+                } else {
+                    (rng.normal() * 1e-2) as f32
+                }
+            })
+            .collect(),
     ));
-    sets.push(("tiny", (0..n).map(|_| (rng.normal() * 1e-30) as f32).collect()));
-    sets.push(("f32-subnormal", (0..n).map(|_| (rng.normal() * 1e-39) as f32).collect()));
-    sets.push(("huge", (0..n).map(|_| (rng.normal() * 1e37) as f32).collect()));
+    sets.push((
+        "tiny",
+        (0..n).map(|_| (rng.normal() * 1e-30) as f32).collect(),
+    ));
+    sets.push((
+        "f32-subnormal",
+        (0..n).map(|_| (rng.normal() * 1e-39) as f32).collect(),
+    ));
+    sets.push((
+        "huge",
+        (0..n).map(|_| (rng.normal() * 1e37) as f32).collect(),
+    ));
     // amax exactly a power of two, and just below one (scale boundaries)
     sets.push((
         "pow2-edges",
         (0..n)
             .map(|i| {
-                let k = (i / 32 % 40) as i32 - 20;
+                let k = (i / 32 % 40) - 20;
                 match i % 32 {
                     0 if (i / 32) % 2 == 0 => 2f32.powi(k),
                     0 => f32::from_bits(2f32.powi(k).to_bits() - 1),
@@ -118,7 +147,15 @@ fn datasets() -> Vec<(&'static str, Vec<f32>)> {
     // values that sit exactly on scaled grid midpoints
     sets.push((
         "grid-mids",
-        (0..n).map(|i| if i % 32 == 0 { 7.9 } else { (((i * 7919) % 255) as f32 - 127.0) / 16.0 + 1.0 / 64.0 }).collect(),
+        (0..n)
+            .map(|i| {
+                if i % 32 == 0 {
+                    7.9
+                } else {
+                    (((i * 7919) % 255) as f32 - 127.0) / 16.0 + 1.0 / 64.0
+                }
+            })
+            .collect(),
     ));
     sets
 }
@@ -134,7 +171,11 @@ fn matches_reference_and_error_bounds_hold() {
                 assert_eq!(t.scales.len(), x.len().div_ceil(32));
                 for (bi, block) in x.chunks(BLOCK).enumerate() {
                     let s = ref_scale_exp(block, e).unwrap();
-                    assert_eq!(i32::from(t.scales[bi]) - 127, s, "{name} {e:?} block {bi} scale");
+                    assert_eq!(
+                        i32::from(t.scales[bi]) - 127,
+                        s,
+                        "{name} {e:?} block {bi} scale"
+                    );
                     let amax = block.iter().fold(0f64, |m, &v| m.max((v as f64).abs()));
                     let clamped = amax > 0.0 && floor_log2(amax) - emax(e) < -127;
                     for (j, &v) in block.iter().enumerate() {
@@ -142,9 +183,17 @@ fn matches_reference_and_error_bounds_hold() {
                         assert_eq!(y[i] as f64, want[i], "{name} {e:?} {r:?} i={i} x={v:e}");
                         let err = (v as f64 - y[i] as f64).abs();
                         if clamped {
-                            assert!(err <= amax, "{name} {e:?} clamped block err {err} amax {amax}");
+                            assert!(
+                                err <= amax,
+                                "{name} {e:?} clamped block err {err} amax {amax}"
+                            );
                         } else {
-                            assert!(err <= bound(e, r) * amax, "{name} {e:?} {r:?} i={i} x={v:e} y={} err/amax={}", y[i], err / amax);
+                            assert!(
+                                err <= bound(e, r) * amax,
+                                "{name} {e:?} {r:?} i={i} x={v:e} y={} err/amax={}",
+                                y[i],
+                                err / amax
+                            );
                         }
                     }
                 }
@@ -165,7 +214,10 @@ fn stochastic_error_bounds_hold() {
                 }
                 for (&v, &w) in block.iter().zip(yb) {
                     let err = (v as f64 - w as f64).abs();
-                    assert!(err <= bound(e, Rounding::Stochastic(0)) * amax, "{name} {e:?} x={v:e} y={w:e}");
+                    assert!(
+                        err <= bound(e, Rounding::Stochastic(0)) * amax,
+                        "{name} {e:?} x={v:e} y={w:e}"
+                    );
                 }
             }
         }
@@ -180,7 +232,10 @@ fn error_bounds_are_reached_not_loose() {
         x[0] = f32::from_bits(2f32.to_bits() - 1); // 1.99999988 -> floor(log2) = 0
         let y = mx::dequantize(&mx::quantize(&x, e, Rounding::NearestEven));
         let rel = ((x[0] - y[0]) / x[0]) as f64;
-        assert!(rel <= bound(e, Rounding::NearestEven) && rel > bound(e, Rounding::NearestEven) * 0.95, "{e:?} rel {rel}");
+        assert!(
+            rel <= bound(e, Rounding::NearestEven) && rel > bound(e, Rounding::NearestEven) * 0.95,
+            "{e:?} rel {rel}"
+        );
     }
 }
 
@@ -193,7 +248,11 @@ fn zero_nan_inf_blocks() {
         x[71] = 1.0;
         let t = mx::quantize(&x, e, Rounding::NearestEven);
         assert_eq!(t.scales, vec![0u8, mx::SCALE_NAN, mx::SCALE_NAN]);
-        assert_eq!(mx::e8m0_to_f32(t.scales[0]), 2f32.powi(-127), "all-zero block gets the smallest scale");
+        assert_eq!(
+            mx::e8m0_to_f32(t.scales[0]),
+            2f32.powi(-127),
+            "all-zero block gets the smallest scale"
+        );
         assert!(t.data[..e.data_len(32)].iter().all(|&b| b == 0));
         let y = mx::dequantize(&t);
         assert!(y[..32].iter().all(|&v| v == 0.0));
@@ -220,7 +279,10 @@ fn partial_blocks_and_lengths() {
             let want = ref_fake_quant(&x, e, Rounding::NearestEven);
             for i in 0..n {
                 assert_eq!(y[i] as f64, want[i]);
-                assert_eq!(mx::decode_elem(e, t.code(i)) * mx::e8m0_to_f32(t.scales[i / 32]), y[i]);
+                assert_eq!(
+                    mx::decode_elem(e, t.code(i)) * mx::e8m0_to_f32(t.scales[i / 32]),
+                    y[i]
+                );
             }
             if e == Elem::Fp4E2M1 && n % 2 == 1 {
                 assert_eq!(t.data[n / 2] >> 4, 0);
@@ -239,10 +301,18 @@ fn int8_is_symmetric_twos_complement() {
     for (i, &v) in x.iter().enumerate() {
         let q = t.data[i] as i8;
         assert_eq!(q as f32 / 64.0, mx::dequantize(&t)[i]);
-        assert!(((v * 64.0).round() as i32).clamp(-127, 127) == i32::from(q) || (v * 64.0).fract().abs() == 0.5);
+        assert!(
+            ((v * 64.0).round() as i32).clamp(-127, 127) == i32::from(q)
+                || (v * 64.0).fract().abs() == 0.5
+        );
     }
     // a hand-built tensor with -128 decodes to -2 * scale
-    let h = MxTensor { elem: Elem::Int8, len: 1, scales: vec![128], data: vec![0x80] };
+    let h = MxTensor {
+        elem: Elem::Int8,
+        len: 1,
+        scales: vec![128],
+        data: vec![0x80],
+    };
     assert_eq!(mx::dequantize(&h), vec![-4.0]);
 }
 
@@ -250,7 +320,11 @@ fn int8_is_symmetric_twos_complement() {
 fn fake_quant_is_bit_identical_to_quantize_dequantize() {
     for (_, x) in datasets() {
         for e in Elem::ALL {
-            for r in [Rounding::NearestEven, Rounding::TowardZero, Rounding::Stochastic(0xdead_beef)] {
+            for r in [
+                Rounding::NearestEven,
+                Rounding::TowardZero,
+                Rounding::Stochastic(0xdead_beef),
+            ] {
                 let y = mx::dequantize(&mx::quantize(&x, e, r));
                 let mut z = x.clone();
                 fake_quant(&mut z, Format::Mx(e), r);
@@ -281,7 +355,12 @@ fn stochastic_mx_is_unbiased() {
             let g = grid(e);
             let sc = 2f64.powi(-emax(e));
             let (lo, hi) = g.bracket((probe as f64).abs() / sc);
-            assert!(draws.iter().all(|d| d.abs() == lo * sc || d.abs() == hi * sc), "{e:?}");
+            assert!(
+                draws
+                    .iter()
+                    .all(|d| d.abs() == lo * sc || d.abs() == hi * sc),
+                "{e:?}"
+            );
         }
     }
 }
@@ -306,7 +385,12 @@ fn stochastic_mx_depends_only_on_seed_and_index() {
 #[test]
 #[should_panic(expected = "scales length")]
 fn malformed_tensor_panics() {
-    let t = MxTensor { elem: Elem::Fp8E4M3, len: 33, scales: vec![127], data: vec![0; 33] };
+    let t = MxTensor {
+        elem: Elem::Fp8E4M3,
+        len: 33,
+        scales: vec![127],
+        data: vec![0; 33],
+    };
     mx::dequantize(&t);
 }
 

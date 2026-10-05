@@ -22,7 +22,8 @@
 //! and every scale.
 
 use crate::engine::{
-    fast_path_ok, floor_log2_bits, map_rounding, map_rounding_inplace, multiversion, pow2, round_magnitude_with, MiniFloat,
+    fast_path_ok, floor_log2_bits, map_rounding, map_rounding_inplace, multiversion, pow2,
+    round_magnitude_with, MiniFloat,
 };
 use crate::{fp4, fp8, Rounding};
 
@@ -44,9 +45,21 @@ pub enum Elem {
     Int8,
 }
 
-const INT8: MiniFloat = MiniFloat { m_bits: 7, bias: 0, max_code: 127 };
-const E4M3: MiniFloat = MiniFloat { m_bits: 3, bias: 7, max_code: 0x7e };
-const E5M2: MiniFloat = MiniFloat { m_bits: 2, bias: 15, max_code: 0x7b };
+const INT8: MiniFloat = MiniFloat {
+    m_bits: 7,
+    bias: 0,
+    max_code: 127,
+};
+const E4M3: MiniFloat = MiniFloat {
+    m_bits: 3,
+    bias: 7,
+    max_code: 0x7e,
+};
+const E5M2: MiniFloat = MiniFloat {
+    m_bits: 2,
+    bias: 15,
+    max_code: 0x7b,
+};
 
 impl Elem {
     /// All element types.
@@ -129,7 +142,11 @@ impl MxTensor {
     /// # Panics
     /// If `i >= self.len`.
     pub fn code(&self, i: usize) -> u8 {
-        assert!(i < self.len, "index {i} out of range for MX tensor of length {}", self.len);
+        assert!(
+            i < self.len,
+            "index {i} out of range for MX tensor of length {}",
+            self.len
+        );
         match self.elem {
             Elem::Fp4E2M1 => (self.data[i / 2] >> (4 * (i & 1))) & 0xf,
             _ => self.data[i],
@@ -164,7 +181,9 @@ fn scale_code_from_amax_bits(amax_bits: u32, elem: Elem) -> u8 {
 fn amax_bits(block: &[f32]) -> u32 {
     // Max over |x| bit patterns: integer order equals magnitude order for
     // non-negative floats, NaN patterns sort above Inf. Vectorises well.
-    block.iter().fold(0u32, |m, &v| m.max(v.to_bits() & 0x7fff_ffff))
+    block
+        .iter()
+        .fold(0u32, |m, &v| m.max(v.to_bits() & 0x7fff_ffff))
 }
 
 /// Shared E8M0 scale code that [`quantize`] chooses for one block.
@@ -310,9 +329,21 @@ pub fn dequantize(t: &MxTensor) -> Vec<f32> {
 /// # Panics
 /// If `out.len() != t.len` or the tensor's buffers are malformed.
 pub fn dequantize_into(t: &MxTensor, out: &mut [f32]) {
-    assert_eq!(out.len(), t.len, "mx::dequantize_into: output length mismatch");
-    assert_eq!(t.scales.len(), t.len.div_ceil(BLOCK), "mx: scales length does not match len");
-    assert_eq!(t.data.len(), t.elem.data_len(t.len), "mx: data length does not match len");
+    assert_eq!(
+        out.len(),
+        t.len,
+        "mx::dequantize_into: output length mismatch"
+    );
+    assert_eq!(
+        t.scales.len(),
+        t.len.div_ceil(BLOCK),
+        "mx: scales length does not match len"
+    );
+    assert_eq!(
+        t.data.len(),
+        t.elem.data_len(t.len),
+        "mx: data length does not match len"
+    );
     dequantize_raw(t.elem, &t.scales, &t.data, out);
 }
 
@@ -327,25 +358,43 @@ multiversion! {
         assert_eq!(data.len(), elem.data_len(out.len()), "mx: data length does not match len");
         macro_rules! go {
             ($e:expr) => {{
-                let blocks = out.chunks_mut(BLOCK).zip(scales.iter().zip(data.chunks($e.data_len(BLOCK))));
-                for (o, (&sc, d)) in blocks {
-                    if sc == SCALE_NAN {
-                        o.fill(f32::NAN);
-                        continue;
+                if $e == Elem::Fp4E2M1 {
+                    // Unpack a run of blocks in one long (vectorisable) loop,
+                    // then apply the scales; products are exact either way.
+                    const RUN: usize = 32 * BLOCK;
+                    let runs = out.chunks_mut(RUN).zip(scales.chunks(RUN / BLOCK).zip(data.chunks(RUN / 2)));
+                    for (o, (sc, d)) in runs {
+                        fp4::unpack_decode(d, o);
+                        for (ob, &c) in o.chunks_mut(BLOCK).zip(sc) {
+                            if c == SCALE_NAN {
+                                ob.fill(f32::NAN);
+                            } else {
+                                let s = e8m0_to_f32(c);
+                                ob.iter_mut().for_each(|v| *v *= s);
+                            }
+                        }
                     }
-                    let s = e8m0_to_f32(sc);
-                    if $e == Elem::Fp4E2M1 {
-                        let mut pairs = o.chunks_exact_mut(2);
-                        for (v, &byte) in (&mut pairs).zip(d) {
-                            v[0] = fp4::decode(byte) * s;
-                            v[1] = fp4::decode(byte >> 4) * s;
+                } else {
+                    let blocks = out.chunks_mut(BLOCK).zip(scales.iter().zip(data.chunks(BLOCK)));
+                    for (o, (&sc, d)) in blocks {
+                        if sc == SCALE_NAN {
+                            o.fill(f32::NAN);
+                            continue;
                         }
-                        if let [last] = pairs.into_remainder() {
-                            *last = fp4::decode(d[d.len() - 1]) * s;
-                        }
-                    } else {
-                        for (v, &c) in o.iter_mut().zip(d) {
-                            *v = decode_elem($e, c) * s;
+                        let s = e8m0_to_f32(sc);
+                        if $e == Elem::Int8 {
+                            // q * 2^-6 * X, both factors exact: the int->f32
+                            // conversion of |q| <= 128 is exact and the product is
+                            // representable (>= 2^-133), so this equals the LUT
+                            // path bit for bit while vectorising without gathers.
+                            let s64 = s * (1.0 / 64.0);
+                            for (v, &c) in o.iter_mut().zip(d) {
+                                *v = f32::from(c as i8) * s64;
+                            }
+                        } else {
+                            for (v, &c) in o.iter_mut().zip(d) {
+                                *v = decode_elem($e, c) * s;
+                            }
                         }
                     }
                 }

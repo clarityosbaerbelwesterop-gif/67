@@ -47,7 +47,11 @@ pub fn encode(x: f32, r: Rounding) -> u16 {
         }
         Rounding::Stochastic(bits) => {
             // Inf and NaN must not absorb the random addend.
-            let special = if abs > 0x7f80_0000 { (b >> 16) | 0x0040 } else { b >> 16 };
+            let special = if abs > 0x7f80_0000 {
+                (b >> 16) | 0x0040
+            } else {
+                b >> 16
+            };
             let sr = b.wrapping_add(bits >> 16) >> 16;
             (if abs >= 0x7f80_0000 { special } else { sr }) as u16
         }
@@ -98,7 +102,11 @@ mod tests {
     use super::*;
     use crate::engine::{round_magnitude, MiniFloat};
 
-    const BF16: MiniFloat = MiniFloat { m_bits: 7, bias: 127, max_code: MAX_FINITE as u32 };
+    const BF16: MiniFloat = MiniFloat {
+        m_bits: 7,
+        bias: 127,
+        max_code: MAX_FINITE as u32,
+    };
 
     /// Reference via the generic engine (independent code path).
     fn generic(x: f32, r: Rounding) -> u16 {
@@ -138,7 +146,7 @@ mod tests {
         assert_eq!(from_f32(f32::from_bits(0x7f7f_8000)), 0x7f80); // tie, odd -> up
         assert_eq!(to_f32(0x3f80), 1.0);
         assert_eq!(to_f32(0x0001), f32::from_bits(0x0001_0000)); // subnormal
-        // ties
+                                                                 // ties
         assert_eq!(from_f32(f32::from_bits(0x3f80_8000)), 0x3f80); // even stays
         assert_eq!(from_f32(f32::from_bits(0x3f81_8000)), 0x3f82); // odd rounds up
         assert_eq!(from_f32(f32::from_bits(0x3f80_8001)), 0x3f81);
@@ -147,8 +155,18 @@ mod tests {
 
     #[test]
     fn nan_is_quiet_and_signed() {
-        for b in [0x7f80_0001u32, 0x7fc0_0000, 0xff80_0001, 0xffff_ffff, 0x7fbf_ffff] {
-            for r in [Rounding::NearestEven, Rounding::TowardZero, Rounding::Stochastic(u32::MAX)] {
+        for b in [
+            0x7f80_0001u32,
+            0x7fc0_0000,
+            0xff80_0001,
+            0xffff_ffff,
+            0x7fbf_ffff,
+        ] {
+            for r in [
+                Rounding::NearestEven,
+                Rounding::TowardZero,
+                Rounding::Stochastic(u32::MAX),
+            ] {
                 let h = encode(f32::from_bits(b), r);
                 assert!(to_f32(h).is_nan(), "{b:#x} {r:?}");
                 assert_eq!(h & 0x0040, 0x0040, "quiet bit");
@@ -159,7 +177,11 @@ mod tests {
 
     #[test]
     fn infinities_survive_every_mode() {
-        for r in [Rounding::NearestEven, Rounding::TowardZero, Rounding::Stochastic(u32::MAX)] {
+        for r in [
+            Rounding::NearestEven,
+            Rounding::TowardZero,
+            Rounding::Stochastic(u32::MAX),
+        ] {
             assert_eq!(encode(f32::INFINITY, r), 0x7f80);
             assert_eq!(encode(f32::NEG_INFINITY, r), 0xff80);
         }
@@ -172,13 +194,25 @@ mod tests {
             s ^= s << 13;
             s ^= s >> 7;
             s ^= s << 17;
-            let b = if i < 1 << 16 { i << 16 | (s as u32 & 0xffff) } else { s as u32 };
+            let b = if i < 1 << 16 {
+                i << 16 | (s as u32 & 0xffff)
+            } else {
+                s as u32
+            };
             let x = f32::from_bits(b);
-            assert_eq!(encode(x, Rounding::NearestEven), generic(x, Rounding::NearestEven), "{b:#x}");
-            assert_eq!(encode(x, Rounding::TowardZero), generic(x, Rounding::TowardZero), "{b:#x}");
+            assert_eq!(
+                encode(x, Rounding::NearestEven),
+                generic(x, Rounding::NearestEven),
+                "{b:#x}"
+            );
+            assert_eq!(
+                encode(x, Rounding::TowardZero),
+                generic(x, Rounding::TowardZero),
+                "{b:#x}"
+            );
             // For f32 normals the generic engine uses the same 16 random bits.
             let ab = b & 0x7fff_ffff;
-            if ab >= 0x0080_0000 && ab < 0x7f80_0000 {
+            if (0x0080_0000..0x7f80_0000).contains(&ab) {
                 let rb = (s >> 32) as u32;
                 assert_eq!(
                     encode(x, Rounding::Stochastic(rb)),
@@ -211,7 +245,13 @@ mod tests {
         let mut z = x.clone();
         fake_quant_slice(&mut z, Rounding::Stochastic(9));
         for i in 0..x.len() {
-            assert_eq!(h[i], encode(x[i], Rounding::Stochastic(crate::stochastic_bits(9, i as u64))));
+            assert_eq!(
+                h[i],
+                encode(
+                    x[i],
+                    Rounding::Stochastic(crate::stochastic_bits(9, i as u64))
+                )
+            );
             assert_eq!(z[i], to_f32(h[i]));
         }
     }

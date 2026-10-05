@@ -4,7 +4,9 @@ mod common;
 
 use common::{assert_unbiased, Rng};
 use forge_formats::fp8::Kind;
-use forge_formats::{bf16, bits_per_element, fake_quant, fp16, fp4, fp8, mx, stochastic_bits, Format, Rounding};
+use forge_formats::{
+    bf16, bits_per_element, fake_quant, fp16, fp4, fp8, mx, stochastic_bits, Format, Rounding,
+};
 
 fn sample(n: usize, seed: u64) -> Vec<f32> {
     let mut rng = Rng::new(seed);
@@ -31,7 +33,11 @@ fn elem_rounding(r: Rounding, i: usize) -> Rounding {
 #[test]
 fn fake_quant_matches_per_format_codecs() {
     let x = sample(5000, 1);
-    for r in [Rounding::NearestEven, Rounding::TowardZero, Rounding::Stochastic(3)] {
+    for r in [
+        Rounding::NearestEven,
+        Rounding::TowardZero,
+        Rounding::Stochastic(3),
+    ] {
         for f in Format::ALL {
             let mut y = x.clone();
             fake_quant(&mut y, f, r);
@@ -93,7 +99,10 @@ fn fake_quant_semantics_for_specials() {
 
 #[test]
 fn fake_quant_is_idempotent_for_deterministic_rounding() {
-    let x: Vec<f32> = sample(4096, 2).into_iter().map(|v| if v.is_finite() { v } else { 0.5 }).collect();
+    let x: Vec<f32> = sample(4096, 2)
+        .into_iter()
+        .map(|v| if v.is_finite() { v } else { 0.5 })
+        .collect();
     for f in Format::ALL {
         for r in [Rounding::NearestEven, Rounding::TowardZero] {
             let mut once = x.clone();
@@ -113,7 +122,10 @@ fn fake_quant_stochastic_is_unbiased_for_every_format() {
     // MX is excluded: a constant block is its own amax, which MX saturates by
     // design (e.g. 1.7 -> 6.8 * 2^-2 -> 6 * 2^-2); tests/mx.rs covers MX with an
     // anchored amax.
-    for f in Format::ALL.into_iter().filter(|f| !matches!(f, Format::Mx(_))) {
+    for f in Format::ALL
+        .into_iter()
+        .filter(|f| !matches!(f, Format::Mx(_)))
+    {
         for x in [0.3f32, -1.7, 2.9] {
             let mut v = vec![x; 100_000];
             fake_quant(&mut v, f, Rounding::Stochastic(0xc0ffee));
@@ -133,7 +145,10 @@ fn bits_per_element_contract() {
     let x = vec![1.0f32; 32 * 64];
     for e in mx::Elem::ALL {
         let t = mx::quantize(&x, e, Rounding::NearestEven);
-        assert_eq!((t.bytes() * 8) as f32 / x.len() as f32, bits_per_element(Format::Mx(e)));
+        assert_eq!(
+            (t.bytes() * 8) as f32 / x.len() as f32,
+            bits_per_element(Format::Mx(e))
+        );
     }
     assert_eq!(Kind::E4M3, Kind::E4M3);
 }

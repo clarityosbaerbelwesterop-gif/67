@@ -45,11 +45,36 @@ pub struct RefFmt {
     pub max_code: u32,
 }
 
-pub const BF16: RefFmt = RefFmt { e_bits: 8, m_bits: 7, bias: 127, max_code: 0x7f7f };
-pub const FP16: RefFmt = RefFmt { e_bits: 5, m_bits: 10, bias: 15, max_code: 0x7bff };
-pub const E4M3: RefFmt = RefFmt { e_bits: 4, m_bits: 3, bias: 7, max_code: 0x7e };
-pub const E5M2: RefFmt = RefFmt { e_bits: 5, m_bits: 2, bias: 15, max_code: 0x7b };
-pub const E2M1: RefFmt = RefFmt { e_bits: 2, m_bits: 1, bias: 1, max_code: 0x7 };
+pub const BF16: RefFmt = RefFmt {
+    e_bits: 8,
+    m_bits: 7,
+    bias: 127,
+    max_code: 0x7f7f,
+};
+pub const FP16: RefFmt = RefFmt {
+    e_bits: 5,
+    m_bits: 10,
+    bias: 15,
+    max_code: 0x7bff,
+};
+pub const E4M3: RefFmt = RefFmt {
+    e_bits: 4,
+    m_bits: 3,
+    bias: 7,
+    max_code: 0x7e,
+};
+pub const E5M2: RefFmt = RefFmt {
+    e_bits: 5,
+    m_bits: 2,
+    bias: 15,
+    max_code: 0x7b,
+};
+pub const E2M1: RefFmt = RefFmt {
+    e_bits: 2,
+    m_bits: 1,
+    bias: 1,
+    max_code: 0x7,
+};
 
 impl RefFmt {
     /// Value of a finite magnitude code, from the definition.
@@ -108,7 +133,14 @@ impl Grid {
         assert!(a >= 0.0 && a.is_finite());
         let max = self.max_code() as usize;
         let lo = self.floor_code(a);
-        let (lo_v, hi_v) = (self.vals[lo], if lo == max { self.beyond } else { self.vals[lo + 1] });
+        let (lo_v, hi_v) = (
+            self.vals[lo],
+            if lo == max {
+                self.beyond
+            } else {
+                self.vals[lo + 1]
+            },
+        );
         if a == lo_v {
             return RefOut::Code(lo as u32);
         }
@@ -143,7 +175,11 @@ impl Grid {
     /// (hi = beyond for the last interval).
     pub fn bracket(&self, a: f64) -> (f64, f64) {
         let lo = self.floor_code(a);
-        let hi = if lo as u32 == self.max_code() { self.beyond } else { self.vals[lo + 1] };
+        let hi = if lo as u32 == self.max_code() {
+            self.beyond
+        } else {
+            self.vals[lo + 1]
+        };
         (self.vals[lo], hi)
     }
 }

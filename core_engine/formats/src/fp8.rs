@@ -8,7 +8,10 @@
 //! Decoding is a 256-entry table built at compile time from the bit-level
 //! definition; encoding uses the crate's integer rounding engine.
 
-use crate::engine::{decode_magnitude_bits, map_rounding, map_rounding_inplace, multiversion, round_magnitude_with, MiniFloat};
+use crate::engine::{
+    decode_magnitude_bits, map_rounding, map_rounding_inplace, multiversion, round_magnitude_with,
+    MiniFloat,
+};
 use crate::Rounding;
 
 /// The two OFP8 encodings.
@@ -29,8 +32,24 @@ struct Spec {
     overflow: u32,
 }
 
-const E4M3: Spec = Spec { mf: MiniFloat { m_bits: 3, bias: 7, max_code: 0x7e }, nan: 0x7f, overflow: 0x7f };
-const E5M2: Spec = Spec { mf: MiniFloat { m_bits: 2, bias: 15, max_code: 0x7b }, nan: 0x7e, overflow: 0x7c };
+const E4M3: Spec = Spec {
+    mf: MiniFloat {
+        m_bits: 3,
+        bias: 7,
+        max_code: 0x7e,
+    },
+    nan: 0x7f,
+    overflow: 0x7f,
+};
+const E5M2: Spec = Spec {
+    mf: MiniFloat {
+        m_bits: 2,
+        bias: 15,
+        max_code: 0x7b,
+    },
+    nan: 0x7e,
+    overflow: 0x7c,
+};
 
 impl Kind {
     #[inline(always)]

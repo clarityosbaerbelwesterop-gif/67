@@ -17,8 +17,14 @@ const GOLDEN: &str = include_str!("data/golden_mldtypes.txt");
 fn matches_ml_dtypes_and_numpy() {
     let r = Rounding::NearestEven;
     let mut rows = 0;
-    for line in GOLDEN.lines().filter(|l| !l.starts_with('#') && !l.is_empty()) {
-        let c: Vec<u32> = line.split_whitespace().map(|t| u32::from_str_radix(t, 16).unwrap()).collect();
+    for line in GOLDEN
+        .lines()
+        .filter(|l| !l.starts_with('#') && !l.is_empty())
+    {
+        let c: Vec<u32> = line
+            .split_whitespace()
+            .map(|t| u32::from_str_radix(t, 16).unwrap())
+            .collect();
         assert_eq!(c.len(), 8, "bad golden line {line}");
         let x = f32::from_bits(c[0]);
         assert!(!x.is_nan());
@@ -36,8 +42,16 @@ fn matches_ml_dtypes_and_numpy() {
         } else {
             assert_eq!(u32::from(e5), c[4], "e5m2 {x:e}");
         }
-        assert_eq!(u32::from(fp8::encode(Kind::E4M3, x, r, true)), c[5], "e4m3 sat {x:e}");
-        assert_eq!(u32::from(fp8::encode(Kind::E5M2, x, r, true)), c[6], "e5m2 sat {x:e}");
+        assert_eq!(
+            u32::from(fp8::encode(Kind::E4M3, x, r, true)),
+            c[5],
+            "e4m3 sat {x:e}"
+        );
+        assert_eq!(
+            u32::from(fp8::encode(Kind::E5M2, x, r, true)),
+            c[6],
+            "e5m2 sat {x:e}"
+        );
         assert_eq!(u32::from(fp4::encode(x, r)), c[7], "fp4 {x:e}");
         rows += 1;
     }

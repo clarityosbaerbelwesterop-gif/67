@@ -15,8 +15,20 @@ struct Fmt {
 }
 
 const FMTS: [Fmt; 2] = [
-    Fmt { name: "bf16", f: BF16, encode: bf16::encode, decode: bf16::to_f32, inf: 0x7f80 },
-    Fmt { name: "fp16", f: FP16, encode: fp16::encode, decode: fp16::to_f32, inf: 0x7c00 },
+    Fmt {
+        name: "bf16",
+        f: BF16,
+        encode: bf16::encode,
+        decode: bf16::to_f32,
+        inf: 0x7f80,
+    },
+    Fmt {
+        name: "fp16",
+        f: FP16,
+        encode: fp16::encode,
+        decode: fp16::to_f32,
+        inf: 0x7c00,
+    },
 ];
 
 fn reference(fm: &Fmt, g: &Grid, x: f32, r: Rounding) -> u16 {
@@ -39,7 +51,12 @@ fn check(fm: &Fmt, g: &Grid, b: u32) {
             assert_eq!(got >> 15, (b >> 31) as u16, "{} NaN sign", fm.name);
             continue;
         }
-        assert_eq!(got, reference(fm, g, x, r), "{} {r:?} x={x:e} ({b:#010x})", fm.name);
+        assert_eq!(
+            got,
+            reference(fm, g, x, r),
+            "{} {r:?} x={x:e} ({b:#010x})",
+            fm.name
+        );
     }
 }
 
@@ -53,7 +70,11 @@ fn millions_of_sampled_bit_patterns() {
             check(fm, &g, rng.next_u32());
         }
         // 2M patterns with the exponent inside / around the format's range
-        let (lo_e, hi_e) = if fm.name == "fp16" { (95u32, 145u32) } else { (0, 255) };
+        let (lo_e, hi_e) = if fm.name == "fp16" {
+            (95u32, 145u32)
+        } else {
+            (0, 255)
+        };
         for _ in 0..2_000_000 {
             let e = lo_e + rng.next_u32() % (hi_e - lo_e);
             check(fm, &g, (rng.next_u32() & 0x807f_ffff) | (e << 23));
@@ -80,7 +101,12 @@ fn every_code_roundtrips() {
                 let v = fm.f.value(mag);
                 assert_eq!(x.abs() as f64, v, "{} {c:#06x}", fm.name);
             }
-            for r in [Rounding::NearestEven, Rounding::TowardZero, Rounding::Stochastic(u32::MAX), Rounding::Stochastic(0)] {
+            for r in [
+                Rounding::NearestEven,
+                Rounding::TowardZero,
+                Rounding::Stochastic(u32::MAX),
+                Rounding::Stochastic(0),
+            ] {
                 assert_eq!((fm.encode)(x, r), c, "{} {c:#06x} {r:?}", fm.name);
             }
         }
@@ -94,7 +120,11 @@ fn ties_to_even_on_every_midpoint() {
         let max = fm.f.max_code;
         for c in 0..=max {
             let lo = g.vals[c as usize];
-            let hi = if c == max { g.beyond } else { g.vals[c as usize + 1] };
+            let hi = if c == max {
+                g.beyond
+            } else {
+                g.vals[c as usize + 1]
+            };
             let mid64 = (lo + hi) / 2.0;
             let mid = mid64 as f32;
             if mid as f64 != mid64 {
@@ -110,7 +140,11 @@ fn ties_to_even_on_every_midpoint() {
                 let up = if c == max { fm.inf } else { c as u16 + 1 };
                 assert_eq!(e(next_up(mid)), sb | up);
                 // the fast RNE entry points agree
-                let fast = if fm.name == "bf16" { bf16::from_f32(s * mid) } else { fp16::from_f32(s * mid) };
+                let fast = if fm.name == "bf16" {
+                    bf16::from_f32(s * mid)
+                } else {
+                    fp16::from_f32(s * mid)
+                };
                 assert_eq!(fast, sb | want_mid);
             }
         }
@@ -120,7 +154,11 @@ fn ties_to_even_on_every_midpoint() {
 #[test]
 fn specials() {
     for fm in &FMTS {
-        for r in [Rounding::NearestEven, Rounding::TowardZero, Rounding::Stochastic(u32::MAX)] {
+        for r in [
+            Rounding::NearestEven,
+            Rounding::TowardZero,
+            Rounding::Stochastic(u32::MAX),
+        ] {
             assert_eq!((fm.encode)(f32::INFINITY, r), fm.inf);
             assert_eq!((fm.encode)(f32::NEG_INFINITY, r), 0x8000 | fm.inf);
             assert_eq!((fm.encode)(0.0, r), 0);
@@ -131,9 +169,15 @@ fn specials() {
         assert_eq!((fm.decode)(0x8000 | fm.inf), f32::NEG_INFINITY);
         assert_eq!((fm.decode)(0x8000).to_bits(), 0x8000_0000);
         // TowardZero never overflows; NearestEven does at f32::MAX for fp16 & bf16
-        assert_eq!((fm.encode)(f32::MAX, Rounding::TowardZero), fm.f.max_code as u16);
+        assert_eq!(
+            (fm.encode)(f32::MAX, Rounding::TowardZero),
+            fm.f.max_code as u16
+        );
         assert_eq!((fm.encode)(f32::MAX, Rounding::NearestEven), fm.inf);
-        assert_eq!((fm.encode)(-f32::MAX, Rounding::NearestEven), 0x8000 | fm.inf);
+        assert_eq!(
+            (fm.encode)(-f32::MAX, Rounding::NearestEven),
+            0x8000 | fm.inf
+        );
     }
     assert_eq!(bf16::NAN, 0x7fc0);
     assert!(bf16::to_f32(bf16::NAN).is_nan());
@@ -163,9 +207,9 @@ fn stochastic_rounding_is_unbiased() {
     let mut rng = Rng::new(31337);
     for fm in &FMTS {
         let xs: Vec<f32> = if fm.name == "fp16" {
-            vec![1.000_3, -3.141_592_7, 1e-6, 6e-8, 65400.7, 0.1]
+            vec![1.000_3, -3.162_277_7, 1e-6, 6e-8, 65400.7, 0.1]
         } else {
-            vec![1.001_3, -3.141_592_7, 1e-6, 1e-39, 3.0e38, 0.1]
+            vec![1.001_3, -3.162_277_7, 1e-6, 1e-39, 3.0e38, 0.1]
         };
         for x in xs {
             let draws: Vec<f64> = (0..100_000)
