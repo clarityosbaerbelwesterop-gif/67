@@ -1,0 +1,41 @@
+name: t1-collect
+
+# Re-applies the T1 gate to the artifacts of an earlier t1-diloco run and commits results and verdict.
+# Start: write the run id into .github/run/t1-collect and push.
+
+on:
+  push:
+    paths: [".github/run/t1-collect"]
+
+permissions:
+  contents: write
+  actions: read
+
+jobs:
+  collect:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - id: run
+        run: echo "id=$(head -n1 .github/run/t1-collect | tr -cd 0-9)" >> "$GITHUB_OUTPUT"
+      - uses: actions/download-artifact@v4
+        with:
+          path: downloaded
+          pattern: t1-*
+          merge-multiple: true
+          run-id: ${{ steps.run.outputs.id }}
+          github-token: ${{ github.token }}
+      - name: Gate and commit
+        run: |
+          mkdir -p results/t1
+          cp downloaded/*.json results/t1/
+          python -m fabric.gate
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add results/t1
+          git commit -m "results(t1): DiLoCo vs DDP, from run ${{ steps.run.outputs.id }}" || exit 0
+          git pull --rebase origin "${GITHUB_REF_NAME}"
+          git push origin "HEAD:${GITHUB_REF_NAME}"
