@@ -19,7 +19,7 @@ from pathlib import Path
 
 import torch
 
-from fabric.diloco import Codec, Outer, assign, flatten
+from fabric.diloco import Codec, Outer, assign, average_payloads, flatten
 from fabric.pilot import HERE, Shard, adamw, inner_step, load_osirus, lr_at, val_bpb
 
 
@@ -69,10 +69,9 @@ def cmd_aggregate(args) -> None:
     exp, spec, corpus, cfg, RougeModel = setup(args)
     state = torch.load(args.state, weights_only=False)
     deltas = [torch.load(p, weights_only=False) for p in sorted(args.deltas.rglob("delta-*.pt"))]
-    if len(deltas) != spec["workers"]:
-        raise SystemExit(f"expected {spec['workers']} deltas, found {len(deltas)}")
+    deltas = [d for d in deltas if d["round"] == state["round"]]          # a stale delta never counts
     outer = Outer.load(state["outer"])
-    grad = sum(Codec.decode(d["payload"]) for d in deltas) / len(deltas)
+    grad, used = average_payloads([d["payload"] for d in deltas], spec["workers"], args.min_workers or spec["workers"])
     outer.step(grad)
     model = RougeModel(cfg)
     assign(list(model.parameters()), outer.theta)
@@ -80,7 +79,7 @@ def cmd_aggregate(args) -> None:
     windows = torch.stack([valid[i * (seq + 1):(i + 1) * (seq + 1)] for i in range(spec["eval_windows"])])
     bpb = round(val_bpb(model, windows), 5)
     entry = {"round": state["round"] + 1, "step": state["step"] + args.h, "val_bpb": bpb,
-             "bytes_per_worker": max(d["bytes"] for d in deltas)}
+             "bytes_per_worker": max(d["bytes"] for d in deltas), "workers_used": used}
     state.update(outer=outer.state(), round=state["round"] + 1, step=state["step"] + args.h, log=state["log"] + [entry])
     torch.save(state, args.out)
     print("SWARM_ROUND", json.dumps(entry))
@@ -102,6 +101,7 @@ def main() -> None:
     ap.add_argument("--private", type=Path, help="this worker's optimiser state from its previous round")
     ap.add_argument("--private-out", type=Path)
     ap.add_argument("--deltas", type=Path)
+    ap.add_argument("--min-workers", type=int, help="quorum for a round (default: all workers)")
     ap.add_argument("--out", required=True, type=Path)
     args = ap.parse_args()
     args.out.parent.mkdir(parents=True, exist_ok=True)

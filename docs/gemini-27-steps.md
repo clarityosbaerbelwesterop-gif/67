@@ -38,4 +38,16 @@ Source: the owner's screenshots of a Gemini conversation (2026-10-05): a 27-step
 | 21 | Cache-blocking for L1/L2/L3 | **Experiment** | Only measured kernels (T5) |
 | 22 | Ternary arithmetic "10 TF → 50–200 TOPS" | **Corrected** | See above; measured in T5 |
 | 23 | 1000-step isolation scaling | **Experiment** | H ∈ {50, 250} in T1; larger H next |
-| 24+ | Massive heterogeneous swarm (cloud, Macs, browsers, 10,000 nodes) | **Deferred** | After T1–T3 pass and with trusted nodes |
+| 24 | Massive heterogeneous swarm: idle Actions runners, cloud, Macs, browsers; "10,000 standard nodes beat 100 B300 in effective BitNet FLOPs" | **Corrected, deferred** | 10,000 CPU nodes at about 0.2 TF ≈ 2 PF. Even with bitnet.cpp's measured 6× (inference only) that is about 12 PF against 1,500 PF FP4: a factor of about 100 short. Training needs a full replica per node, which consumer nodes lack. "Idle Actions runners" of other repositories are not ours to use (GitHub terms) |
+| 25 | Lossless asynchronous checkpointing (TorchSnapshot over P2P); half the workers fail, training continues | **Adapted** | The global state lives with the aggregator and is checkpointed every round (`state.pt`). A round now survives lost workers down to a quorum (`average_payloads`, `--min-workers 3` of 4); a worker that misses a round rejoins from the next global state. Checkpoints use `torch.save`; sharded DCP as in the Osirus trainer when models grow |
+| 26 | Decentralised vector/shard database; GitHub keeps only state, data streams out of band | **Adapted** | Data shards with sha256 manifests in the private Lightning registry (built in Osirus); GitHub holds code, configs and result hashes. No vector DB is needed for training |
+| 27 | End-to-end benchmark, MFU, "verify exceeding 1.5 ExaFLOPS FP4" | **Kept as measurement, not as a promise** | The ledger (`docs/compute-atlas.md` §4) records measured MFU and B300-equivalent hours per job. The expected value with free compute is far below 1.5 EF, and the report will say so |
+
+## The four "anti-overload" rules
+
+| Rule | Decision | How |
+|---|---|---|
+| 1. Workflows at most 15 lines, no logic, only a CLI call | **Adapted** | All logic lives in `python -m fabric.*`; workflows only set up and call it. Setup steps (checkout, Python, cache) stay; a shared composite action can shorten them later. 15 lines is not a goal in itself |
+| 2. Communication out of band (P2P/WebSockets), never through GitHub logs or the API | **Kept for scale** | Pilot rounds pass deltas as Actions artifacts (fine for 4 workers and MBs). Beyond pilots, deltas go to object storage (Lightning registry), not the GitHub API. GitHub stores only results and hashes |
+| 3. Monorepo crate isolation (Rust) | **Deferred** | Python packages are isolated by module; Rust only after profiling |
+| 4. Ephemeral runners: start, compute one bounded work package, send the delta, exit | **Kept, already true** | Each `swarm work` job trains exactly H steps, uploads one delta and its private optimiser state, and ends |

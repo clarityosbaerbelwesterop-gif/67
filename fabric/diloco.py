@@ -110,3 +110,14 @@ def outer_gradient(global_vec: torch.Tensor, worker_vecs: list[torch.Tensor], co
         total += Codec.decode(payload)
         sent = max(sent, nbytes)
     return total / len(worker_vecs), sent
+
+
+def average_payloads(payloads: list[dict], expected: int, min_workers: int) -> tuple[torch.Tensor, int]:
+    """Outer gradient from the deltas that arrived. A round survives lost workers down to a quorum:
+    the global state lives with the aggregator, so a worker that drops out only costs its share of
+    this round (it rejoins from the next global state)."""
+    if len(payloads) > expected:
+        raise ValueError(f"{len(payloads)} deltas for {expected} workers")
+    if len(payloads) < min_workers:
+        raise SystemExit(f"only {len(payloads)} of {expected} deltas arrived; quorum is {min_workers}")
+    return sum(Codec.decode(p) for p in payloads) / len(payloads), len(payloads)

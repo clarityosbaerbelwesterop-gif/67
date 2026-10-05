@@ -23,6 +23,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 60
     strategy:
+      fail-fast: false
       matrix:
         worker: [0, 1, 2, 3]
     steps:
@@ -52,6 +53,7 @@ jobs:
           path: state
       - uses: actions/download-artifact@v4
         if: inputs.round > 0
+        continue-on-error: true          # a worker that missed a round restarts its optimiser
         with:
           name: swarm-private-w${{ matrix.worker }}-r${{ inputs.round }}
           path: private
@@ -74,6 +76,7 @@ jobs:
 
   aggregate:
     needs: worker
+    if: ${{ !cancelled() }}            # aggregate whatever arrived; the quorum decides
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
@@ -105,7 +108,7 @@ jobs:
         with:
           pattern: swarm-delta-w*-r${{ inputs.round }}
           path: deltas
-      - run: python -m fabric.swarm aggregate --osirus osirus --state state/state.pt --deltas deltas --h ${{ inputs.h }} --out next/state.pt
+      - run: python -m fabric.swarm aggregate --osirus osirus --state state/state.pt --deltas deltas --h ${{ inputs.h }} --min-workers 3 --out next/state.pt
       - uses: actions/upload-artifact@v4
         with:
           name: swarm-state-r${{ inputs.next_round }}

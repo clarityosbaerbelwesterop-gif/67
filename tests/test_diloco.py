@@ -4,7 +4,7 @@ import unittest
 
 import torch
 
-from fabric.diloco import Codec, Outer, assign, flatten, outer_gradient
+from fabric.diloco import Codec, Outer, assign, average_payloads, flatten, outer_gradient
 
 
 class OuterTest(unittest.TestCase):
@@ -71,6 +71,18 @@ class CodecTest(unittest.TestCase):
     def test_unknown_codec_is_refused(self):
         with self.assertRaises(ValueError):
             Codec("zip")
+
+
+class QuorumTest(unittest.TestCase):
+    def test_a_round_survives_lost_workers_down_to_the_quorum(self):
+        payloads = [Codec("fp32").encode(torch.full((3,), float(v)))[0] for v in (1, 2, 3)]
+        grad, used = average_payloads(payloads, expected=4, min_workers=3)
+        self.assertEqual(used, 3)
+        torch.testing.assert_close(grad, torch.full((3,), 2.0))
+        with self.assertRaises(SystemExit):
+            average_payloads(payloads[:2], expected=4, min_workers=3)
+        with self.assertRaises(ValueError):
+            average_payloads(payloads * 2, expected=4, min_workers=3)
 
 
 if __name__ == "__main__":
