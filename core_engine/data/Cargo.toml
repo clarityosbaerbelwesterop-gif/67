@@ -1,0 +1,11 @@
+[package]
+name = "forge-data"
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+
+[dependencies]
+fancy-regex.workspace = true
+memmap2.workspace = true
+serde.workspace = true
+serde_json.workspace = true

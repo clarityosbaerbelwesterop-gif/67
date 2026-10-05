@@ -1,0 +1,41 @@
+[workspace]
+resolver = "2"
+members = [
+  "core_engine/formats",
+  "core_engine/kernels",
+  "core_engine/hbvm",
+  "core_engine/isa",
+  "core_engine/comm",
+  "core_engine/data",
+  "core_engine/train",
+  "core_engine/cli",
+]
+
+[workspace.package]
+edition = "2021"
+version = "0.1.0"
+license = "MIT OR Apache-2.0"
+
+[workspace.dependencies]
+rayon = "1.12"
+libc = "0.2"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+fancy-regex = "0.19"
+memmap2 = "0.9"
+forge-formats = { path = "core_engine/formats" }
+forge-kernels = { path = "core_engine/kernels" }
+forge-hbvm = { path = "core_engine/hbvm" }
+forge-isa = { path = "core_engine/isa" }
+forge-comm = { path = "core_engine/comm" }
+forge-data = { path = "core_engine/data" }
+forge-train = { path = "core_engine/train" }
+
+[profile.release]
+opt-level = 3
+codegen-units = 1
+lto = "thin"
+debug = 1
+
+[profile.test]
+opt-level = 2

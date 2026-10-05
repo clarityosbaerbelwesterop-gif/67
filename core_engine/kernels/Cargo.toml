@@ -1,0 +1,10 @@
+[package]
+name = "forge-kernels"
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+
+[dependencies]
+rayon.workspace = true
+libc.workspace = true
+forge-formats.workspace = true
