@@ -39,3 +39,14 @@ Two further 10-step plans: (A) a virtual layer over a real H100/H200 cluster, an
    - Free tiers (GitHub, Kaggle, Colab) may not be resold or shared.
    - Running strangers' training code is a security project of its own.
    - Possible later as an Osirus product on paid, owned or rented GPUs.
+
+## Round 3: "software intelligence instead of emulation" (2026-10-05)
+
+Gemini now agrees that emulating 100 × B300 is physically impossible. Instead it proposes four levers that reach a similar output with less compute. This direction is right; the numbers need correcting.
+
+| Lever | Claim | What is established | Where it already lives / next step |
+|---|---|---|---|
+| Data density ("golden tokens") | 100 GB of perfect synthetic data = 15 TB of web text, 99 % saving | Data quality is a real multiplier (filtered corpora such as FineWeb-Edu; textbook-style data). The 150× figure is unproven. Breadth of knowledge needs broad data, and purely synthetic training risks narrowing | Osirus `rft-v1`: only answers checked by code are kept; teacher data from self-hosted DeepSeek-V4-Pro. Outputs of closed APIs are excluded, so Gemini's "/data_synthesis via API" is not used |
+| Test-time compute (MCTS + process reward models) | A 14–32B model searching for 10 s matches a 10× larger model | Real within limits: compute-optimal test-time scaling can beat a 14× larger model on problems the base model already solves sometimes (Snell et al. 2024, arXiv 2408.03314). It costs more compute per answer and does not help where the model has no chance | Fits Rouge 1 (27B), whose verifiers already exist. Proposal: measure majority-of-8 and verifier best-of-8 against greedy on the 300 primary held-out items in `rouge-1-rl-001` |
+| Fine-grained MoE | Hundreds of billions of parameters, under 5 % active per token | Real: DeepSeek-V3 has 671B total and 37B active (256 routed experts, 8 active plus 1 shared; arXiv 2412.19437). It saves compute per token, not memory | Native candidate D; R1.22 measured 3.3× from sparse dispatch; Darus's candidate base V4-Flash is MoE |
+| Evolutionary merging and LoRA stacking | The model grows without retraining | Merging is real (Sakana AI, arXiv 2403.13187; MergeKit). A merge does not add parameters or capacity, and adapters can interfere | Quesnir as a code/security specialist of Rouge 1, adapter or full fine-tune; the merge measured against keeping separate experts. The LoRA pipeline exists in Osirus (M58) |
