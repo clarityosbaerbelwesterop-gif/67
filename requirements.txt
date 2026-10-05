@@ -1,0 +1,3 @@
+# CPU runs on GitHub-hosted runners; install torch from the CPU index first:
+#   pip install --index-url https://download.pytorch.org/whl/cpu torch==2.14.0
+torch==2.14.0

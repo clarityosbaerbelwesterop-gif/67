@@ -1,0 +1,89 @@
+name: t1-diloco
+
+# Pre-registered test T1/T2 (experiments/t1-diloco.json): DiLoCo vs synchronous data parallelism
+# at equal tokens, 5 arms x 3 seeds, one job each on free CPU runners. The last job applies the
+# gate (fabric/gate.py) to all 15 results and commits them with the verdict.
+
+on:
+  workflow_dispatch:
+    inputs:
+      smoke_steps:
+        description: "Smoke run: steps per arm (empty = the pre-registered run)"
+        default: ""
+
+permissions:
+  contents: read
+
+env:
+  OSIRUS_REF: ccd0af3515c11359930081de2b8027371acde5a9   # native model + enwik8 loader
+
+jobs:
+  arm:
+    runs-on: ubuntu-latest
+    timeout-minutes: 300
+    strategy:
+      fail-fast: false
+      matrix:
+        arm: [ddp, diloco-h50-fp32, diloco-h250-fp32, diloco-h250-int8, diloco-h250-topk1]
+        seed: [0, 1, 2]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/checkout@v4
+        with:
+          repository: clarityosbaerbelwesterop-gif/Osirus
+          ref: ${{ env.OSIRUS_REF }}
+          path: osirus
+          persist-credentials: false
+          sparse-checkout: |
+            training/rouge/native
+            research/rouge-architecture/benchmarks
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - uses: actions/cache@v4
+        with:
+          path: ~/.cache/rouge-data
+          key: enwik8-v1
+      - run: python -m pip install -q --index-url https://download.pytorch.org/whl/cpu torch==2.14.0
+      - name: Run the arm
+        env:
+          SMOKE: ${{ inputs.smoke_steps }}
+        run: |
+          python -m fabric.pilot --osirus osirus --arm "${{ matrix.arm }}" --seed ${{ matrix.seed }} \
+            ${SMOKE:+--steps "$SMOKE"} --out "results/t1/${{ matrix.arm }}-s${{ matrix.seed }}.json"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: t1-${{ matrix.arm }}-s${{ matrix.seed }}
+          path: results/t1/*.json
+
+  verdict:
+    needs: arm
+    if: always()
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - uses: actions/download-artifact@v4
+        with:
+          path: downloaded
+          pattern: t1-*
+          merge-multiple: true
+      - name: Gate and commit
+        env:
+          SMOKE: ${{ inputs.smoke_steps }}
+        run: |
+          mkdir -p results/t1
+          cp downloaded/*.json results/t1/ 2>/dev/null || true
+          python -m fabric.gate | tee "$RUNNER_TEMP/verdict.txt"
+          if [ -n "$SMOKE" ]; then echo "smoke run: nothing committed"; exit 0; fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add results/t1
+          git commit -m "results(t1): DiLoCo vs DDP, run ${{ github.run_id }}" || exit 0
+          git push origin "HEAD:${GITHUB_REF_NAME}"

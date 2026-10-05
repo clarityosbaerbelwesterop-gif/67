@@ -1,0 +1,113 @@
+name: swarm-round
+
+# One DiLoCo round across real machines: 4 workers on 4 runners, then one aggregator.
+# Called by swarm.yml; only the files in artifacts travel between machines.
+
+on:
+  workflow_call:
+    inputs:
+      round: {type: number, required: true}
+      h: {type: number, required: true}
+      next_round: {type: number, required: true}
+      rounds: {type: number, required: true}
+      codec: {type: string, required: true}
+
+permissions:
+  contents: read
+
+env:
+  OSIRUS_REF: ccd0af3515c11359930081de2b8027371acde5a9
+
+jobs:
+  worker:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    strategy:
+      matrix:
+        worker: [0, 1, 2, 3]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/checkout@v4
+        with:
+          repository: clarityosbaerbelwesterop-gif/Osirus
+          ref: ${{ env.OSIRUS_REF }}
+          path: osirus
+          persist-credentials: false
+          sparse-checkout: |
+            training/rouge/native
+            research/rouge-architecture/benchmarks
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - uses: actions/cache@v4
+        with:
+          path: ~/.cache/rouge-data
+          key: enwik8-v1
+      - run: python -m pip install -q --index-url https://download.pytorch.org/whl/cpu torch==2.14.0
+      - uses: actions/download-artifact@v4
+        with:
+          name: swarm-state-r${{ inputs.round }}
+          path: state
+      - uses: actions/download-artifact@v4
+        if: inputs.round > 0
+        with:
+          name: swarm-private-w${{ matrix.worker }}-r${{ inputs.round }}
+          path: private
+      - name: Train H steps on this worker's shard and send the delta
+        run: |
+          python -m fabric.swarm work --osirus osirus --state state/state.pt --worker ${{ matrix.worker }} \
+            --h ${{ inputs.h }} --rounds ${{ inputs.rounds }} --codec "${{ inputs.codec }}" \
+            --private private/private.pt --private-out out/private.pt --out out/delta-${{ matrix.worker }}.pt
+          echo "runner: $(hostname) $(nproc) CPUs"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: swarm-delta-w${{ matrix.worker }}-r${{ inputs.round }}
+          path: out/delta-${{ matrix.worker }}.pt
+          retention-days: 3
+      - uses: actions/upload-artifact@v4
+        with:
+          name: swarm-private-w${{ matrix.worker }}-r${{ inputs.next_round }}
+          path: out/private.pt
+          retention-days: 3
+
+  aggregate:
+    needs: worker
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/checkout@v4
+        with:
+          repository: clarityosbaerbelwesterop-gif/Osirus
+          ref: ${{ env.OSIRUS_REF }}
+          path: osirus
+          persist-credentials: false
+          sparse-checkout: |
+            training/rouge/native
+            research/rouge-architecture/benchmarks
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - uses: actions/cache@v4
+        with:
+          path: ~/.cache/rouge-data
+          key: enwik8-v1
+      - run: python -m pip install -q --index-url https://download.pytorch.org/whl/cpu torch==2.14.0
+      - uses: actions/download-artifact@v4
+        with:
+          name: swarm-state-r${{ inputs.round }}
+          path: state
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: swarm-delta-w*-r${{ inputs.round }}
+          path: deltas
+      - run: python -m fabric.swarm aggregate --osirus osirus --state state/state.pt --deltas deltas --h ${{ inputs.h }} --out next/state.pt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: swarm-state-r${{ inputs.next_round }}
+          path: next/state.pt
+          retention-days: 3

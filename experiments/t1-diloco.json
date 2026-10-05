@@ -1,0 +1,34 @@
+{
+  "id": "t1-diloco",
+  "status": "pre-registered",
+  "registered": "2026-10-05",
+  "question": "At equal training tokens, does DiLoCo (K=4 workers, synchronised every H steps) reach the validation loss of synchronous data parallelism while each worker sends at least 100x fewer bytes? And how much do int8 and top-k compression of the outer delta cost (T2)?",
+  "method": "fabric/pilot.py: Osirus native Rouge model (byte-level), enwik8 (90/5/5 split, sha256 recorded), K disjoint training shards, AdamW inner optimiser with the same schedule in every arm, outer SGD with Nesterov momentum (lr 0.7, momentum 0.9) as in DiLoCo (arXiv 2311.08105). The ddp arm uses batch K*B and all-reduces an fp32 gradient every step.",
+  "spec": {
+    "model": {"name": "fabric-pilot", "vocab_size": 256, "d_model": 256, "n_layers": 4, "n_heads": 4, "n_kv_heads": 4, "max_seq": 256},
+    "workers": 4,
+    "batch": 8,
+    "seq": 256,
+    "steps": 2000,
+    "lr": 0.002,
+    "warmup": 100,
+    "weight_decay": 0.1,
+    "clip": 1.0,
+    "eval_every": 250,
+    "eval_windows": 256
+  },
+  "arms": [
+    {"name": "ddp", "kind": "ddp"},
+    {"name": "diloco-h50-fp32", "kind": "diloco", "h": 50, "codec": "fp32"},
+    {"name": "diloco-h250-fp32", "kind": "diloco", "h": 250, "codec": "fp32"},
+    {"name": "diloco-h250-int8", "kind": "diloco", "h": 250, "codec": "int8"},
+    {"name": "diloco-h250-topk1", "kind": "diloco", "h": 250, "codec": "topk:0.01"}
+  ],
+  "seeds": [0, 1, 2],
+  "gate": {
+    "primary": "T1 PASS if mean final_val_bpb(diloco-h250-fp32) <= mean final_val_bpb(ddp) * 1.03 over the 3 seeds AND bytes_sent_per_worker(ddp) / bytes_sent_per_worker(diloco-h250-fp32) >= 100. FAIL otherwise.",
+    "secondary": "T2 (descriptive): bpb cost of int8 and top-k 1% against diloco-h250-fp32, with bytes. int8 counts as lossless if its mean is within 1% of fp32.",
+    "evaluator": "fabric/gate.py reads only the committed result files; arms never grade themselves."
+  },
+  "limits": "Small model on CPU; one learning rate for all arms (the ddp arm's 4x batch might prefer a higher one). A PASS says the mechanism works at this scale, not that it holds at 27B."
+}

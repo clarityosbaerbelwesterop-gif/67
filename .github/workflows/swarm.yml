@@ -1,0 +1,95 @@
+name: swarm
+
+# DiLoCo across real machines (proof of mechanism): 3 rounds x 4 workers, each worker its own
+# runner, only parameter deltas travel (as artifacts). The log of every round (validation BPB and
+# bytes per worker) is printed by the aggregator ("SWARM_ROUND") and summarised at the end.
+
+on:
+  workflow_dispatch:
+    inputs:
+      h:
+        description: "Inner steps per round"
+        default: "100"
+      codec:
+        description: "fp32 | fp16 | int8 | topk:<fraction>"
+        default: "int8"
+
+permissions:
+  contents: read
+
+env:
+  OSIRUS_REF: ccd0af3515c11359930081de2b8027371acde5a9
+
+jobs:
+  init:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/checkout@v4
+        with:
+          repository: clarityosbaerbelwesterop-gif/Osirus
+          ref: ${{ env.OSIRUS_REF }}
+          path: osirus
+          persist-credentials: false
+          sparse-checkout: |
+            training/rouge/native
+            research/rouge-architecture/benchmarks
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - uses: actions/cache@v4
+        with:
+          path: ~/.cache/rouge-data
+          key: enwik8-v1
+      - run: python -m pip install -q --index-url https://download.pytorch.org/whl/cpu torch==2.14.0
+      - run: python -m fabric.swarm init --osirus osirus --out state/state.pt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: swarm-state-r0
+          path: state/state.pt
+          retention-days: 3
+
+  round0:
+    needs: init
+    uses: ./.github/workflows/swarm-round.yml
+    with:
+      round: 0
+      next_round: 1
+      rounds: 3
+      h: ${{ fromJSON(inputs.h) }}
+      codec: ${{ inputs.codec }}
+  round1:
+    needs: round0
+    uses: ./.github/workflows/swarm-round.yml
+    with:
+      round: 1
+      next_round: 2
+      rounds: 3
+      h: ${{ fromJSON(inputs.h) }}
+      codec: ${{ inputs.codec }}
+  round2:
+    needs: round1
+    uses: ./.github/workflows/swarm-round.yml
+    with:
+      round: 2
+      next_round: 3
+      rounds: 3
+      h: ${{ fromJSON(inputs.h) }}
+      codec: ${{ inputs.codec }}
+
+  summary:
+    needs: round2
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: swarm-state-r3
+          path: final
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: python -m pip install -q --index-url https://download.pytorch.org/whl/cpu torch==2.14.0
+      - run: python -c "import torch, json; s = torch.load('final/state.pt', weights_only=False); print('SWARM_LOG', json.dumps(s['log']))"
