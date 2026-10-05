@@ -222,20 +222,39 @@ fn eval_cmd(a: &Args) -> Result<(), String> {
 
 fn generate_cmd(a: &Args) -> Result<(), String> {
     let (cfg, w, _) = ckpt_model(&a.need("--ckpt")?)?;
-    let ids: Vec<u32> = a
-        .need("--prompt-ids")?
-        .split(',')
-        .map(|s| s.trim().parse().map_err(|_| format!("bad id {s}")))
-        .collect::<Result<_, _>>()?;
+    let parse = |s: &str| -> Result<Vec<u32>, String> {
+        s.split(',')
+            .map(|x| x.trim().parse().map_err(|_| format!("bad id {x}")))
+            .collect()
+    };
     let mut s = forge_train::Sampler::new(&cfg, &w, a.num("--ctx", cfg.max_seq_len)?, threads(a)?)?;
-    let out = s.generate(
-        &ids,
+    let (max_new, temp, top_k, seed) = (
         a.num("--max-new", 32)?,
         a.num("--temperature", 0.0)?,
         a.num("--top-k", 40)?,
         a.num("--seed", 0)?,
-        None,
-    )?;
+    );
+    let stop: Option<u32> = a
+        .get("--stop-id")
+        .map(|v| v.parse().map_err(|_| "bad --stop-id".to_string()))
+        .transpose()?;
+    // Batch mode: one JSON array of prompt ids per line; weights are loaded once.
+    if let Some(file) = a.get("--prompts-file") {
+        let text = std::fs::read_to_string(&file).map_err(|e| format!("{file}: {e}"))?;
+        for (i, line) in text.lines().filter(|l| !l.trim().is_empty()).enumerate() {
+            let ids: Vec<u32> =
+                serde_json::from_str(line).map_err(|e| format!("{file}:{}: {e}", i + 1))?;
+            let t0 = Instant::now();
+            let out = s.generate(&ids, max_new, temp, top_k, seed + i as u64, stop)?;
+            println!(
+                "{}",
+                json!({"type": "generate", "index": i, "ids": out, "seconds": t0.elapsed().as_secs_f64()})
+            );
+        }
+        return Ok(());
+    }
+    let ids = parse(&a.need("--prompt-ids")?)?;
+    let out = s.generate(&ids, max_new, temp, top_k, seed, stop)?;
     println!(
         "{}",
         json!({"type": "generate", "prompt_ids": ids, "ids": out})
