@@ -5,6 +5,9 @@ name: t1-diloco
 # gate (fabric/gate.py) to all 15 results and commits them with the verdict.
 
 on:
+  # a push that changes .github/run/t1-diloco starts the pre-registered run on any branch
+  push:
+    paths: [".github/run/t1-diloco"]
   workflow_dispatch:
     inputs:
       smoke_steps:

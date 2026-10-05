@@ -5,6 +5,8 @@ name: swarm
 # bytes per worker) is printed by the aggregator ("SWARM_ROUND") and summarised at the end.
 
 on:
+  push:
+    paths: [".github/run/swarm"]
   workflow_dispatch:
     inputs:
       h:
@@ -59,8 +61,8 @@ jobs:
       round: 0
       next_round: 1
       rounds: 3
-      h: ${{ fromJSON(inputs.h) }}
-      codec: ${{ inputs.codec }}
+      h: ${{ fromJSON(inputs.h || '100') }}
+      codec: ${{ inputs.codec || 'int8' }}
   round1:
     needs: round0
     uses: ./.github/workflows/swarm-round.yml
@@ -68,8 +70,8 @@ jobs:
       round: 1
       next_round: 2
       rounds: 3
-      h: ${{ fromJSON(inputs.h) }}
-      codec: ${{ inputs.codec }}
+      h: ${{ fromJSON(inputs.h || '100') }}
+      codec: ${{ inputs.codec || 'int8' }}
   round2:
     needs: round1
     uses: ./.github/workflows/swarm-round.yml
@@ -77,8 +79,8 @@ jobs:
       round: 2
       next_round: 3
       rounds: 3
-      h: ${{ fromJSON(inputs.h) }}
-      codec: ${{ inputs.codec }}
+      h: ${{ fromJSON(inputs.h || '100') }}
+      codec: ${{ inputs.codec || 'int8' }}
 
   summary:
     needs: round2
