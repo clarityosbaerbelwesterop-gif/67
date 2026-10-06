@@ -178,6 +178,12 @@ unsafe fn micro<const M: usize>(
     beta: f32,
     nr: usize,
 ) {
+    // Pull the C tile towards L1 while the FMA loop runs.
+    for i in 0..M {
+        let row = c.wrapping_add(i * ldc).cast::<i8>().cast_const();
+        _mm_prefetch::<_MM_HINT_T0>(row);
+        _mm_prefetch::<_MM_HINT_T0>(row.wrapping_add(nr * 4 - 1));
+    }
     let mut c0 = [_mm256_setzero_ps(); M];
     let mut c1 = [_mm256_setzero_ps(); M];
     let (mut pa, mut pb) = (a, b);
