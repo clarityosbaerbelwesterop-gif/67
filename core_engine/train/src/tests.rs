@@ -130,6 +130,7 @@ fn cfg(run: &str, out: &str, steps: usize) -> TrainConfig {
         grad_clip: 1.0,
         seed: 3,
         init_from: None,
+        resume_from: None,
         out_dir: out.into(),
         log_every: 10,
         eval_every: 0,
@@ -305,6 +306,42 @@ fn diloco_workers_stay_in_sync_and_learn() {
             *bytes,
             12 * 4 * g0.len() as u64,
             "one exchange per round of 10 steps"
+        );
+    }
+    std::fs::remove_dir_all(out).ok();
+}
+
+#[test]
+fn resume_continues_exactly_where_the_run_stopped() {
+    let out = std::env::temp_dir().join(format!("forge-resume-{}", std::process::id()));
+    let o = out.to_str().unwrap();
+    // Reference: 12 uninterrupted steps.
+    let (s1, _) = collect();
+    let mut a = Trainer::new(cfg("ref", o, 12), s1).unwrap();
+    for _ in 0..12 {
+        a.train_step().unwrap();
+    }
+    // Interrupted: 7 steps, checkpoint, new process state, resume, 5 more.
+    let (s2, _) = collect();
+    let mut b = Trainer::new(cfg("cut", o, 12), s2).unwrap();
+    for _ in 0..7 {
+        b.train_step().unwrap();
+    }
+    let dir = b.checkpoint().unwrap();
+    let (s3, _) = collect();
+    let mut rc = cfg("cut", o, 12);
+    rc.resume_from = Some(dir.to_str().unwrap().into());
+    let mut c = Trainer::new(rc, s3).unwrap();
+    assert_eq!(c.step, 7);
+    for _ in 0..5 {
+        c.train_step().unwrap();
+    }
+    for p in model::params(&a.cfg.model) {
+        assert_eq!(
+            a.param(&p.name).unwrap(),
+            c.param(&p.name).unwrap(),
+            "{} differs after resume",
+            p.name
         );
     }
     std::fs::remove_dir_all(out).ok();

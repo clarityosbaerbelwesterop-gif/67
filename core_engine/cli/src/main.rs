@@ -311,7 +311,10 @@ fn main() {
     let a = Args(rest);
     let result = match cmd.as_str() {
         "bench" => bench(&a),
-        "train" => a.need("--config").and_then(|p| load_config(&p)).and_then(|cfg| {
+        "train" => a.need("--config").and_then(|p| load_config(&p)).and_then(|mut cfg| {
+            if let Some(dir) = a.get("--resume") {
+                cfg.resume_from = Some(dir);
+            }
             let mut tr = trainer::Trainer::new(cfg, trainer::stdout_sink())?;
             tr.run(Some(trainer::stdin_control())).map(|_| ())
         }),

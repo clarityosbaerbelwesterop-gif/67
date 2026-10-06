@@ -132,6 +132,9 @@ impl Trainer {
             last_val: None,
         };
         tr.init_params()?;
+        if let Some(dir) = tr.cfg.resume_from.clone() {
+            tr.resume(&dir)?;
+        }
         let report = json!({
             "type": "event", "level": "info", "step": 0, "ts": now(),
             "msg": format!(
@@ -203,6 +206,50 @@ impl Trainer {
                 buf.iter_mut().for_each(|x| *x = rng.normal() * std);
             }
         }
+        Ok(())
+    }
+
+    /// Restore weights, optimiser moments, step, RNG and lineage from a checkpoint of this run.
+    fn resume(&mut self, dir: &str) -> Result<(), String> {
+        let d = Path::new(dir);
+        let state: Value = serde_json::from_str(
+            &std::fs::read_to_string(d.join("state.json")).map_err(|e| format!("{dir}: {e}"))?,
+        )
+        .map_err(|e| e.to_string())?;
+        let saved: TrainConfig =
+            serde_json::from_value(state["config"].clone()).map_err(|e| e.to_string())?;
+        if saved.model != self.cfg.model {
+            return Err(format!("{dir}: model config differs from this run"));
+        }
+        let (weights, _) =
+            ckpt::load_safetensors(&d.join("model.safetensors")).map_err(|e| e.to_string())?;
+        let (opt, _) =
+            ckpt::load_safetensors(&d.join("optim.safetensors")).map_err(|e| e.to_string())?;
+        for p in model::params(&self.cfg.model) {
+            let pairs = [
+                (p.name.clone(), weights.get(&p.name)),
+                (model::adam_m(&p.name), opt.get(&p.name)),
+                (model::adam_v(&p.name), opt.get(&format!("v.{}", p.name))),
+            ];
+            for (buf, t) in pairs {
+                let t = t.ok_or(format!("{dir}: missing tensor for {buf}"))?;
+                self.machine
+                    .persistent_mut(&buf)
+                    .ok_or("not bound")?
+                    .copy_from_slice(&t.data);
+            }
+        }
+        self.step = state["step"].as_u64().unwrap_or(0) as usize;
+        self.tokens_seen = state["tokens"].as_u64().unwrap_or(0);
+        let rs: Vec<u64> =
+            serde_json::from_value(state["rng_state"].clone()).map_err(|e| e.to_string())?;
+        self.rng = Rng::from_state([rs[0], rs[1], rs[2], rs[3]]);
+        self.parent_sha = state["parent_sha256"].as_str().map(str::to_string);
+        (self.sink)(event(
+            "info",
+            format!("resumed from {dir} at step {}", self.step),
+            self.step,
+        ));
         Ok(())
     }
 

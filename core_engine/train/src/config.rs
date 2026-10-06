@@ -99,6 +99,10 @@ pub struct TrainConfig {
     /// Continue from this checkpoint directory (children of a shared base).
     #[serde(default)]
     pub init_from: Option<String>,
+    /// Resume an interrupted run from its own checkpoint: weights, AdamW
+    /// moments, step, data RNG and lineage are restored.
+    #[serde(default)]
+    pub resume_from: Option<String>,
     pub out_dir: String,
     #[serde(default = "ten")]
     pub log_every: usize,
