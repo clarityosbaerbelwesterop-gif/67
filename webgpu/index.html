@@ -70,6 +70,9 @@ import { ForgeModel, Tokenizer, openDevice, parseSafetensors } from "./forge-web
 const $ = (id) => document.getElementById(id);
 const say = (text, cls = "") => { $("msg").textContent = text; $("msg").className = `msg ${cls}`; };
 let model = null, tokenizer = null, gpu = null;
+// The headcenter links here with #base=<checkpoint URL> to prefill the source.
+const linked = new URLSearchParams(location.hash.slice(1)).get("base");
+if (linked) $("url").value = linked;
 
 async function getDevice() {
   if (!gpu) {

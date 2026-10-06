@@ -38,7 +38,7 @@ iPad (Safari) ── WebSocket/HTTPS ──► headcenter/  FastAPI + agents
 | `core_engine/data` | SCP tokenizer (BPE v2) and token-store reader |
 | `core_engine/train` | SCP-1 transformer as ISA programs, AdamW, checkpoints, TIES merge, sampler |
 | `core_engine/cli` | `forge` binary |
-| `headcenter/` | iPad mission control: FastAPI, WebSocket telemetry, Silicon Watchdog, JIT agent, orchestrator |
+| `headcenter/` | iPad mission control: FastAPI, WebSocket telemetry, Silicon Watchdog and JIT agents, live control, WebGPU model hand-off |
 | `data/` | corpus build on top of the SCP pipelines (licensed sources, provenance manifests) |
 | `training/configs/` | run configs for `base-s`, `rouge-1`, `quasnir-1` and the `darus-1` merge |
 | `docs/DESIGN.md` | binding interface contract |
@@ -51,13 +51,19 @@ iPad (Safari) ── WebSocket/HTTPS ──► headcenter/  FastAPI + agents
 2. **Launch bus and memory:** the HBVM pool is sized from the compiled
    programs (`forge disasm --config …` prints the plan: fused instructions,
    transient peak versus naive).
-3. **Spin up the headcenter:** `headcenter/README.md`. Open it on the iPad and
-   enter the backend URL and token.
-4. **Execute the training graph:** start a run from the iPad or with
-   `forge train --config training/configs/<run>.json`. The full pipeline is
-   `scripts/train_all.sh`, which runs base θ0 → Rouge 1 and Quasnir (both
-   continued from θ0) → Darus = TIES(θ0; Rouge 1, Quasnir), then evaluates all
-   of them.
+3. **Spin up the headcenter:** `python -m headcenter.backend --host 0.0.0.0 --new-token`
+   (see `headcenter/README.md`) and open the printed URL on the iPad.
+4. **Execute the training graph:** `scripts/train_all.sh` runs base θ0 →
+   Rouge 1 and Quasnir (both continued from θ0) → Darus = TIES(θ0; Rouge 1,
+   Quasnir), then evaluates all of them. Every run resumes from its newest
+   checkpoint after an interruption and takes live commands from the iPad
+   (pause, LR, threads, kernel swap, autotune, checkpoint) through
+   `runs/<run>.ctl`.
+
+Run sizes follow the measured budget, not wishes: on the 4-core AVX-512 host
+used here one training step of 8,192 tokens at 12.6M parameters takes ~4.7 s
+(~1,700 tok/s, 0.14 TFLOPS sustained), so `base-s` is the compute-optimal size
+(Chinchilla) for roughly four hours of this machine.
 
 ## The three models
 
@@ -80,5 +86,9 @@ safetensors under SCP's PyTorch parameter names, so checkpoints load into
   - SHA-256 against the FIPS vectors;
   - bytecode round trips for all opcodes;
   - convergence on a synthetic stream, with greedy sampling reproducing it.
+- `python -m pytest headcenter/tests` covers the headcenter: incremental
+  ingestion, command validation, the FIFO control channel, both agents in
+  every mode (including that replayed history never triggers an action),
+  token auth, the WebSocket protocol and checkpoint serving confined to `runs/`.
 - `runs/report.json` holds measured losses, perplexities and accuracies of
   every model. No number in this repository is a projection.

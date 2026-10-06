@@ -1,0 +1,530 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<title>forge headcenter</title>
+<style>
+:root {
+  --bg: #f4f5f7; --card: #ffffff; --ink: #14171c; --muted: #5d6673; --line: #dfe3e8;
+  --accent: #2463eb; --ok: #128a4a; --warn: #b26a00; --crit: #c62828; --val: #8a3ffc;
+  --chip: #eef1f5; --shadow: 0 1px 2px rgba(0,0,0,.06);
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #0d1014; --card: #161a20; --ink: #e8ecf1; --muted: #8f99a6; --line: #262c35;
+    --accent: #5b8cff; --ok: #3ccf7e; --warn: #f0a63a; --crit: #ff6b6b; --val: #b58cff;
+    --chip: #1f252d; --shadow: none;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #0d1014; --card: #161a20; --ink: #e8ecf1; --muted: #8f99a6; --line: #262c35;
+  --accent: #5b8cff; --ok: #3ccf7e; --warn: #f0a63a; --crit: #ff6b6b; --val: #b58cff;
+  --chip: #1f252d; --shadow: none;
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; background: var(--bg); color: var(--ink);
+  font: 15px/1.4 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  -webkit-text-size-adjust: 100%; }
+header { position: sticky; top: 0; z-index: 5; background: var(--bg);
+  padding: max(10px, env(safe-area-inset-top)) 16px 10px; border-bottom: 1px solid var(--line);
+  display: flex; flex-wrap: wrap; gap: 10px; align-items: center; }
+h1 { font-size: 17px; margin: 0 8px 0 0; letter-spacing: .2px; }
+.dot { width: 10px; height: 10px; border-radius: 50%; background: var(--crit); display: inline-block; }
+.dot.on { background: var(--ok); }
+.chips { display: flex; gap: 6px; flex-wrap: wrap; flex: 1; }
+.chip { border: 1px solid var(--line); background: var(--chip); color: var(--ink);
+  border-radius: 999px; padding: 8px 14px; min-height: 40px; font-size: 14px; cursor: pointer; }
+.chip.sel { background: var(--accent); border-color: var(--accent); color: #fff; }
+.chip .st { font-size: 11px; opacity: .8; margin-left: 6px; }
+main { padding: 12px 16px 40px; display: grid; gap: 12px; grid-template-columns: 1fr; max-width: 1400px; margin: 0 auto; }
+@media (min-width: 900px) { main { grid-template-columns: 1fr 1fr; } .wide { grid-column: 1 / -1; } }
+.card { background: var(--card); border: 1px solid var(--line); border-radius: 14px; padding: 14px; box-shadow: var(--shadow); min-width: 0; }
+.card h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .6px; color: var(--muted); margin: 0 0 10px; font-weight: 600;
+  display: flex; justify-content: space-between; align-items: center; gap: 8px; }
+.kpis { display: grid; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); gap: 10px; }
+.kpi .v { font-size: 22px; font-weight: 650; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+.kpi .l { font-size: 12px; color: var(--muted); }
+.bar { height: 8px; background: var(--chip); border-radius: 4px; overflow: hidden; margin-top: 6px; }
+.bar > i { display: block; height: 100%; background: var(--accent); width: 0; }
+canvas { width: 100%; display: block; touch-action: none; }
+#loss { height: 300px; }
+#tput { height: 110px; }
+.hint { font-size: 12px; color: var(--muted); font-weight: 400; text-transform: none; letter-spacing: 0; }
+.ops .row { display: grid; grid-template-columns: 130px 1fr 110px; gap: 8px; align-items: center; font-size: 13px; padding: 3px 0; }
+.ops .row .bar { margin: 0; height: 10px; }
+.ops .row span:last-child { text-align: right; color: var(--muted); font-variant-numeric: tabular-nums; }
+.controls { display: grid; gap: 12px; }
+.btns { display: flex; flex-wrap: wrap; gap: 8px; }
+button.b { min-height: 44px; padding: 0 16px; border-radius: 10px; border: 1px solid var(--line); background: var(--chip);
+  color: var(--ink); font-size: 15px; cursor: pointer; touch-action: manipulation; }
+button.b.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+button.b.danger { position: relative; overflow: hidden; border-color: var(--crit); color: var(--crit); }
+button.b.danger > i { position: absolute; left: 0; top: 0; bottom: 0; width: 0; background: var(--crit); opacity: .25; }
+button.b:disabled { opacity: .45; }
+a.b { display: inline-flex; align-items: center; min-height: 36px; padding: 0 12px; margin-left: 10px; border-radius: 10px;
+  border: 1px solid var(--accent); color: var(--accent); text-decoration: none; text-transform: none; letter-spacing: 0; font-size: 13px; }
+.field { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.field label { min-width: 70px; color: var(--muted); font-size: 13px; }
+input[type=range] { flex: 1; min-width: 140px; height: 44px; }
+select, input[type=text], input[type=password] { min-height: 44px; border-radius: 10px; border: 1px solid var(--line);
+  background: var(--card); color: var(--ink); padding: 0 10px; font-size: 15px; }
+.mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-variant-numeric: tabular-nums; }
+.seg { display: inline-flex; border: 1px solid var(--line); border-radius: 10px; overflow: hidden; }
+.seg button { min-height: 40px; padding: 0 12px; border: 0; background: var(--chip); color: var(--ink); font-size: 13px; cursor: pointer; }
+.seg button.sel { background: var(--accent); color: #fff; }
+.agent { display: flex; justify-content: space-between; align-items: center; gap: 10px; padding: 6px 0; flex-wrap: wrap; }
+.feed { max-height: 340px; overflow: auto; -webkit-overflow-scrolling: touch; display: grid; gap: 6px; }
+.item { border-left: 3px solid var(--line); padding: 6px 10px; background: var(--chip); border-radius: 6px; font-size: 13px; overflow-wrap: anywhere; }
+.item.info { border-color: var(--accent); } .item.warn { border-color: var(--warn); } .item.critical, .item.error { border-color: var(--crit); }
+.item .meta { color: var(--muted); font-size: 11px; display: flex; gap: 8px; flex-wrap: wrap; }
+.tag { border-radius: 4px; padding: 0 5px; font-size: 11px; background: var(--card); border: 1px solid var(--line); }
+.tag.done { color: var(--ok); border-color: var(--ok); } .tag.err { color: var(--crit); border-color: var(--crit); }
+#toast { position: fixed; left: 50%; bottom: max(16px, env(safe-area-inset-bottom)); transform: translateX(-50%);
+  background: var(--ink); color: var(--bg); padding: 10px 16px; border-radius: 10px; font-size: 14px; opacity: 0;
+  transition: opacity .2s; pointer-events: none; max-width: calc(100% - 32px); z-index: 10; }
+#toast.on { opacity: .95; }
+#auth { position: fixed; inset: 0; background: rgba(0,0,0,.5); display: none; align-items: center; justify-content: center; z-index: 20; padding: 16px; }
+#auth .card { max-width: 420px; width: 100%; display: grid; gap: 10px; }
+.legend { display: flex; gap: 12px; font-size: 12px; color: var(--muted); }
+.legend i { display: inline-block; width: 10px; height: 3px; margin-right: 4px; vertical-align: middle; }
+.empty { color: var(--muted); font-size: 13px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>forge headcenter</h1>
+  <span class="dot" id="conn" title="connection"></span>
+  <div class="chips" id="runs"></div>
+</header>
+<main>
+  <section class="card wide">
+    <h2><span id="runTitle">no run</span><span class="hint"><span id="updated"></span>
+      <a class="b" id="tryGpu" target="_blank" rel="noopener" style="display:none">Run on this iPad (WebGPU)</a></span></h2>
+    <div class="kpis" id="kpis"></div>
+  </section>
+
+  <section class="card wide">
+    <h2>Loss <span class="legend"><span><i style="background:var(--accent)"></i>train</span><span><i style="background:var(--val)"></i>validation</span><span class="hint">pinch / drag to zoom, double-tap resets</span></span></h2>
+    <canvas id="loss"></canvas>
+  </section>
+
+  <section class="card">
+    <h2>Throughput <span class="hint" id="tputNow"></span></h2>
+    <canvas id="tput"></canvas>
+  </section>
+
+  <section class="card">
+    <h2>HBVM memory</h2>
+    <div id="mem"></div>
+  </section>
+
+  <section class="card ops">
+    <h2>Step time by op <span class="hint">last telemetry window</span></h2>
+    <div id="ops"></div>
+  </section>
+
+  <section class="card controls">
+    <h2>Control <span class="hint" id="ctlState"></span></h2>
+    <div class="btns">
+      <button class="b primary" id="pause">Pause</button>
+      <button class="b" data-cmd="checkpoint">Checkpoint</button>
+      <button class="b" data-cmd="autotune">Autotune</button>
+      <button class="b danger" id="stop"><i></i>Hold to stop</button>
+    </div>
+    <div class="field">
+      <label>LR peak</label>
+      <input type="range" id="lr" min="-5" max="-2" step="0.01" value="-3.3">
+      <span class="mono" id="lrv"></span>
+      <button class="b" id="lrSet">Set</button>
+    </div>
+    <div class="field">
+      <label>Threads</label>
+      <button class="b" id="thMinus">−</button>
+      <span class="mono" id="thv">4</span>
+      <button class="b" id="thPlus">+</button>
+      <button class="b" id="thSet">Set</button>
+    </div>
+    <div class="field">
+      <label>Kernel</label>
+      <select id="variant">
+        <option>amx-bf16</option><option selected>avx512-f32</option><option>avx2-fma</option><option>scalar</option>
+      </select>
+      <button class="b" id="swap">Swap</button>
+    </div>
+  </section>
+
+  <section class="card">
+    <h2>Agents</h2>
+    <div id="agents"></div>
+    <div class="feed" id="decisions"></div>
+  </section>
+
+  <section class="card">
+    <h2>Events and checkpoints</h2>
+    <div class="feed" id="events"></div>
+  </section>
+</main>
+
+<div id="auth"><div class="card">
+  <h2>Access token</h2>
+  <input type="password" id="tokenIn" placeholder="token" autocomplete="off">
+  <button class="b primary" id="tokenGo">Connect</button>
+</div></div>
+<div id="toast"></div>
+
+<script>
+"use strict";
+const $ = (id) => document.getElementById(id);
+const store = {
+  get(k) { try { return localStorage.getItem(k); } catch { return null; } },
+  set(k, v) { try { localStorage.setItem(k, v); } catch {} },
+};
+const hash = new URLSearchParams(location.hash.slice(1));
+let token = hash.get("token") || store.get("hc.token") || "";
+if (hash.get("token")) { store.set("hc.token", token); history.replaceState(null, "", location.pathname); }
+const api = hash.get("api") || store.get("hc.api") || "";
+if (hash.get("api")) store.set("hc.api", api);
+
+const S = { runs: {}, agents: {}, decisions: [], sel: store.get("hc.run"), ws: null, pending: new Map(), seq: 0 };
+const VIEW = { x0: null, x1: null };
+let dirty = true;
+
+function httpBase() {
+  if (!api) return location.origin;
+  if (/^wss?:\/\//.test(api)) return api.replace(/^ws/, "http").replace(/\/$/, "");
+  return location.protocol + "//" + api.replace(/\/$/, "");
+}
+
+function wsUrl() {
+  let base;
+  if (api) base = /^wss?:\/\//.test(api) ? api : (location.protocol === "https:" ? "wss://" : "ws://") + api;
+  else base = (location.protocol === "https:" ? "wss://" : "ws://") + location.host;
+  return base.replace(/\/$/, "") + "/ws?token=" + encodeURIComponent(token);
+}
+
+function connect() {
+  const ws = new WebSocket(wsUrl());
+  S.ws = ws;
+  let opened = false;
+  ws.onopen = () => { opened = true; $("conn").classList.add("on"); };
+  ws.onmessage = (e) => { try { onMsg(JSON.parse(e.data)); } catch (err) { console.error(err); } };
+  ws.onclose = (e) => {
+    $("conn").classList.remove("on");
+    if (e.code === 4401 || (!opened && e.code === 1006 && !token)) { $("auth").style.display = "flex"; return; }
+    setTimeout(connect, 2000);
+  };
+}
+
+function onMsg(m) {
+  switch (m.type) {
+    case "snapshot":
+      S.runs = m.runs; S.agents = m.agents; S.decisions = (m.decisions || []).slice().reverse();
+      if (!S.sel || !S.runs[S.sel]) S.sel = pickRun();
+      break;
+    case "run": S.runs[m.run.name] = m.run; if (!S.sel) S.sel = m.run.name; break;
+    case "record": applyRecord(m.run, m.record, m.summary); break;
+    case "decision": S.decisions.unshift(m); S.decisions.length = Math.min(S.decisions.length, 300);
+      if (m.severity !== "info") toast(`${m.agent}: ${m.reason}`); break;
+    case "agents": S.agents = m.agents; break;
+    case "command": break;
+    case "ack": {
+      const p = S.pending.get(m.id); S.pending.delete(m.id);
+      toast(m.ok ? `sent ${m.cmd ? m.cmd.cmd : "ok"}` : `rejected: ${m.error}`);
+      if (p) p(m);
+      break;
+    }
+  }
+  dirty = true;
+}
+
+function pickRun() {
+  const live = Object.values(S.runs).filter((r) => r.status === "running" || r.status === "paused");
+  const all = live.length ? live : Object.values(S.runs);
+  all.sort((a, b) => (b.last_ts || 0) - (a.last_ts || 0));
+  return all.length ? all[0].name : null;
+}
+
+function applyRecord(name, rec, summary) {
+  let r = S.runs[name];
+  if (!r) r = S.runs[name] = { name, history: [], evals: [], events: [], checkpoints: [], autotune: [] };
+  Object.assign(r, summary);
+  const n = (x) => (typeof x === "number" && isFinite(x) ? x : null);
+  switch (rec.type) {
+    case "telemetry":
+      r.last = rec;
+      r.history.push([rec.step, n(rec.loss), n(rec.tokens_per_s), n(rec.tflops), n(rec.lr), n(rec.grad_norm), n(rec.step_ms), n(rec.ts)]);
+      break;
+    case "eval": r.evals.push([rec.step, n(rec.val_loss), n(rec.val_acc)]); break;
+    case "checkpoint": r.checkpoints.push(rec); break;
+    case "autotune": r.autotune.push(rec); break;
+    case "done": break;
+    default: r.events.push(rec); if (r.events.length > 200) r.events.shift();
+  }
+}
+
+function send(msg) {
+  if (!S.ws || S.ws.readyState !== 1) { toast("not connected"); return Promise.resolve(null); }
+  const id = String(++S.seq);
+  S.ws.send(JSON.stringify({ ...msg, id }));
+  return new Promise((res) => S.pending.set(id, res));
+}
+const cmd = (c) => S.sel ? send({ type: "cmd", run: S.sel, cmd: c }) : toast("no run selected");
+
+/* ---------- formatting ---------- */
+const fmt = (x, d = 3) => (x == null ? "–" : Number(x).toFixed(d));
+function si(x) {
+  if (x == null) return "–";
+  const a = Math.abs(x);
+  if (a >= 1e9) return (x / 1e9).toFixed(2) + " G";
+  if (a >= 1e6) return (x / 1e6).toFixed(2) + " M";
+  if (a >= 1e3) return (x / 1e3).toFixed(1) + " k";
+  return x.toFixed(0);
+}
+function dur(s) {
+  if (s == null) return "–";
+  s = Math.round(s);
+  const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60);
+  return h ? `${h} h ${m} min` : `${m} min ${s % 60} s`;
+}
+const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]);
+
+/* ---------- rendering ---------- */
+function render() {
+  dirty = false;
+  renderRuns();
+  const r = S.runs[S.sel];
+  $("runTitle").textContent = r ? r.name : "no run";
+  $("updated").textContent = r && r.last_ts ? "last record " + new Date(r.last_ts * 1000).toLocaleTimeString() : "";
+  const hasCkpt = r && ((r.checkpoints && r.checkpoints.length) || r.status === "done");
+  $("tryGpu").style.display = hasCkpt ? "" : "none";
+  if (hasCkpt) {
+    const base = `${httpBase()}/models/${encodeURIComponent(token || "-")}/${encodeURIComponent(r.name)}/`;
+    $("tryGpu").href = `${httpBase()}/webgpu/#base=${encodeURIComponent(base)}`;
+  }
+  renderKpis(r); drawLoss(r); drawTput(r); renderOps(r); renderMem(r); renderCtl(r); renderAgents(); renderEvents(r);
+}
+
+function renderRuns() {
+  const box = $("runs");
+  const names = Object.keys(S.runs).sort();
+  box.innerHTML = names.map((n) =>
+    `<button class="chip${n === S.sel ? " sel" : ""}" data-run="${esc(n)}">${esc(n)}<span class="st">${esc(S.runs[n].status || "")}</span></button>`
+  ).join("") || '<span class="empty">no runs yet</span>';
+}
+
+function renderKpis(r) {
+  const k = $("kpis");
+  if (!r) { k.innerHTML = '<span class="empty">waiting for runs/*.jsonl</span>'; return; }
+  const last = r.last || {};
+  const ev = r.evals && r.evals.length ? r.evals[r.evals.length - 1] : null;
+  const prog = r.max_steps ? Math.min(1, r.step / r.max_steps) : null;
+  const b = r.b300_fraction;
+  const cells = [
+    ["Status", r.status || "–"],
+    ["Step", r.max_steps ? `${r.step} / ${r.max_steps}` : r.step, prog],
+    ["ETA", dur(r.eta_s)],
+    ["Train loss", fmt(last.loss, 4)],
+    ["Val loss", ev ? fmt(ev[1], 4) : "–"],
+    ["Val accuracy", ev && ev[2] != null ? (ev[2] * 100).toFixed(1) + " %" : "–"],
+    ["Tokens / s", si(last.tokens_per_s)],
+    ["TFLOPS (measured)", fmt(last.tflops, 3)],
+    ["Share of one B300", b == null ? "–" : (b * 100).toPrecision(2) + " %"],
+    ["Tokens seen", si(last.tokens)],
+    ["LR", last.lr == null ? "–" : last.lr.toExponential(2)],
+    ["Kernels", last.kernels ? last.kernels.MATMUL : "–"],
+  ];
+  k.innerHTML = cells.map(([l, v, p]) =>
+    `<div class="kpi"><div class="l">${l}</div><div class="v${l === "Kernels" ? " mono" : ""}" style="${l === "Kernels" ? "font-size:13px" : ""}">${esc(v)}</div>${
+      p != null ? `<div class="bar"><i style="width:${(p * 100).toFixed(1)}%"></i></div>` : ""}</div>`).join("");
+}
+
+function css(v) { return getComputedStyle(document.documentElement).getPropertyValue(v).trim(); }
+
+function setupCanvas(c) {
+  const dpr = window.devicePixelRatio || 1, w = c.clientWidth, h = c.clientHeight;
+  if (c.width !== Math.round(w * dpr) || c.height !== Math.round(h * dpr)) { c.width = Math.round(w * dpr); c.height = Math.round(h * dpr); }
+  const g = c.getContext("2d"); g.setTransform(dpr, 0, 0, dpr, 0, 0); g.clearRect(0, 0, w, h);
+  return [g, w, h];
+}
+
+function niceTicks(lo, hi, n) {
+  const span = hi - lo || 1, step0 = span / n, mag = Math.pow(10, Math.floor(Math.log10(step0)));
+  const step = [1, 2, 5, 10].map((f) => f * mag).find((s) => s >= step0) || mag * 10;
+  const out = []; for (let v = Math.ceil(lo / step) * step; v <= hi + 1e-9; v += step) out.push(v);
+  return out;
+}
+
+function drawLoss(r) {
+  const c = $("loss"), [g, w, h] = setupCanvas(c);
+  const pts = r ? r.history.filter((p) => p[1] != null).map((p) => [p[0], p[1]]) : [];
+  const ev = r ? r.evals.filter((p) => p[1] != null).map((p) => [p[0], p[1]]) : [];
+  const all = pts.concat(ev);
+  if (!all.length) { g.fillStyle = css("--muted"); g.font = "13px sans-serif"; g.fillText("no data yet", 12, 24); return; }
+  const xmin = Math.min(...all.map((p) => p[0])), xmax = Math.max(...all.map((p) => p[0]), xmin + 1);
+  const x0 = VIEW.x0 ?? xmin, x1 = VIEW.x1 ?? (r.max_steps && r.max_steps > xmax ? r.max_steps : xmax);
+  const vis = all.filter((p) => p[0] >= x0 && p[0] <= x1);
+  const ys = (vis.length ? vis : all).map((p) => p[1]);
+  let y0 = Math.min(...ys), y1 = Math.max(...ys); const pad = (y1 - y0) * 0.08 || 0.1; y0 -= pad; y1 += pad;
+  const L = 46, R = 10, T = 8, B = 24, pw = w - L - R, ph = h - T - B;
+  const X = (x) => L + ((x - x0) / (x1 - x0 || 1)) * pw, Y = (y) => T + (1 - (y - y0) / (y1 - y0 || 1)) * ph;
+  c._map = { x0, x1, L, pw };
+  g.strokeStyle = css("--line"); g.fillStyle = css("--muted"); g.font = "11px sans-serif"; g.lineWidth = 1;
+  for (const t of niceTicks(y0, y1, 5)) { g.beginPath(); g.moveTo(L, Y(t)); g.lineTo(w - R, Y(t)); g.stroke(); g.fillText(t.toFixed(2), 4, Y(t) + 4); }
+  for (const t of niceTicks(x0, x1, 6)) { g.fillText(String(Math.round(t)), X(t) - 10, h - 6); }
+  g.save(); g.beginPath(); g.rect(L, T, pw, ph); g.clip();
+  g.strokeStyle = css("--accent"); g.lineWidth = 1.6; g.beginPath();
+  pts.forEach((p, i) => (i ? g.lineTo(X(p[0]), Y(p[1])) : g.moveTo(X(p[0]), Y(p[1])))); g.stroke();
+  g.strokeStyle = css("--val"); g.fillStyle = css("--val"); g.lineWidth = 1.6; g.beginPath();
+  ev.forEach((p, i) => (i ? g.lineTo(X(p[0]), Y(p[1])) : g.moveTo(X(p[0]), Y(p[1])))); g.stroke();
+  ev.forEach((p) => { g.beginPath(); g.arc(X(p[0]), Y(p[1]), 3, 0, 7); g.fill(); });
+  g.restore();
+}
+
+function drawTput(r) {
+  const c = $("tput"), [g, w, h] = setupCanvas(c);
+  const pts = r ? r.history.filter((p) => p[2] != null && p[0] > 1).map((p) => [p[0], p[2]]) : [];
+  $("tputNow").textContent = pts.length ? `${si(pts[pts.length - 1][1])} tok/s` : "";
+  if (pts.length < 2) return;
+  const x0 = pts[0][0], x1 = pts[pts.length - 1][0], y1 = Math.max(...pts.map((p) => p[1])) * 1.1;
+  const X = (x) => 4 + ((x - x0) / (x1 - x0 || 1)) * (w - 8), Y = (y) => h - 4 - (y / y1) * (h - 8);
+  g.strokeStyle = css("--ok"); g.lineWidth = 1.5; g.beginPath();
+  pts.forEach((p, i) => (i ? g.lineTo(X(p[0]), Y(p[1])) : g.moveTo(X(p[0]), Y(p[1])))); g.stroke();
+}
+
+function renderOps(r) {
+  const ops = r && r.last && r.last.ops;
+  if (!ops) { $("ops").innerHTML = '<span class="empty">no telemetry yet</span>'; return; }
+  const rows = Object.entries(ops).map(([op, s]) => [op, s.ns || 0, s.flops || 0]).filter((x) => x[1] > 0);
+  const tot = rows.reduce((a, x) => a + x[1], 0) || 1;
+  rows.sort((a, b) => b[1] - a[1]);
+  $("ops").innerHTML = rows.slice(0, 10).map(([op, ns, fl]) => {
+    const share = ns / tot;
+    return `<div class="row"><span class="mono">${esc(op)}</span><div class="bar"><i style="width:${(share * 100).toFixed(1)}%"></i></div><span>${(share * 100).toFixed(1)} %${fl > 0 ? ` · ${(fl / ns).toFixed(0)} GF/s` : ""}</span></div>`;
+  }).join("");
+}
+
+function renderMem(r) {
+  const h = r && r.last && r.last.hbvm;
+  if (!h) { $("mem").innerHTML = '<span class="empty">no telemetry yet</span>'; return; }
+  const mib = (b) => (b / 1048576).toFixed(0) + " MiB";
+  const used = h.capacity ? h.used / h.capacity : 0, peak = h.capacity ? h.peak / h.capacity : 0;
+  $("mem").innerHTML = `<div class="kpis">
+    <div class="kpi"><div class="l">Used</div><div class="v">${mib(h.used)}</div><div class="bar"><i style="width:${(used * 100).toFixed(1)}%"></i></div></div>
+    <div class="kpi"><div class="l">Peak</div><div class="v">${mib(h.peak)}</div><div class="bar"><i style="width:${(peak * 100).toFixed(1)}%"></i></div></div>
+    <div class="kpi"><div class="l">Capacity</div><div class="v">${mib(h.capacity)}</div></div>
+    <div class="kpi"><div class="l">Fragmentation</div><div class="v">${fmt(h.fragmentation, 3)}</div></div>
+    <div class="kpi"><div class="l">Live buffers</div><div class="v">${h.live}</div></div></div>`;
+}
+
+function renderCtl(r) {
+  const live = r && (r.status === "running" || r.status === "paused");
+  $("pause").textContent = r && r.status === "paused" ? "Resume" : "Pause";
+  document.querySelectorAll(".controls button").forEach((b) => (b.disabled = !live));
+  $("ctlState").textContent = live ? "" : "run not live";
+  if (r && r.last && r.last.threads && !thTouched) $("thv").textContent = r.last.threads;
+}
+
+const AGENT_INFO = {
+  "silicon-watchdog": "numerics, divergence, memory, liveness",
+  "jit-optimizer": "kernel throughput, live re-autotune, profile",
+};
+function renderAgents() {
+  $("agents").innerHTML = Object.entries(S.agents).map(([name, mode]) =>
+    `<div class="agent"><div><b>${esc(name)}</b><div class="hint">${esc(AGENT_INFO[name] || "")}</div></div>
+     <div class="seg">${["act", "advise", "off"].map((m) =>
+       `<button class="${m === mode ? "sel" : ""}" data-agent="${esc(name)}" data-mode="${m}">${m}</button>`).join("")}</div></div>`).join("");
+  const ds = S.decisions.slice(0, 80);
+  $("decisions").innerHTML = ds.map((d) => {
+    const tag = d.action ? (d.executed ? `<span class="tag done">executed ${esc(d.action.cmd)}</span>`
+      : d.error ? `<span class="tag err">${esc(d.action.cmd)} failed: ${esc(d.error)}</span>`
+      : `<span class="tag">advised ${esc(d.action.cmd)}</span>`) : "";
+    return `<div class="item ${esc(d.severity)}"><div class="meta"><span>${new Date(d.ts * 1000).toLocaleTimeString()}</span><span>${esc(d.agent)}</span><span>${esc(d.run)}${d.step != null ? " @" + d.step : ""}</span>${tag}</div>${esc(d.reason)}</div>`;
+  }).join("") || '<span class="empty">no decisions yet</span>';
+}
+
+function renderEvents(r) {
+  if (!r) { $("events").innerHTML = ""; return; }
+  const items = (r.events || []).map((e) => ({ ts: e.ts, cls: e.level || "info", text: e.msg || JSON.stringify(e) }))
+    .concat((r.checkpoints || []).map((c) => ({ ts: c.ts, cls: "info", text: `checkpoint @${c.step}: ${c.path} (sha256 ${String(c.sha256).slice(0, 12)}…)` })));
+  items.sort((a, b) => (b.ts || 0) - (a.ts || 0));
+  $("events").innerHTML = items.slice(0, 80).map((e) =>
+    `<div class="item ${esc(e.cls)}"><div class="meta">${e.ts ? new Date(e.ts * 1000).toLocaleTimeString() : ""}</div>${esc(e.text)}</div>`
+  ).join("") || '<span class="empty">none</span>';
+}
+
+/* ---------- interaction ---------- */
+let toastTimer;
+function toast(t) { const el = $("toast"); el.textContent = t; el.classList.add("on"); clearTimeout(toastTimer); toastTimer = setTimeout(() => el.classList.remove("on"), 2600); }
+
+document.addEventListener("click", (e) => {
+  const t = e.target.closest("button"); if (!t) return;
+  if (t.dataset.run) { S.sel = t.dataset.run; store.set("hc.run", S.sel); VIEW.x0 = VIEW.x1 = null; dirty = true; }
+  else if (t.dataset.cmd) cmd({ cmd: t.dataset.cmd });
+  else if (t.dataset.agent) send({ type: "mode", agent: t.dataset.agent, mode: t.dataset.mode });
+});
+$("pause").onclick = () => { const r = S.runs[S.sel]; cmd({ cmd: r && r.status === "paused" ? "resume" : "pause" }); };
+const lrVal = () => Math.pow(10, Number($("lr").value));
+$("lr").oninput = () => ($("lrv").textContent = lrVal().toExponential(2));
+$("lr").oninput();
+$("lrSet").onclick = () => cmd({ cmd: "set_lr", value: lrVal() });
+let thTouched = false;
+const th = (d) => { thTouched = true; $("thv").textContent = Math.max(1, Math.min(256, Number($("thv").textContent) + d)); };
+$("thMinus").onclick = () => th(-1); $("thPlus").onclick = () => th(1);
+$("thSet").onclick = () => { thTouched = false; cmd({ cmd: "set_threads", value: Number($("thv").textContent) }); };
+$("swap").onclick = () => cmd({ cmd: "swap_kernel", op: "MATMUL", variant: $("variant").value });
+
+// Stop needs a 1.5 s press: no accidental taps on a touch screen.
+(() => {
+  const b = $("stop"), fill = b.querySelector("i"); let t0 = 0, raf = 0;
+  const reset = () => { cancelAnimationFrame(raf); t0 = 0; fill.style.width = "0"; };
+  const step = () => {
+    const p = Math.min(1, (performance.now() - t0) / 1500); fill.style.width = (p * 100) + "%";
+    if (p >= 1) { reset(); cmd({ cmd: "stop" }); } else raf = requestAnimationFrame(step);
+  };
+  b.addEventListener("pointerdown", (e) => { if (b.disabled) return; e.preventDefault(); t0 = performance.now(); raf = requestAnimationFrame(step); });
+  ["pointerup", "pointerleave", "pointercancel"].forEach((ev) => b.addEventListener(ev, reset));
+})();
+
+// Loss chart: pinch to zoom, one finger to pan, double tap to reset; wheel on desktop.
+(() => {
+  const c = $("loss"), ptr = new Map(); let start = null, lastTap = 0;
+  const stepAt = (clientX) => { const m = c._map, rect = c.getBoundingClientRect(); return m.x0 + ((clientX - rect.left - m.L) / m.pw) * (m.x1 - m.x0); };
+  const snap = () => ({ pts: [...ptr.values()].map((p) => ({ ...p })), x0: c._map.x0, x1: c._map.x1 });
+  c.addEventListener("pointerdown", (e) => {
+    if (!c._map) return; c.setPointerCapture(e.pointerId); ptr.set(e.pointerId, { x: e.clientX });
+    start = snap();
+    if (ptr.size === 1) { const now = performance.now(); if (now - lastTap < 300) { VIEW.x0 = VIEW.x1 = null; dirty = true; } lastTap = now; }
+  });
+  c.addEventListener("pointermove", (e) => {
+    if (!ptr.has(e.pointerId) || !start) return; ptr.set(e.pointerId, { x: e.clientX });
+    const m = c._map, rect = c.getBoundingClientRect(), span = start.x1 - start.x0, cur = [...ptr.values()];
+    if (cur.length >= 2 && start.pts.length >= 2) {
+      const d0 = Math.abs(start.pts[0].x - start.pts[1].x) || 1, d1 = Math.abs(cur[0].x - cur[1].x) || 1;
+      const mid0 = (start.pts[0].x + start.pts[1].x) / 2, mid1 = (cur[0].x + cur[1].x) / 2;
+      const anchor = start.x0 + ((mid0 - rect.left - m.L) / m.pw) * span, ns = Math.max(5, span * d0 / d1);
+      const f = (mid1 - rect.left - m.L) / m.pw;
+      VIEW.x0 = anchor - f * ns; VIEW.x1 = VIEW.x0 + ns;
+    } else if (cur.length === 1 && start.pts.length === 1) {
+      const dx = ((cur[0].x - start.pts[0].x) / m.pw) * span; VIEW.x0 = start.x0 - dx; VIEW.x1 = start.x1 - dx;
+    }
+    dirty = true;
+  });
+  const up = (e) => { ptr.delete(e.pointerId); start = ptr.size ? snap() : null; };
+  ["pointerup", "pointercancel"].forEach((ev) => c.addEventListener(ev, up));
+  c.addEventListener("wheel", (e) => {
+    if (!c._map) return; e.preventDefault();
+    const m = c._map, at = stepAt(e.clientX), k = Math.exp(e.deltaY * 0.002), ns = Math.max(5, (m.x1 - m.x0) * k);
+    const f = (at - m.x0) / (m.x1 - m.x0); VIEW.x0 = at - f * ns; VIEW.x1 = VIEW.x0 + ns; dirty = true;
+  }, { passive: false });
+})();
+
+$("tokenGo").onclick = () => { token = $("tokenIn").value.trim(); store.set("hc.token", token); $("auth").style.display = "none"; connect(); };
+window.addEventListener("resize", () => (dirty = true));
+(function loop() { if (dirty) render(); requestAnimationFrame(loop); })();
+connect();
+</script>
+</body>
+</html>
