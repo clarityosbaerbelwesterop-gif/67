@@ -7,6 +7,16 @@
                                  newest checkpoint) and tokenizer.json; the token sits
                                  in the path because the runtime fetches a base URL
     GET  /api/health             liveness, no auth
+    GET  /api/rsi                controlled-RSI rounds and pending approvals per model
+    POST /api/rsi/{model}/approve  {"round": n, "approved": bool}  (only while pending)
+    POST /api/rsi/{model}/stop   the RSI loop halts at its next check
+    GET  /api/longrun            runs/longrun/state.json + history, as written
+    POST /api/swarm/{group}/open, POST /api/swarm/join, GET /api/swarm/{group}/assignment,
+    POST /api/swarm/{group}/report, GET /api/swarm, DELETE /api/swarm/{group}
+                                 rendezvous for real machines joining forge diloco
+Restricted runs (headcenter/acl.json, e.g. "rouge-"): checkpoint files are
+served only to listed company tokens (hash compare), never to the operator
+token alone; every attempt is logged to runs/headcenter/access.jsonl.
     GET  /api/results            measured results: report, Darus merge search, benchmarks
     GET  /api/runs               snapshot of every run, agent modes, recent decisions
     POST /api/runs/{run}/cmd     body: a trainer command, e.g. {"cmd":"pause"}
@@ -34,7 +44,10 @@ from fastapi import Body, FastAPI, HTTPException, Request, WebSocket, WebSocketD
 from fastapi.responses import FileResponse, JSONResponse
 
 from .agents import MODES, Agent, Decision, JitOptimizer, SiliconWatchdog
+from .access import Access
 from .control import RUN_RE, CommandError, Controller, NotLive
+from .rsi import RSI, RSIError, read_longrun
+from .swarm import Swarm, SwarmError
 from .telemetry import RunState, Tail, load_max_steps, parse
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -255,8 +268,13 @@ def create_app(
     modes: dict[str, str] | None = None,
     poll: float = 0.5,
     tokenizer: Path | None = None,
+    acl: Path | None = None,
 ) -> FastAPI:
     hub = Hub(runs_dir, configs_dir, modes, poll)
+    runs_path = Path(runs_dir)
+    access = Access(Path(acl) if acl else ROOT / "headcenter" / "acl.json", runs_path / "headcenter" / "access.jsonl")
+    rsi = RSI(runs_path)
+    swarm = Swarm(runs_path, [ROOT / "training" / "configs", runs_path], ROOT)
     tokenizer = Path(tokenizer) if tokenizer else ROOT / "data" / "stores" / "base" / "tokenizer.json"
 
     @contextlib.asynccontextmanager
@@ -294,6 +312,18 @@ def create_app(
 
     @app.get("/models/{key}/{run}/{file}")
     def model_file(key: str, run: str, file: str) -> FileResponse:
+        if file != "tokenizer.json":
+            ck = checkpoint_dir(hub.runs_dir, run) if file in CHECKPOINT_FILES else None
+            names = [run] + (list(ck.relative_to(hub.runs_dir.resolve()).parts) if ck is not None else [])
+            prefixes = access.prefixes(*names)
+            if prefixes or access.error is not None:
+                ok, company, reason = access.authorise(key, prefixes)
+                access.log(run=run, file=file, allowed=ok, company=company, reason=reason)
+                if not ok:
+                    raise HTTPException(403, "restricted model: this key is not licensed for it")
+                if ck is None:
+                    raise HTTPException(404)
+                return FileResponse(ck / file)
         if token is not None and not hmac.compare_digest(key, token):
             raise HTTPException(401, "missing or wrong token")
         if file == "tokenizer.json":
@@ -317,8 +347,67 @@ def create_app(
         for d in sorted(p for p in hub.runs_dir.iterdir() if p.is_dir()):
             ck = checkpoint_dir(hub.runs_dir, d.name)
             if ck is not None:
-                out[d.name] = {"dir": str(ck.relative_to(hub.runs_dir.resolve())), "final": (d / "FINAL").exists()}
+                out[d.name] = {"dir": str(ck.relative_to(hub.runs_dir.resolve())), "final": (d / "FINAL").exists(),
+                               "restricted": access.restricted(d.name)}
         return {"models": out}
+
+    def call(fn, *args):
+        try:
+            return fn(*args)
+        except (RSIError, SwarmError) as e:
+            raise HTTPException(getattr(e, "status", 400), str(e)) from None
+
+    @app.get("/api/rsi")
+    def rsi_overview(request: Request) -> dict:
+        check(request)
+        return rsi.overview()
+
+    @app.post("/api/rsi/{model}/approve")
+    def rsi_approve(model: str, request: Request, body: dict = Body(...)) -> dict:
+        check(request)
+        return call(rsi.decide, model, body.get("round"), body.get("approved"))
+
+    @app.post("/api/rsi/{model}/stop")
+    def rsi_stop(model: str, request: Request) -> dict:
+        check(request)
+        return call(rsi.stop, model)
+
+    @app.get("/api/longrun")
+    def longrun(request: Request) -> dict:
+        check(request)
+        return read_longrun(hub.runs_dir)
+
+    @app.get("/api/swarm")
+    def swarm_overview(request: Request) -> dict:
+        check(request)
+        return swarm.overview()
+
+    @app.post("/api/swarm/join")
+    def swarm_join(request: Request, body: dict = Body(...)) -> dict:
+        check(request)
+        return call(swarm.join, body)
+
+    @app.post("/api/swarm/{group}/open")
+    def swarm_open(group: str, request: Request, body: dict = Body(...)) -> dict:
+        check(request)
+        return call(swarm.open, group, body)
+
+    @app.get("/api/swarm/{group}/assignment")
+    def swarm_assignment(group: str, worker_id: str, request: Request) -> JSONResponse:
+        check(request)
+        status, body = call(swarm.assignment, group, worker_id)
+        return JSONResponse(body, status_code=status)
+
+    @app.post("/api/swarm/{group}/report")
+    def swarm_report(group: str, request: Request, body: dict = Body(...)) -> dict:
+        check(request)
+        return call(swarm.report, group, body)
+
+    @app.delete("/api/swarm/{group}")
+    def swarm_delete(group: str, request: Request) -> dict:
+        check(request)
+        call(swarm.delete, group)
+        return {"ok": True}
 
     @app.get("/api/health")
     def health() -> dict:

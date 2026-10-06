@@ -1,0 +1,230 @@
+{
+  "days": 3,
+  "forever": false,
+  "cycle_hours": 24,
+  "min_cycle_fraction": 0.25,
+  "max_cycles": null,
+  "first_generation": 2,
+  "base_config": "training/configs/base-s.json",
+  "forge": "target/release/forge",
+  "nice": 10,
+  "max_retries": 2,
+  "retry_backoff_seconds": 60,
+  "min_free_gb": 5,
+  "min_steps": 20,
+  "throughput": {
+    "bench_steps": 3,
+    "assumed_tokens_per_s": 1700,
+    "telemetry_min_samples": 10
+  },
+  "shares": {
+    "base": 0.55,
+    "quasnir": 0.14,
+    "quasnir_rsi": 0.05,
+    "rouge": 0.15,
+    "rouge_rsi": 0.03,
+    "darus": 0.05,
+    "report": 0.03
+  },
+  "names": {
+    "base": "base-g{g}",
+    "quasnir": "quasnir-g{g}",
+    "rouge": "rouge-g{g}",
+    "darus": "darus-g{g}"
+  },
+  "initial": {
+    "base": "runs/base-s/FINAL",
+    "quasnir": "runs/quasnir-1/FINAL",
+    "rouge": "runs/rouge-1/FINAL",
+    "darus": "runs/darus-1/FINAL"
+  },
+  "train": {
+    "defaults": {
+      "ckpt_every": 250,
+      "eval_every": 500,
+      "eval_batches": 16,
+      "log_every": 10,
+      "threads": 0
+    },
+    "base": {
+      "lr": 0.0004,
+      "min_lr": 4e-05,
+      "warmup_steps": 200,
+      "seed": 1000
+    },
+    "quasnir": {
+      "lr": 0.0002,
+      "min_lr": 2e-05,
+      "warmup_steps": 50,
+      "seed": 2000
+    },
+    "rouge": {
+      "lr": 0.0002,
+      "min_lr": 2e-05,
+      "warmup_steps": 50,
+      "seed": 3000
+    }
+  },
+  "corpus": {
+    "v2": {
+      "base": "data/out/base-v2/train.meta.json",
+      "code": "data/out/code-v2/train.meta.json",
+      "general": "data/out/general-v2/train.meta.json"
+    },
+    "v1": {
+      "base": "data/stores/base/train.meta.json",
+      "code": "data/stores/code/train.meta.json",
+      "general": "data/stores/general/train.meta.json"
+    },
+    "build_cmd": [
+      "{python}",
+      "data/build_corpus_v2.py"
+    ],
+    "build_args": [],
+    "reference_tokenizer": "data/stores/base/tokenizer.json",
+    "vocab_size": 8192
+  },
+  "rouge_mix": {
+    "weights": {
+      "general": 0.6,
+      "base": 0.4
+    },
+    "max_tokens": 100000000,
+    "block_tokens": 1048576,
+    "out": "runs/longrun/stores"
+  },
+  "rsi": {
+    "enabled": true,
+    "cmd": [
+      "{python}",
+      "-m",
+      "training.rsi.loop"
+    ],
+    "module_file": "training/rsi/loop.py",
+    "rounds": 4,
+    "tasks": 64,
+    "samples": 4,
+    "steps_per_round": 40,
+    "min_wall_hours": 0.1,
+    "extra_args": [
+      "--approval-timeout-hours",
+      "6"
+    ],
+    "models": {
+      "quasnir": {
+        "family": "code",
+        "gates": [
+          "code",
+          "general"
+        ],
+        "replay": "code",
+        "require_approval": true
+      },
+      "rouge": {
+        "family": "text",
+        "gates": [
+          "general",
+          "base"
+        ],
+        "replay": "rouge_mix",
+        "require_approval": true
+      },
+      "darus": {
+        "family": "mixed",
+        "gates": [
+          "general",
+          "code"
+        ],
+        "replay": "base",
+        "require_approval": true
+      }
+    }
+  },
+  "merge": {
+    "cmd": [
+      "{python}",
+      "scripts/merge_search.py"
+    ],
+    "method": "ties",
+    "density": 0.5,
+    "lambda": 1.0,
+    "acceptance": {
+      "max_regression_vs_parents": 0.02
+    },
+    "search": {
+      "budget": 16,
+      "select_seed": 777,
+      "select_batches": 16,
+      "rng_seed": 67
+    }
+  },
+  "gate": {
+    "tolerance": 0.01,
+    "eval": {
+      "batch": 8,
+      "seq": 256,
+      "batches": 32,
+      "seed": 4242
+    },
+    "stores": {
+      "base": [
+        "base"
+      ],
+      "quasnir": [
+        "code"
+      ],
+      "rouge": [
+        "general"
+      ],
+      "darus": [
+        "general",
+        "code"
+      ]
+    }
+  },
+  "report": {
+    "stores": [
+      "general",
+      "code",
+      "base"
+    ],
+    "benchmarks": {
+      "darus": [
+        "humaneval",
+        "mbpp"
+      ],
+      "quasnir": [
+        "humaneval",
+        "mbpp"
+      ]
+    },
+    "humaneval_cmd": [
+      "{python}",
+      "scripts/humaneval.py"
+    ],
+    "humaneval_args": []
+  },
+  "hygiene": {
+    "keep_last": 2,
+    "keep_last_during_run": 3,
+    "keep_last_superseded": 0,
+    "prune_rsi_rounds": true
+  },
+  "control": {
+    "poll_seconds": 2.0
+  },
+  "wait_for": {
+    "paths": [
+      "runs/base-s/FINAL"
+    ],
+    "procs": [
+      "scripts/train_all.sh",
+      "scripts/darus_finish.sh",
+      "data/build_corpus_v2.py"
+    ],
+    "poll_seconds": 60
+  },
+  "restricted_models": [
+    "rouge"
+  ]
+}

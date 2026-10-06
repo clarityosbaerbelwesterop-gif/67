@@ -23,6 +23,7 @@ def main() -> None:
     p.add_argument("--runs", type=Path, default=Path("runs"))
     p.add_argument("--configs", type=Path, default=Path("training/configs"))
     p.add_argument("--tokenizer", type=Path, default=Path("data/stores/base/tokenizer.json"))
+    p.add_argument("--acl", type=Path, default=Path("headcenter/acl.json"), help="restricted-model ACL (see headcenter/acl.example.json)")
     p.add_argument("--host", default="127.0.0.1")
     p.add_argument("--port", type=int, default=8067)
     p.add_argument("--token", default=os.environ.get("HEADCENTER_TOKEN"))
@@ -40,7 +41,7 @@ def main() -> None:
     if token and a.new_token:
         print(f"headcenter: open http://{a.host}:{a.port}/#token={token}", flush=True)
     modes = {"silicon-watchdog": a.watchdog, "jit-optimizer": a.jit}
-    app = create_app(a.runs, a.configs, token, modes, tokenizer=a.tokenizer)
+    app = create_app(a.runs, a.configs, token, modes, tokenizer=a.tokenizer, acl=a.acl)
     uvicorn.run(app, host=a.host, port=a.port, log_level="warning")
 
 

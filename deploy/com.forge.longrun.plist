@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- macOS launchd job for durable multi-day training. Edit the paths, then:
+     cp deploy/com.forge.longrun.plist ~/Library/LaunchAgents/ &&
+     launchctl load ~/Library/LaunchAgents/com.forge.longrun.plist
+     Stop gracefully: touch runs/longrun/STOP -->
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key><string>com.forge.longrun</string>
+  <key>WorkingDirectory</key><string>/Users/YOU/67</string>
+  <key>ProgramArguments</key>
+  <array><string>/Users/YOU/67/scripts/supervise.sh</string><string>--days</string><string>20</string></array>
+  <key>RunAtLoad</key><true/>
+  <key>KeepAlive</key><dict><key>SuccessfulExit</key><false/></dict>
+  <key>StandardOutPath</key><string>/Users/YOU/67/runs/longrun/launchd.log</string>
+  <key>StandardErrorPath</key><string>/Users/YOU/67/runs/longrun/launchd.log</string>
+  <key>ProcessType</key><string>Background</string>
+</dict>
+</plist>

@@ -174,6 +174,21 @@ select, input[type=text], input[type=password] { min-height: 44px; border-radius
   </section>
 
   <section class="card wide">
+    <h2>Controlled RSI <span class="hint">every promotion needs your approval; no answer in 6 h = rejected</span></h2>
+    <div id="rsi"><span class="empty">no RSI rounds yet</span></div>
+  </section>
+
+  <section class="card">
+    <h2>Long run</h2>
+    <div id="longrun"><span class="empty">not started</span></div>
+  </section>
+
+  <section class="card">
+    <h2>Swarm <span class="hint">real machines only</span></h2>
+    <div id="swarm"><span class="empty">no groups</span></div>
+  </section>
+
+  <section class="card wide">
     <h2>Results <span class="hint">measured by scripts/darus_finish.sh, shown as written</span></h2>
     <div id="results"><span class="empty">no results yet</span></div>
   </section>
@@ -506,6 +521,61 @@ function renderResults() {
   $("results").innerHTML = parts.join("") || '<span class="empty">no results yet</span>';
 }
 
+/* ---------- RSI, long run, swarm (REST, every 10 s) ---------- */
+async function getJSON(path) {
+  const r = await fetch(httpBase() + path, { headers: token ? { Authorization: "Bearer " + token } : {} });
+  if (!r.ok) throw new Error(path + " " + r.status);
+  return r.json();
+}
+async function postJSON(path, body) {
+  const r = await fetch(httpBase() + path, { method: "POST", headers: { "Content-Type": "application/json", ...(token ? { Authorization: "Bearer " + token } : {}) },
+    body: JSON.stringify(body || {}) });
+  const j = await r.json().catch(() => ({}));
+  toast(r.ok ? "done" : "rejected: " + (j.detail || r.status));
+  refreshSide();
+}
+const pct = (x) => (x == null ? "–" : (x * 100).toFixed(1) + " %");
+function renderRSI(ov) {
+  const models = Object.entries((ov && ov.models) || {});
+  if (!models.length) { $("rsi").innerHTML = '<span class="empty">no RSI rounds yet</span>'; return; }
+  $("rsi").innerHTML = models.map(([name, m]) => {
+    const rounds = (m.rounds || m.audit || []).slice(-8).reverse();
+    const pend = m.pending;
+    const rows = rounds.map((r) => `<tr><td>${esc(r.round)}</td><td>${esc(r.kind || "")}</td><td>${esc(r.accepted ?? "")}</td>
+      <td>${pct(r.heldout_pass_before)} → ${pct(r.heldout_pass_after)}</td><td>${esc(r.decision || "")}</td></tr>`).join("");
+    return `<div style="margin-bottom:12px"><b>${esc(name)}</b> <span class="hint">champion ${esc((m.champion && (m.champion.dir || m.champion)) || "–")}</span>
+      ${pend && !pend.decided ? `<div class="item warn">Round ${esc(pend.round)} passed the gates and awaits your decision.
+        <div class="btns" style="margin-top:6px"><button class="b primary" data-rsi="${esc(name)}" data-round="${esc(pend.round)}" data-ok="1">Approve</button>
+        <button class="b" data-rsi="${esc(name)}" data-round="${esc(pend.round)}" data-ok="0">Reject</button></div></div>` : ""}
+      <div class="scroll"><table class="tbl"><tr><th>round</th><th>kind</th><th>accepted</th><th>held-out pass</th><th>decision</th></tr>${rows}</table></div>
+      <button class="b danger" data-rsistop="${esc(name)}"><i></i>Stop RSI</button></div>`;
+  }).join("");
+}
+function renderLongrun(lr) {
+  const st = lr && lr.state;
+  if (!st) { $("longrun").innerHTML = '<span class="empty">not started</span>'; return; }
+  const hist = (lr.history || []).slice(-5).reverse();
+  const cyc = st.cycles && st.cycle != null ? st.cycles[String(st.cycle)] || {} : {};
+  $("longrun").innerHTML = `<div class="kpis"><div class="kpi"><div class="l">Generation</div><div class="v">${esc(st.cycle ?? "–")}</div></div>
+    <div class="kpi"><div class="l">Phase</div><div class="v" style="font-size:15px">${esc((Object.entries(cyc.steps || {}).find(([, v]) => v.status === "running") || ["–"])[0])}</div></div>
+    <div class="kpi"><div class="l">Status</div><div class="v" style="font-size:15px">${esc(st.status ?? "–")}${lr.stop ? " (STOP set)" : ""}</div></div></div>
+    ${st.message ? `<div class="item warn">${esc(st.message)}</div>` : ""}
+    ${hist.map((h) => `<div class="item info">${esc(JSON.stringify(h).slice(0, 220))}</div>`).join("")}`;
+}
+function renderSwarm(sw) {
+  const groups = Object.values((sw && sw.groups) || {});
+  if (!groups.length) { $("swarm").innerHTML = '<span class="empty">no groups</span>'; return; }
+  $("swarm").innerHTML = groups.map((g) => `<div class="item info"><b>${esc(g.name)}</b> ${esc(g.state)} · ${esc((g.workers || []).length)}/${esc(g.world)} machines
+    ${(g.workers || []).map((w) => `<div class="meta"><span>${esc(w.host)}:${esc(w.port)}</span><span>rank ${esc(w.rank ?? "–")}</span><span>${w.gflops ? esc(Math.round(w.gflops)) + " GFLOP/s" : "not measured"}</span><span>${esc(w.run_state || "")}</span></div>`).join("")}</div>`).join("");
+}
+async function refreshSide() {
+  try { renderRSI(await getJSON("/api/rsi")); } catch {}
+  try { renderLongrun(await getJSON("/api/longrun")); } catch {}
+  try { renderSwarm(await getJSON("/api/swarm")); } catch {}
+}
+setInterval(refreshSide, 10000);
+setTimeout(refreshSide, 500);
+
 /* ---------- interaction ---------- */
 let toastTimer;
 function toast(t) { const el = $("toast"); el.textContent = t; el.classList.add("on"); clearTimeout(toastTimer); toastTimer = setTimeout(() => el.classList.remove("on"), 2600); }
@@ -515,6 +585,8 @@ document.addEventListener("click", (e) => {
   if (t.dataset.run) { S.sel = t.dataset.run; store.set("hc.run", S.sel); VIEW.x0 = VIEW.x1 = null; dirty = true; }
   else if (t.dataset.cmd) cmd({ cmd: t.dataset.cmd });
   else if (t.dataset.agent) send({ type: "mode", agent: t.dataset.agent, mode: t.dataset.mode });
+  else if (t.dataset.rsi) postJSON(`/api/rsi/${encodeURIComponent(t.dataset.rsi)}/approve`, { round: Number(t.dataset.round), approved: t.dataset.ok === "1" });
+  else if (t.dataset.rsistop && confirm("Stop the RSI loop of " + t.dataset.rsistop + "?")) postJSON(`/api/rsi/${encodeURIComponent(t.dataset.rsistop)}/stop`);
 });
 $("pause").onclick = () => { const r = S.runs[S.sel]; cmd({ cmd: r && r.status === "paused" ? "resume" : "pause" }); };
 const lrVal = () => Math.pow(10, Number($("lr").value));

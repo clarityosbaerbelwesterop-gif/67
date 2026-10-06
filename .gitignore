@@ -8,3 +8,4 @@ __pycache__/
 .claude/
 /data/stores
 .pytest_cache/
+headcenter/acl.json

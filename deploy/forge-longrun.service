@@ -1,0 +1,19 @@
+# systemd unit for durable multi-day training on your own Linux machine.
+# Install: edit WorkingDirectory/User, copy to /etc/systemd/system/, then
+#   sudo systemctl daemon-reload && sudo systemctl enable --now forge-longrun
+# Stop gracefully: touch runs/longrun/STOP (the current step checkpoints first).
+[Unit]
+Description=forge long run (base -> Quasnir / Rouge 1 -> Darus, controlled RSI)
+After=network-online.target
+
+[Service]
+Type=simple
+User=forge
+WorkingDirectory=/opt/67
+ExecStart=/opt/67/scripts/supervise.sh --days 20
+Restart=on-failure
+RestartSec=60
+Nice=5
+
+[Install]
+WantedBy=multi-user.target
