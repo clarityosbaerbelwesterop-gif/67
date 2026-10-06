@@ -498,3 +498,246 @@ fn kv_cache_generation_equals_window_sampling() {
     assert!(long.windows(2).all(|p| p[1] == (p[0] + 1) % 5), "{long:?}");
     std::fs::remove_dir_all(out).ok();
 }
+
+/// A briefly trained model for the batched-decoding tests. Its widths (12,
+/// 20) are not multiples of 8, so every projection has a tail after the
+/// 8-wide partial sums; tokens 5..13 never occur in its training stream.
+fn batch_model(
+    tag: &str,
+    steps: usize,
+) -> (
+    ModelConfig,
+    std::collections::BTreeMap<String, ckpt::Tensor>,
+) {
+    let out = std::env::temp_dir().join(format!("forge-{tag}-{}", std::process::id()));
+    let mut c = cfg(tag, out.to_str().unwrap(), steps);
+    c.model = ModelConfig {
+        vocab_size: 13,
+        dim: 12,
+        n_layers: 2,
+        n_heads: 2,
+        n_kv_heads: 1,
+        ffn_hidden: Some(20),
+        max_seq_len: 16,
+        rope_theta: 10_000.0,
+        norm_eps: 1e-5,
+    };
+    let (sink, _) = collect();
+    let mut tr = Trainer::new(c.clone(), sink).unwrap();
+    for _ in 0..steps {
+        tr.train_step().unwrap();
+    }
+    let w = weights_of(&tr);
+    std::fs::remove_dir_all(out).ok();
+    (c.model, w)
+}
+
+/// Prompts of lengths 0 to 20 (context 16): empty, unseen tokens, and one
+/// longer than the context that is cut from the left.
+fn batch_prompts() -> Vec<Vec<u32>> {
+    vec![
+        vec![],
+        vec![3],
+        vec![2, 3, 4, 0],
+        vec![4, 0, 1, 2, 3, 4, 0],
+        vec![9, 12, 7],
+        (0..20).map(|i| (i * 3 % 5) as u32).collect(),
+        vec![1, 2],
+        vec![0; 11],
+        vec![11, 3, 4, 6, 8],
+    ]
+}
+
+/// One `Decoder::generate` per prompt: the reference for batched decoding.
+fn one_by_one(
+    d: &mut crate::decode::Decoder,
+    prompts: &[Vec<u32>],
+    seeds: &[u64],
+    (max_new, temperature, top_k, stop): (usize, f32, usize, Option<u32>),
+) -> Vec<Vec<u32>> {
+    prompts
+        .iter()
+        .zip(seeds)
+        .map(|(p, &s)| d.generate(p, max_new, temperature, top_k, s, stop).unwrap())
+        .collect()
+}
+
+#[test]
+fn batched_greedy_decoding_equals_sequential() {
+    use crate::decode::Decoder;
+    let (m, w) = batch_model("bgreedy", 25);
+    let mut d = Decoder::new(&m, &w, 2).unwrap();
+    let prompts = batch_prompts();
+    let seeds = vec![0u64; prompts.len()];
+    for stop in [None, Some(2)] {
+        let want = one_by_one(&mut d, &prompts, &seeds, (9, 0.0, 1, stop));
+        if stop.is_some() {
+            // The stop id ends some sequences early; others run to max_new.
+            assert!(want.iter().any(|g| g.len() < 9), "{want:?}");
+            assert!(want.iter().any(|g| g.len() == 9), "{want:?}");
+        }
+        for batch in [1, 2, 4, 16] {
+            let got = d
+                .generate_batch(&prompts, &seeds, 9, 0.0, 1, stop, batch)
+                .unwrap();
+            assert_eq!(got, want, "batch {batch}, stop {stop:?}");
+        }
+    }
+    // max_new 0 yields empty completions, as `generate` does.
+    let empty = d
+        .generate_batch(&prompts, &seeds, 0, 0.0, 1, None, 4)
+        .unwrap();
+    assert!(empty.iter().all(|g| g.is_empty()));
+    // A bad prompt: the ones before it are completed and reported, then its
+    // error is returned (a loop of `generate` behaves the same way).
+    let bad = vec![vec![1, 2], vec![3], vec![1, 99], vec![2]];
+    let mut seen = Vec::new();
+    let err = d
+        .generate_batch_with(&bad, &[0; 4], 9, 0.0, 1, None, 4, |i, ids, _| {
+            seen.push((i, ids))
+        })
+        .unwrap_err();
+    assert!(err.contains("outside vocabulary"), "{err}");
+    seen.sort();
+    let want = one_by_one(&mut d, &bad[..2], &[0, 0], (9, 0.0, 1, None));
+    assert_eq!(seen, vec![(0, want[0].clone()), (1, want[1].clone())]);
+}
+
+#[test]
+fn batched_sampling_equals_sequential_for_the_same_seeds() {
+    use crate::decode::Decoder;
+    let (m, w) = batch_model("bsample", 25);
+    let mut d = Decoder::new(&m, &w, 2).unwrap();
+    let prompts = batch_prompts();
+    let seeds: Vec<u64> = (0..prompts.len() as u64).map(|i| 100 + i).collect();
+    for (temperature, top_k, stop) in [(0.9, 6, Some(4)), (1.3, 13, None)] {
+        let want = one_by_one(&mut d, &prompts, &seeds, (10, temperature, top_k, stop));
+        if stop.is_some() {
+            assert!(want.iter().any(|g| g.len() < 10), "{want:?}");
+            assert!(want.iter().any(|g| g.len() == 10), "{want:?}");
+        }
+        for batch in [3, 16] {
+            let got = d
+                .generate_batch(&prompts, &seeds, 10, temperature, top_k, stop, batch)
+                .unwrap();
+            assert_eq!(got, want, "batch {batch}, T {temperature}");
+        }
+    }
+    // Different seeds draw different completions (the seeds are really used).
+    let other: Vec<u64> = seeds.iter().map(|s| s + 1000).collect();
+    let got = d
+        .generate_batch(&prompts, &other, 10, 1.3, 13, None, 16)
+        .unwrap();
+    assert_ne!(
+        got,
+        one_by_one(&mut d, &prompts, &seeds, (10, 1.3, 13, None))
+    );
+}
+
+#[test]
+fn batched_step_logits_match_single_sequence_logits() {
+    use crate::decode::Decoder;
+    let (m, w) = batch_model("bstep", 25);
+    let mut d = Decoder::new(&m, &w, 2).unwrap();
+    // Five sequences at different positions (1, 4, 7, 9, 15 cached tokens).
+    let prompts: Vec<Vec<u32>> = vec![
+        vec![3],
+        vec![2, 3, 4, 0],
+        vec![4, 0, 1, 2, 3, 4, 0],
+        vec![9, 12, 7, 1, 1, 2, 3, 4, 5],
+        (0..15).map(|i| (i % 5) as u32).collect(),
+    ];
+    let mut caches: Vec<_> = prompts
+        .iter()
+        .map(|p| {
+            let mut c = d.new_cache();
+            d.feed_cache(&mut c, p).unwrap();
+            c
+        })
+        .collect();
+    let v = m.vocab_size;
+    let mut fed: Vec<Vec<u32>> = vec![Vec::new(); prompts.len()];
+    for tokens in [[1u32, 0, 1, 6, 0], [2, 1, 2, 7, 1]] {
+        let open: Vec<usize> = (0..prompts.len())
+            .filter(|&i| caches[i].len() < m.max_seq_len)
+            .collect();
+        let toks: Vec<u32> = open.iter().map(|&i| tokens[i]).collect();
+        let mut refs: Vec<_> = caches
+            .iter_mut()
+            .enumerate()
+            .filter(|(i, _)| open.contains(i))
+            .map(|(_, c)| c)
+            .collect();
+        let got = d.step(&mut refs, &toks).unwrap();
+        assert_eq!(got.len(), open.len() * v);
+        for (row, &i) in open.iter().enumerate() {
+            // The same sequence alone: prompt block, the tokens of earlier
+            // steps one at a time, then this step's token.
+            d.reset();
+            d.feed(&prompts[i]).unwrap();
+            for &t in &fed[i] {
+                d.feed(&[t]).unwrap();
+            }
+            let want = d.feed(&[tokens[i]]).unwrap();
+            fed[i].push(tokens[i]);
+            let row = &got[row * v..(row + 1) * v];
+            let scale = want.iter().fold(1f32, |a, x| a.max(x.abs()));
+            let err = want
+                .iter()
+                .zip(row)
+                .fold(0f32, |a, (x, y)| a.max((x - y).abs()));
+            assert!(
+                err <= 1e-4 * scale,
+                "sequence {i}: max |Δlogit| {err} (scale {scale})"
+            );
+            // Stronger: the batched row is bit-identical to the one-row path.
+            assert!(
+                want.iter()
+                    .zip(row)
+                    .all(|(x, y)| x.to_bits() == y.to_bits()),
+                "sequence {i}: batched logits differ in bits from the single-sequence logits"
+            );
+        }
+    }
+    // The sequence that filled the context was left out of the second step.
+    assert_eq!(caches[4].len(), m.max_seq_len);
+    assert!(
+        d.step(&mut [&mut caches[4]], &[0]).is_err(),
+        "context overflow must be an error"
+    );
+}
+
+#[test]
+fn batched_context_overflow_equals_sequential() {
+    use crate::decode::Decoder;
+    let (m, w) = batch_model("boverflow", 25);
+    let mut d = Decoder::new(&m, &w, 2).unwrap();
+    let prompts = batch_prompts();
+    let seeds: Vec<u64> = (0..prompts.len() as u64).map(|i| 7 + 3 * i).collect();
+    // 30 new tokens > context 16: the prompt keeps its last token, the cache
+    // fills after 16 positions and the newest half is re-encoded (twice per
+    // sequence). With a stop id, sequences end and new ones enter at
+    // different steps, so overflows happen at different steps in the batch.
+    let max_new = 30;
+    for (temperature, top_k, stop) in [(0.0, 1, None), (1.0, 8, Some(4)), (1.2, 13, None)] {
+        let want = one_by_one(
+            &mut d,
+            &prompts,
+            &seeds,
+            (max_new, temperature, top_k, stop),
+        );
+        assert!(
+            want.iter().any(|g| g.len() > m.max_seq_len),
+            "no sequence overflowed the context: {want:?}"
+        );
+        if stop.is_some() {
+            assert!(want.iter().any(|g| g.len() < max_new), "{want:?}");
+        }
+        for batch in [1, 3, 16] {
+            let got = d
+                .generate_batch(&prompts, &seeds, max_new, temperature, top_k, stop, batch)
+                .unwrap();
+            assert_eq!(got, want, "batch {batch}, T {temperature}, stop {stop:?}");
+        }
+    }
+}

@@ -7,7 +7,7 @@
 //!   forge merge    --base DIR --child DIR --child DIR [--method ties|linear] [--density D] [--lambda L] --out DIR
 //!   forge eval     --ckpt DIR --data META [--split val|train] [--batch B] [--seq T] [--batches K] [--quant FORMAT]
 //!   forge generate --ckpt DIR --prompt-ids 1,2,3 | --prompts-file F [--max-new N] [--temperature T] [--top-k K]
-//!                  [--seed S] [--stop-id ID] [--decoder kv|window]
+//!                  [--seed S] [--stop-id ID] [--decoder kv|window] [--batch N (prompts file, kv; default 16)]
 //!   forge generate --ckpt DIR --prompt "text" [--tokenizer tokenizer.json] [...]   (text in, text out)
 //!   forge tokenize [--tokenizer tokenizer.json] (--text S | --jsonl F | --decode 1,2,3)
 //!   forge disasm   --config run.json [--limit N]
@@ -367,6 +367,19 @@ fn generate_cmd(a: &Args) -> Result<(), String> {
     // re-runs the ISA window program for every token, as a reference.
     type Gen = Box<dyn FnMut(&[u32], u64) -> Result<Vec<u32>, String>>;
     let window = a.get("--decoder").as_deref() == Some("window") || a.get("--ctx").is_some();
+    // `--prompts-file` with the KV decoder decodes up to `--batch` prompts
+    // at once (default 16); `--batch 1` runs one prompt after the other.
+    let batch: usize = a.num("--batch", if window { 1 } else { 16 })?;
+    if batch == 0 {
+        return Err("--batch must be positive".into());
+    }
+    if window && batch > 1 {
+        return Err("--batch above 1 needs the kv decoder".into());
+    }
+    if let (Some(file), true) = (a.get("--prompts-file"), batch > 1) {
+        let d = forge_train::decode::Decoder::new(&cfg, &w, threads(a)?)?;
+        return generate_batched(&d, &file, batch, (max_new, temp, top_k, seed, stop));
+    }
     let (mut generate, decoder): (Gen, &str) = if window {
         let mut s =
             forge_train::Sampler::new(&cfg, &w, a.num("--ctx", cfg.max_seq_len)?, threads(a)?)?;
@@ -413,6 +426,53 @@ fn generate_cmd(a: &Args) -> Result<(), String> {
         json!({"type": "generate", "prompt_ids": ids, "ids": out, "decoder": decoder})
     );
     Ok(())
+}
+
+/// `forge generate --prompts-file F --batch N`: the prompts of F decode `N` at
+/// a time ([`forge_train::decode::Decoder::generate_batch_with`]), prompt `i`
+/// with seed `seed + i`. Lines are printed in prompt order with the fields of
+/// the one-at-a-time loop and the same ids; `seconds` is the time from the
+/// prompt entering the batch to its last token. As in that loop, an unreadable
+/// line or a failing prompt ends the command after the lines before it.
+fn generate_batched(
+    d: &forge_train::decode::Decoder,
+    file: &str,
+    batch: usize,
+    (max_new, temp, top_k, seed, stop): (usize, f32, usize, u64, Option<u32>),
+) -> Result<(), String> {
+    let text = std::fs::read_to_string(file).map_err(|e| format!("{file}: {e}"))?;
+    let (mut prompts, mut bad) = (Vec::new(), None);
+    for (i, line) in text.lines().filter(|l| !l.trim().is_empty()).enumerate() {
+        match serde_json::from_str::<Vec<u32>>(line) {
+            Ok(ids) => prompts.push(ids),
+            Err(e) => {
+                bad = Some(format!("{file}:{}: {e}", i + 1));
+                break;
+            }
+        }
+    }
+    let seeds: Vec<u64> = (0..prompts.len() as u64).map(|i| seed + i).collect();
+    let (mut ready, mut next) = (BTreeMap::new(), 0usize);
+    d.generate_batch_with(
+        &prompts,
+        &seeds,
+        max_new,
+        temp,
+        top_k,
+        stop,
+        batch,
+        |i, ids, secs| {
+            ready.insert(i, (ids, secs));
+            while let Some((ids, secs)) = ready.remove(&next) {
+                println!(
+                    "{}",
+                    json!({"type": "generate", "index": next, "ids": ids, "decoder": "kv", "seconds": secs, "batch": batch})
+                );
+                next += 1;
+            }
+        },
+    )?;
+    bad.map_or(Ok(()), Err)
 }
 
 fn tokenizer(a: &Args) -> Result<forge_data::Tokenizer, String> {
