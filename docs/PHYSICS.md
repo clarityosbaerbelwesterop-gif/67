@@ -24,7 +24,8 @@ hardware that commodity processors already contain.
 
 | Silicon | Measured / cited | How |
 | --- | --- | --- |
-| Intel AMX tile unit, 1 core (this sandbox, Xeon Sapphire Rapids) | **1.94 TFLOPS BF16** register-bound | `tdpbf16ps` loop, measured 2026-10-05 |
+| Intel AMX tile unit, 1 core (sandbox host of 2026-10-05, Xeon Sapphire Rapids) | **1.94 TFLOPS BF16** register-bound | `tdpbf16ps` loop, measured 2026-10-05 |
+| AVX-512, 4 cores (sandbox host of 2026-10-06, no AMX exposed) | 0.18–0.35 TFLOPS FP32 GEMM; 0.14–0.16 TFLOPS sustained in training | `forge bench`, `docs/BENCHMARKS.md` |
 | `forge bench` end to end | see `docs/BENCHMARKS.md` | measured by the CLI, never typed in |
 | Apple M4 / M5 iPad GPU, FP32 peak | ~4.3 / ~5.1 TFLOPS (third-party estimates) | eatyourbytes.com |
 | Safari WebGPU matmul efficiency | ~25 % of peak FP32, ~47 % f16 | AnswerDotAI/gpu.cpp PR #39 |
