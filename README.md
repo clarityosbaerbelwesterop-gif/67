@@ -115,6 +115,9 @@ safetensors under SCP's PyTorch parameter names, so checkpoints load into
   GEMMs and each new token as a single row. Its logits match the ISA forward
   pass to a relative 1e-4, and greedy and sampled outputs are identical. It
   is about 20× faster per token than re-running the window.
+- `forge tokenize` and `forge generate --prompt "…"` use the Rust port of
+  the SCP BPE tokenizer. It produces the same tokens as `scp_model.bpe` on
+  3.65 M characters including Unicode stress text (0 mismatches), 21× faster.
 - `scripts/humaneval.py --suite humaneval|mbpp` measures pass@1 with real,
   sandboxed execution. The harness passes the reference solutions (20/20 on
   both suites) and fails wrong code.

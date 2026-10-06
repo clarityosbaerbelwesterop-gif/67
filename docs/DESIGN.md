@@ -185,6 +185,15 @@ pub enum Split { Train, Val }
 pub struct Rng; // xoshiro256**: new(seed), next_u64(), next_f32(), state() -> [u64;4], from_state([u64;4])
 ```
 
+Implemented: `forge_data::Tokenizer` (`load`, `encode`, `decode`,
+`vocab_size`, `bos`, `eos`, `pad`). SCP's GPT pattern runs with Python's
+`\w = [\p{L}\p{N}_]` and the exact `str.isspace()` set. Parity with
+`scp_model.bpe` is checked by `data/check_tokenizer_parity.py`: 3.65 M
+characters of code, prose and random Unicode, 0 mismatches. The token store
+and the RNG are `forge_train::data` / `forge_train::rng`. CLI:
+`forge tokenize`, and `forge generate --prompt "text"` (text in, text out,
+stops at `<eos>`).
+
 Batch semantics (SCP `data_pipeline.py`): window start uniform in [0, N-T-1],
 x = w[0..T], y = w[1..T+1]; windows cross document boundaries.
 

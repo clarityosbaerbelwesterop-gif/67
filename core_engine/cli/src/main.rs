@@ -8,6 +8,8 @@
 //!   forge eval     --ckpt DIR --data META [--split val|train] [--batch B] [--seq T] [--batches K]
 //!   forge generate --ckpt DIR --prompt-ids 1,2,3 | --prompts-file F [--max-new N] [--temperature T] [--top-k K]
 //!                  [--seed S] [--stop-id ID] [--decoder kv|window]
+//!   forge generate --ckpt DIR --prompt "text" [--tokenizer tokenizer.json] [...]   (text in, text out)
+//!   forge tokenize [--tokenizer tokenizer.json] (--text S | --jsonl F | --decode 1,2,3)
 //!   forge disasm   --config run.json [--limit N]
 
 use forge_isa::{compile, disassemble, CompileOptions};
@@ -328,10 +330,13 @@ fn generate_cmd(a: &Args) -> Result<(), String> {
         a.num("--top-k", 40)?,
         a.num("--seed", 0)?,
     );
-    let stop: Option<u32> = a
+    let mut stop: Option<u32> = a
         .get("--stop-id")
         .map(|v| v.parse().map_err(|_| "bad --stop-id".to_string()))
         .transpose()?;
+    if stop.is_none() && a.get("--prompt").is_some() {
+        stop = tokenizer(a)?.eos();
+    }
     // Default: KV-cache decoding. `--decoder window` (or an explicit `--ctx`)
     // re-runs the ISA window program for every token, as a reference.
     type Gen = Box<dyn FnMut(&[u32], u64) -> Result<Vec<u32>, String>>;
@@ -365,12 +370,58 @@ fn generate_cmd(a: &Args) -> Result<(), String> {
         }
         return Ok(());
     }
+    if let Some(text) = a.get("--prompt") {
+        let tok = tokenizer(a)?;
+        let ids = tok.encode(&text);
+        let out = generate(&ids, seed)?;
+        println!(
+            "{}",
+            json!({"type": "generate", "prompt": text, "prompt_ids": ids, "ids": out, "text": tok.decode(&out), "decoder": decoder})
+        );
+        return Ok(());
+    }
     let ids = parse(&a.need("--prompt-ids")?)?;
     let out = generate(&ids, seed)?;
     println!(
         "{}",
         json!({"type": "generate", "prompt_ids": ids, "ids": out, "decoder": decoder})
     );
+    Ok(())
+}
+
+fn tokenizer(a: &Args) -> Result<forge_data::Tokenizer, String> {
+    let path = a
+        .get("--tokenizer")
+        .unwrap_or_else(|| "data/stores/base/tokenizer.json".into());
+    forge_data::Tokenizer::load(&path)
+}
+
+/// Encode text with the SCP BPE tokenizer, or decode ids. `--jsonl` reads one
+/// JSON string per line and writes one JSON array of ids per line.
+fn tokenize_cmd(a: &Args) -> Result<(), String> {
+    let tok = tokenizer(a)?;
+    if let Some(ids) = a.get("--decode") {
+        let ids: Vec<u32> = ids
+            .split(',')
+            .map(|x| x.trim().parse().map_err(|_| format!("bad id {x}")))
+            .collect::<Result<_, _>>()?;
+        println!("{}", json!({"text": tok.decode(&ids)}));
+    } else if let Some(file) = a.get("--jsonl") {
+        let text = std::fs::read_to_string(&file).map_err(|e| format!("{file}: {e}"))?;
+        let mut out = std::io::BufWriter::new(std::io::stdout().lock());
+        for (i, line) in text.lines().enumerate() {
+            let s: String =
+                serde_json::from_str(line).map_err(|e| format!("{file}:{}: {e}", i + 1))?;
+            use std::io::Write;
+            writeln!(out, "{}", json!(tok.encode(&s))).map_err(|e| e.to_string())?;
+        }
+    } else {
+        let s = a.need("--text")?;
+        println!(
+            "{}",
+            json!({"ids": tok.encode(&s), "vocab_size": tok.vocab_size()})
+        );
+    }
     Ok(())
 }
 
@@ -435,12 +486,13 @@ fn main() {
         "eval" => eval_cmd(&a),
         "generate" => generate_cmd(&a),
         "logits" => logits_cmd(&a),
+        "tokenize" => tokenize_cmd(&a),
         "disasm" => disasm(&a),
         "engines" => {
             println!("{}", json!({"available": forge_kernels::available().iter().map(|v: &GemmVariant| v.name()).collect::<Vec<_>>()}));
             Ok(())
         }
-        _ => Err("usage: forge bench|train|diloco|merge|eval|generate|disasm|engines [options] (see core_engine/cli/src/main.rs)".into()),
+        _ => Err("usage: forge bench|train|diloco|merge|eval|generate|tokenize|disasm|engines [options] (see core_engine/cli/src/main.rs)".into()),
     };
     if let Err(e) = result {
         eprintln!("forge: {e}");

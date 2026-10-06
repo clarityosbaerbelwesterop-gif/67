@@ -1,6 +1,6 @@
 """HumanEval / MBPP pass@1 (greedy) for forge checkpoints, with real execution.
 
-Prompts are encoded with the shared SCP tokenizer, completions come from
+Prompts are encoded with the shared SCP tokenizer (`forge tokenize`), completions come from
 `forge generate --prompts-file` (weights loaded once), and every completion runs
 against the official tests in an isolated Python subprocess (`-I`, empty env,
 temp dir, CPU/memory/file-size limits, 10 s timeout). Results are measured,
@@ -12,18 +12,15 @@ et al. (2021): the task text and the first test inside a docstring.
 Usage: python3 scripts/humaneval.py runs/quasnir-1/FINAL [--suite humaneval|mbpp] [--limit N] [--max-new 192]
 """
 import argparse
-import importlib.util
 import json
 import os
 import resource
 import subprocess
 import sys
 import tempfile
-import types
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
-SCP = Path(os.environ.get("SCP_ROOT", "/home/user/swarm-compute-protocol-")) / "model" / "scp_model"
 STOPS = {
     "humaneval": ["\ndef ", "\nclass ", "\nif __name__", "\nprint(", "\n#", "\nassert"],
     "mbpp": ["\nassert", '\n"""', "\nif __name__", "\nprint(", "\n#"],
@@ -43,14 +40,28 @@ def problems(suite: str) -> list:
     return out
 
 
-def tokenizer(path: Path):
-    pkg = types.ModuleType("scp_model")
-    pkg.__path__ = [str(SCP)]
-    sys.modules.setdefault("scp_model", pkg)
-    spec = importlib.util.spec_from_file_location("scp_model.bpe", SCP / "bpe.py")
-    bpe = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(bpe)
-    return bpe.BPETokenizer.load(str(path))
+class Tokenizer:
+    """SCP BPE: encoding by `forge tokenize` (Rust, parity-checked against
+    scp_model.bpe), decoding from the merge table."""
+
+    def __init__(self, path: Path):
+        self.path = path
+        data = json.loads(path.read_text())
+        self.merges = sorted(data["merges"], key=lambda m: m[2])
+        self.vocab = {i: bytes([i]) for i in range(256)}
+        for a, b, idx in self.merges:
+            self.vocab[idx] = self.vocab[a] + self.vocab[b]
+
+    def encode_many(self, texts: list) -> list:
+        with tempfile.NamedTemporaryFile("w", suffix=".jsonl", delete=False) as f:
+            f.write("".join(json.dumps(t) + "\n" for t in texts))
+        out = subprocess.run([str(ROOT / "target/release/forge"), "tokenize", "--tokenizer", str(self.path), "--jsonl", f.name],
+                             check=True, capture_output=True, text=True).stdout
+        os.unlink(f.name)
+        return [json.loads(l) for l in out.splitlines()]
+
+    def decode(self, ids: list) -> str:
+        return b"".join(self.vocab[i] for i in ids if i in self.vocab).decode("utf-8", errors="replace")
 
 
 def limits() -> None:
@@ -79,11 +90,11 @@ def main() -> int:
     ap.add_argument("--max-new", type=int, default=192)
     ap.add_argument("--tokenizer", default=str(ROOT / "data/stores/base/tokenizer.json"))
     args = ap.parse_args()
-    tok = tokenizer(Path(args.tokenizer))
+    tok = Tokenizer(Path(args.tokenizer))
     probs = problems(args.suite)[: args.limit]
     with tempfile.NamedTemporaryFile("w", suffix=".jsonl", delete=False) as f:
-        for p in probs:
-            f.write(json.dumps(tok.encode(p["prompt"])) + "\n")
+        for ids in tok.encode_many([p["prompt"] for p in probs]):
+            f.write(json.dumps(ids) + "\n")
         prompts = f.name
     eos = len(tok.merges) + 256 + 1
     out = subprocess.run([str(ROOT / "target/release/forge"), "generate", "--ckpt", args.ckpt, "--prompts-file", prompts,
