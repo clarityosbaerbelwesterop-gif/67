@@ -1,0 +1,210 @@
+//! FP4 E2M1 as defined by OCP MX v1.0: s.2.1, bias 1, one subnormal (0.5),
+//! no Inf, no NaN. Magnitudes: 0, 0.5, 1, 1.5, 2, 3, 4, 6.
+//!
+//! Codes live in the low nibble of a `u8` (bit 3 = sign); the high nibble is
+//! ignored on decode and zero on encode. Conversion always saturates.
+//! Packed helpers store two codes per byte, low nibble first (the MX layout).
+
+use crate::engine::{
+    decode_magnitude_bits, map_rounding, map_rounding_inplace, multiversion, round_magnitude_with,
+    MiniFloat,
+};
+use crate::Rounding;
+
+pub(crate) const E2M1: MiniFloat = MiniFloat {
+    m_bits: 1,
+    bias: 1,
+    max_code: 7,
+};
+
+/// Code of +6.0, the largest magnitude.
+pub const MAX_CODE: u8 = 0x7;
+/// Largest finite value.
+pub const MAX_FINITE: f32 = 6.0;
+
+const fn build_lut() -> [u32; 16] {
+    let mut lut = [0u32; 16];
+    let mut c = 0u32;
+    while c < 16 {
+        lut[c as usize] = ((c & 0x8) << 28) | decode_magnitude_bits(c & 0x7, E2M1);
+        c += 1;
+    }
+    lut
+}
+
+pub(crate) static LUT: [u32; 16] = build_lut();
+
+/// Branch-free arithmetic decode of the low nibble of `c` to f32 bits
+/// (no table: vectorises without gathers). Equal to `LUT[c & 0xf]`.
+#[inline(always)]
+pub(crate) fn decode_bits(c: u32) -> u32 {
+    let sign = (c & 0x8) << 28;
+    let e = (c >> 1) & 0x3;
+    let m = c & 0x1;
+    // e == 0: subnormal, m * 0.5 (0.5 = 0x3f00_0000); else (1 + m/2) * 2^(e-1).
+    let normal = ((e + 126) << 23) | (m << 22);
+    let sub = m * 0x3f00_0000;
+    sign | if e == 0 { sub } else { normal }
+}
+
+/// Decode the low nibble of `code`.
+#[inline(always)]
+pub fn decode(code: u8) -> f32 {
+    f32::from_bits(LUT[usize::from(code & 0xf)])
+}
+
+/// Encode to E2M1 (low nibble), saturating: finite overflow and ±Inf clamp
+/// to ±6. FP4 has no NaN; a NaN input encodes to +6 (`0x7`), so it stays
+/// conspicuous rather than silently becoming zero. `-0.0` → `0x8`.
+#[inline(always)]
+pub fn encode(x: f32, r: Rounding) -> u8 {
+    let b = x.to_bits();
+    let abs = b & 0x7fff_ffff;
+    let sign = (b >> 28) & 0x8;
+    // Inf yields an out-of-range code from the engine and saturates via min.
+    let mag = round_magnitude_with::<false>(abs, 0, E2M1, r).min(E2M1.max_code);
+    (if abs > 0x7f80_0000 {
+        u32::from(MAX_CODE)
+    } else {
+        sign | mag
+    }) as u8
+}
+
+multiversion! {
+    /// Encode a slice, one code per output byte (low nibble). For
+    /// `Stochastic(seed)`, element `i` uses [`crate::stochastic_bits`]`(seed, i)`.
+    ///
+    /// # Panics
+    /// If `x.len() != out.len()`.
+    pub fn encode_slice(x: &[f32], out: &mut [u8], r: Rounding) {
+        assert_eq!(x.len(), out.len(), "fp4::encode_slice: length mismatch");
+        map_rounding(x, out, 0, r, encode);
+    }
+}
+
+/// Decode a slice of one-code-per-byte values (high nibbles ignored).
+///
+/// # Panics
+/// If `codes.len() != out.len()`.
+pub fn decode_slice(codes: &[u8], out: &mut [f32]) {
+    assert_eq!(codes.len(), out.len(), "fp4::decode_slice: length mismatch");
+    for (o, &c) in out.iter_mut().zip(codes) {
+        *o = decode(c);
+    }
+}
+
+/// Number of bytes needed to pack `n` FP4 codes.
+pub const fn packed_len(n: usize) -> usize {
+    n.div_ceil(2)
+}
+
+/// Pack one code per byte into nibbles (`codes.len() == 2 * out.len()`, or
+/// one less: the missing high nibble is zero).
+#[inline(always)]
+pub(crate) fn pack_nibbles(codes: &[u8], out: &mut [u8]) {
+    debug_assert_eq!(out.len(), packed_len(codes.len()));
+    let mut pairs = codes.chunks_exact(2);
+    for (o, p) in out.iter_mut().zip(&mut pairs) {
+        *o = (p[0] & 0xf) | ((p[1] & 0xf) << 4);
+    }
+    if let [last] = pairs.remainder() {
+        out[codes.len() / 2] = last & 0xf;
+    }
+}
+
+multiversion! {
+    /// Encode a slice into packed nibbles: element `i` goes to byte `i / 2`,
+    /// low nibble for even `i`. An unused final high nibble is zero.
+    ///
+    /// # Panics
+    /// If `out.len() != packed_len(x.len())`.
+    pub fn encode_packed(x: &[f32], out: &mut [u8], r: Rounding) {
+        assert_eq!(out.len(), packed_len(x.len()), "fp4::encode_packed: length mismatch");
+        const CHUNK: usize = 256;
+        let mut codes = [0u8; CHUNK];
+        for (ci, (xc, oc)) in x.chunks(CHUNK).zip(out.chunks_mut(CHUNK / 2)).enumerate() {
+            let codes = &mut codes[..xc.len()];
+            map_rounding(xc, codes, (ci * CHUNK) as u64, r, encode);
+            pack_nibbles(codes, oc);
+        }
+    }
+}
+
+/// Decode packed nibbles into `out` (`packed.len() == packed_len(out.len())`).
+#[inline(always)]
+pub(crate) fn unpack_decode(packed: &[u8], out: &mut [f32]) {
+    debug_assert_eq!(packed.len(), packed_len(out.len()));
+    let mut pairs = out.chunks_exact_mut(2);
+    for (o, &p) in (&mut pairs).zip(packed) {
+        o[0] = f32::from_bits(decode_bits(u32::from(p)));
+        o[1] = f32::from_bits(decode_bits(u32::from(p >> 4)));
+    }
+    if let [last] = pairs.into_remainder() {
+        *last = decode(packed[packed.len() - 1]);
+    }
+}
+
+multiversion! {
+    /// Decode `out.len()` packed FP4 values.
+    ///
+    /// # Panics
+    /// If `packed.len() != packed_len(out.len())`.
+    pub fn decode_packed(packed: &[u8], out: &mut [f32]) {
+        assert_eq!(packed.len(), packed_len(out.len()), "fp4::decode_packed: length mismatch");
+        unpack_decode(packed, out);
+    }
+}
+
+multiversion! {
+    /// Fake-quantize in place (saturating); NaN passes through unchanged
+    /// (see [`crate::fake_quant`]).
+    pub fn fake_quant_slice(x: &mut [f32], r: Rounding) {
+        map_rounding_inplace(x, 0, r, |v, ri| if v.is_nan() { v } else { decode(encode(v, ri)) });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn table() {
+        let want = [0.0, 0.5, 1.0, 1.5, 2.0, 3.0, 4.0, 6.0];
+        for (c, &w) in want.iter().enumerate() {
+            assert_eq!(decode(c as u8), w);
+            assert_eq!(decode(c as u8 | 0x8), -w);
+            assert_eq!(decode(c as u8 | 0xf0), w, "high nibble ignored");
+        }
+        assert_eq!(decode(0x8).to_bits(), 0x8000_0000);
+    }
+
+    #[test]
+    fn arithmetic_decode_matches_tables() {
+        for c in 0..=255u32 {
+            assert_eq!(decode_bits(c), LUT[(c & 0xf) as usize], "{c:#x}");
+        }
+    }
+
+    #[test]
+    fn packing() {
+        let x = [0.5f32, -6.0, 3.0, 1.0, -0.5];
+        let mut p = [0xffu8; 3];
+        encode_packed(&x, &mut p, Rounding::NearestEven);
+        assert_eq!(p, [0xf1, 0x25, 0x09]);
+        let mut y = [0f32; 5];
+        decode_packed(&p, &mut y);
+        assert_eq!(y, x);
+        let mut y4 = [0f32; 4];
+        decode_packed(&p[..2], &mut y4);
+        assert_eq!(y4, x[..4]);
+        let mut e: [u8; 0] = [];
+        encode_packed(&[], &mut e, Rounding::NearestEven);
+        decode_packed(&[], &mut []);
+    }
+
+    #[test]
+    #[should_panic(expected = "length mismatch")]
+    fn packed_length_checked() {
+        encode_packed(&[1.0, 2.0, 3.0], &mut [0u8; 1], Rounding::NearestEven);
+    }
+}
