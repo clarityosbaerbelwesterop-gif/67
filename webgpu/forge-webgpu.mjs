@@ -33,9 +33,9 @@ var<workgroup> red: array<f32, ${WG}>;
   let inv = 1.0 / sqrt(red[0] / f32(p.dim) + p.eps);
   for (var c = l.x; c < p.dim; c += ${WG}u) { out[base + c] = x[base + c] * inv * w[c]; }
 }`,
-  // C[M×N] (+)= A[M×K] · B[N×K]ᵀ — torch.nn.Linear layout, 16×16 tiles.
+  // C[coff + M×N] (+)= A[M×K] · B[N×K]ᵀ — torch.nn.Linear layout, 16×16 tiles.
   matmul_nt: /* wgsl */ `
-struct P { M: u32, N: u32, K: u32, acc: u32 }
+struct P { M: u32, N: u32, K: u32, acc: u32, coff: u32 }
 @group(0) @binding(0) var<storage, read> A: array<f32>;
 @group(0) @binding(1) var<storage, read> B: array<f32>;
 @group(0) @binding(2) var<storage, read_write> C: array<f32>;
@@ -53,10 +53,10 @@ var<workgroup> Bs: array<array<f32, 16>, 16>;
     for (var k = 0u; k < 16u; k++) { acc += As[l.y][k] * Bs[k][l.x]; }
     workgroupBarrier();
   }
-  if (row < p.M && col < p.N) { let i = row * p.N + col; if (p.acc == 1u) { C[i] += acc; } else { C[i] = acc; } }
+  if (row < p.M && col < p.N) { let i = p.coff + row * p.N + col; if (p.acc == 1u) { C[i] += acc; } else { C[i] = acc; } }
 }`,
   rope: /* wgsl */ `
-struct P { rows: u32, heads: u32, hd: u32 }
+struct P { rows: u32, heads: u32, hd: u32, pos0: u32, srow0: u32 }
 @group(0) @binding(0) var<storage, read_write> x: array<f32>;
 @group(0) @binding(1) var<storage, read> cs: array<f32>;
 @group(0) @binding(2) var<storage, read> sn: array<f32>;
@@ -64,13 +64,15 @@ struct P { rows: u32, heads: u32, hd: u32 }
 @compute @workgroup_size(${WG}) fn main(@builtin(global_invocation_id) g: vec3u) {
   let half = p.hd / 2u; let i = g.x; if (i >= p.rows * p.heads * half) { return; }
   let t = i / (p.heads * half); let rem = i % (p.heads * half); let h = rem / half; let k = rem % half;
-  let o = t * p.heads * p.hd + h * p.hd + 2u * k;
-  let a = x[o]; let b = x[o + 1u]; let c = cs[t * half + k]; let s = sn[t * half + k];
+  let o = (p.srow0 + t) * p.heads * p.hd + h * p.hd + 2u * k;
+  let pt = p.pos0 + t;
+  let a = x[o]; let b = x[o + 1u]; let c = cs[pt * half + k]; let s = sn[pt * half + k];
   x[o] = a * c - b * s; x[o + 1u] = a * s + b * c;
 }`,
-  // One workgroup per (head, query position): causal scores, softmax, P·V.
+  // One workgroup per (head, new position): causal scores against the KV
+  // cache (positions 0..=p0+i), softmax, P·V.
   attention: /* wgsl */ `
-struct P { T: u32, H: u32, KV: u32, hd: u32, alpha: f32 }
+struct P { T: u32, H: u32, KV: u32, hd: u32, alpha: f32, p0: u32 }
 @group(0) @binding(0) var<storage, read> q: array<f32>;
 @group(0) @binding(1) var<storage, read> k: array<f32>;
 @group(0) @binding(2) var<storage, read> v: array<f32>;
@@ -79,8 +81,8 @@ struct P { T: u32, H: u32, KV: u32, hd: u32, alpha: f32 }
 var<workgroup> s: array<f32, 1024>;
 var<workgroup> red: array<f32, ${WG}>;
 @compute @workgroup_size(${WG}) fn main(@builtin(workgroup_id) wg: vec3u, @builtin(local_invocation_id) l: vec3u) {
-  let h = wg.x; let i = wg.y; let kvh = h / (p.H / p.KV);
-  let qo = i * p.H * p.hd + h * p.hd;
+  let h = wg.x; let kvh = h / (p.H / p.KV);
+  let qo = wg.y * p.H * p.hd + h * p.hd; let i = p.p0 + wg.y;
   var mx = -3.4e38;
   for (var j = l.x; j <= i; j += ${WG}u) {
     let ko = j * p.KV * p.hd + kvh * p.hd; var d = 0.0;
@@ -193,6 +195,10 @@ export class ForgeModel {
     const mk = (n) => device.createBuffer({ size: Math.max(16, 4 * n), usage });
     this.b = { tok: mk(T), x: mk(T * d), xn: mk(T * d), q: mk(T * H * hd), k: mk(T * KV * hd), v: mk(T * KV * hd),
       att: mk(T * H * hd), h1: mk(T * f), h3: mk(T * f), g: mk(T * f), last: mk(d), logits: mk(V) };
+    // KV cache: rotated keys and values of every position fed so far, per layer.
+    this.kc = Array.from({ length: cfg.n_layers }, () => mk(T * KV * hd));
+    this.vc = Array.from({ length: cfg.n_layers }, () => mk(T * KV * hd));
+    this.pos = 0;
     this.read = device.createBuffer({ size: 4 * V, usage: GPUBufferUsage.MAP_READ | GPUBufferUsage.COPY_DST });
     // RoPE tables with the same f32 arithmetic as forge (scp_model.precompute_rope).
     const half = hd / 2, cos = new Float32Array(T * half), sin = new Float32Array(T * half);
@@ -228,30 +234,44 @@ export class ForgeModel {
     pass.dispatchWorkgroups(...groups);
   }
 
-  /** Logits after the last of `ids` (the last T tokens are used). */
+  /** Forget the cached positions. */
+  reset() {
+    this.pos = 0;
+  }
+
+  /** Logits after the last of `ids`, computed from scratch (the last T tokens are used). */
   async nextLogits(ids) {
+    this.reset();
+    return this.feed(ids.slice(-this.T));
+  }
+
+  /** Append `tokens` at the next positions (one block of GEMMs, keys and values
+   *  go to the cache) and return the logits after the last one. */
+  async feed(tokens) {
     const { dim: d, n_heads: H, n_kv_heads: KV, head_dim: hd, ffn: f, vocab_size: V, n_layers: L } = this.cfg;
-    const win = ids.slice(-this.T);
-    const n = win.length;
+    const n = tokens.length, p0 = this.pos, kvd = KV * hd;
+    if (n === 0) throw new Error("feed needs at least one token");
+    if (p0 + n > this.T) throw new Error(`context full: ${p0} + ${n} > ${this.T}`);
     const dev = this.device, b = this.b, w = this.w;
-    dev.queue.writeBuffer(b.tok, 0, new Uint32Array(win));
+    dev.queue.writeBuffer(b.tok, 0, new Uint32Array(tokens));
     this.uniforms.forEach((u) => u.destroy());
     this.uniforms = [];
     const enc = dev.createCommandEncoder();
     const pass = enc.beginComputePass();
     const ceil = (a, m) => Math.ceil(a / m);
-    const mm = (A, B, C, M, N, K, acc) => this.dispatch(pass, "matmul_nt", [A, B, C], [[M], [N], [K], [acc ? 1 : 0]], [ceil(N, 16), ceil(M, 16), 1]);
+    const mm = (A, B, C, M, N, K, acc, coff = 0) =>
+      this.dispatch(pass, "matmul_nt", [A, B, C], [[M], [N], [K], [acc ? 1 : 0], [coff]], [ceil(N, 16), ceil(M, 16), 1]);
     this.dispatch(pass, "embed", [b.tok, w["tok_emb.weight"], b.x], [[n], [d]], [ceil(n * d, WG), 1, 1]);
     const eps = this.cfg.norm_eps ?? 1e-5;
     for (let l = 0; l < L; l++) {
       const p = (s) => w[`blocks.${l}.${s}`];
       this.dispatch(pass, "rmsnorm", [b.x, p("attn_norm.weight"), b.xn], [[n], [d], [eps, "f"]], [n, 1, 1]);
       mm(b.xn, p("attn.wq.weight"), b.q, n, H * hd, d, false);
-      mm(b.xn, p("attn.wk.weight"), b.k, n, KV * hd, d, false);
-      mm(b.xn, p("attn.wv.weight"), b.v, n, KV * hd, d, false);
-      this.dispatch(pass, "rope", [b.q, this.cos, this.sin], [[n], [H], [hd]], [ceil((n * H * hd) / 2, WG), 1, 1]);
-      this.dispatch(pass, "rope", [b.k, this.cos, this.sin], [[n], [KV], [hd]], [ceil((n * KV * hd) / 2, WG), 1, 1]);
-      this.dispatch(pass, "attention", [b.q, b.k, b.v, b.att], [[n], [H], [KV], [hd], [1 / Math.sqrt(hd), "f"]], [H, n, 1]);
+      mm(b.xn, p("attn.wk.weight"), this.kc[l], n, kvd, d, false, p0 * kvd);
+      mm(b.xn, p("attn.wv.weight"), this.vc[l], n, kvd, d, false, p0 * kvd);
+      this.dispatch(pass, "rope", [b.q, this.cos, this.sin], [[n], [H], [hd], [p0], [0]], [ceil((n * H * hd) / 2, WG), 1, 1]);
+      this.dispatch(pass, "rope", [this.kc[l], this.cos, this.sin], [[n], [KV], [hd], [p0], [p0]], [ceil((n * kvd) / 2, WG), 1, 1]);
+      this.dispatch(pass, "attention", [b.q, this.kc[l], this.vc[l], b.att], [[n], [H], [KV], [hd], [1 / Math.sqrt(hd), "f"], [p0]], [H, n, 1]);
       mm(b.att, p("attn.wo.weight"), b.x, n, d, H * hd, true); // residual in the GEMM epilogue
       this.dispatch(pass, "rmsnorm", [b.x, p("ffn_norm.weight"), b.xn], [[n], [d], [eps, "f"]], [n, 1, 1]);
       mm(b.xn, p("ffn.w1.weight"), b.h1, n, f, d, false);
@@ -263,23 +283,30 @@ export class ForgeModel {
     pass.end();
     enc.copyBufferToBuffer(b.xn, 4 * (n - 1) * d, b.last, 0, 4 * d);
     const pass2 = enc.beginComputePass();
-    this.dispatch(pass2, "matmul_nt", [b.last, w["tok_emb.weight"], b.logits], [[1], [V], [d], [0]], [ceil(V, 16), 1, 1]);
+    this.dispatch(pass2, "matmul_nt", [b.last, w["tok_emb.weight"], b.logits], [[1], [V], [d], [0], [0]], [ceil(V, 16), 1, 1]);
     pass2.end();
     enc.copyBufferToBuffer(b.logits, 0, this.read, 0, 4 * V);
     dev.queue.submit([enc.finish()]);
     await this.read.mapAsync(GPUMapMode.READ);
     const out = new Float32Array(this.read.getMappedRange().slice(0));
     this.read.unmap();
+    this.pos += n;
     return out;
   }
 
-  /** Greedy (temperature 0) or temperature/top-k sampling. Returns new ids and tokens/s. */
+  /** Greedy (temperature 0) or temperature/top-k sampling with the KV cache:
+   *  the prompt is one block, every new token one position. The prompt is cut
+   *  from the left so prompt + maxNew fits; if the context still fills up,
+   *  the newest half is re-encoded. Returns new ids and tokens/s. */
   async generate(prompt, { maxNew = 64, temperature = 0, topK = 40, seed = 1, stop = null } = {}) {
     let s = seed >>> 0 || 1;
     const rand = () => ((s = (s * 1664525 + 1013904223) >>> 0) / 4294967296);
-    const ids = [...prompt], t0 = performance.now();
+    const keep = Math.max(1, this.T - maxNew);
+    const ids = prompt.length ? prompt.slice(-keep) : [0];
+    const start = ids.length, t0 = performance.now();
+    this.reset();
+    let logits = await this.feed(ids);
     for (let i = 0; i < maxNew; i++) {
-      const logits = await this.nextLogits(ids);
       let next = 0;
       if (temperature <= 0) {
         for (let j = 1; j < logits.length; j++) if (logits[j] > logits[next]) next = j;
@@ -291,10 +318,16 @@ export class ForgeModel {
         for (let j = 0; j < idx.length; j++) { r -= wts[j]; if (r <= 0) { next = idx[j]; break; } }
       }
       ids.push(next);
-      if (next === stop) break;
+      if (next === stop || i === maxNew - 1) break;
+      if (this.pos === this.T) {
+        this.reset();
+        logits = await this.feed(ids.slice(-Math.floor(this.T / 2)));
+      } else {
+        logits = await this.feed([next]);
+      }
     }
     const secs = (performance.now() - t0) / 1000;
-    return { ids: ids.slice(prompt.length), tokensPerSecond: (ids.length - prompt.length) / secs };
+    return { ids: ids.slice(start), tokensPerSecond: (ids.length - start) / secs };
   }
 }
 

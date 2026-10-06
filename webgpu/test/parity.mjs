@@ -29,6 +29,19 @@ for (const prompt of [[1], [3, 1, 4, 1, 5], Array.from({ length: 40 }, (_, i) =>
   worst = Math.max(worst, diff / scale);
   console.log(`prompt len ${prompt.length}: max |Δlogit| ${diff.toExponential(2)} (scale ${scale.toFixed(2)})`);
 }
+// Incremental decoding: a block, then single positions through the KV cache.
+{
+  const prompt = Array.from({ length: 30 }, (_, i) => (i * 5 + 2) % cfg.vocab_size);
+  const ref = JSON.parse(execFileSync(forge, ["logits", "--ckpt", dir, "--prompt-ids", prompt.join(","), "--threads", "2"], { encoding: "utf8" }).trim().split("\n").pop()).logits;
+  model.reset();
+  await model.feed(prompt.slice(0, 11));
+  let got;
+  for (let i = 11; i < prompt.length; i++) got = await model.feed([prompt[i]]);
+  const diff = Math.max(...ref.map((r, i) => Math.abs(r - got[i])));
+  const scale = Math.max(...ref.map(Math.abs));
+  worst = Math.max(worst, diff / scale);
+  console.log(`KV cache, block 11 + 19 single steps: max |Δlogit| ${diff.toExponential(2)} (scale ${scale.toFixed(2)})`);
+}
 const gpuGen = (await model.generate([2, 3, 4], { maxNew: 12 })).ids;
 const cpuGen = JSON.parse(execFileSync(forge, ["generate", "--ckpt", dir, "--prompt-ids", "2,3,4", "--max-new", "12", "--threads", "2"], { encoding: "utf8" }).trim().split("\n").pop()).ids;
 console.log("greedy GPU", gpuGen.join(","), "\ngreedy CPU", cpuGen.join(","));
