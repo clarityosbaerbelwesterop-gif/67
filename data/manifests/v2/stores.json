@@ -1,0 +1,80 @@
+{
+  "stores": {
+    "code": {
+      "store": "code-v2",
+      "tokens": 363477769,
+      "val_tokens": 3624469,
+      "dtype": "uint16",
+      "vocab_size": 8192,
+      "bin": "train.bin",
+      "val_bin": "train.val.bin",
+      "mix": {
+        "code": 145996
+      },
+      "mix_fractions": {
+        "code": 1.0
+      },
+      "sha256": {
+        "train.bin": "f05e240be8a820b7962fce9eb9b479ffbc13b3f58a91208e71f72eac58a22f7f",
+        "train.val.bin": "d0ef4446012cbb0caec54e87f68fc076fe18be6befef797a27f6abfd648eb426",
+        "tokenizer.json": "fe1ee90ae9275c55bb8583c1c5dc231d1197e8c2ca8eea32ac57912518018012"
+      },
+      "pipeline": "data/build_corpus_v2.py: licence allow-list, SCP quality filters, exact dedup, 13-gram decontamination (HumanEval, MBPP, GSM8K), hash-based ~1% val split, forge tokenize (= scp_model.bpe), eos per document"
+    },
+    "general": {
+      "store": "general-v2",
+      "tokens": 39071447,
+      "val_tokens": 337392,
+      "dtype": "uint16",
+      "vocab_size": 8192,
+      "bin": "train.bin",
+      "val_bin": "train.val.bin",
+      "mix": {
+        "general": 16454
+      },
+      "mix_fractions": {
+        "general": 1.0
+      },
+      "sha256": {
+        "train.bin": "95251edc3b0f8772868541960a027d321c501178baec06aeb3e2d35438d9725f",
+        "train.val.bin": "bd1d43b9e5649a8d0a19d9f44d87bd9c2da9d268e7f3d8efe5b37cce9fa5031d",
+        "tokenizer.json": "fe1ee90ae9275c55bb8583c1c5dc231d1197e8c2ca8eea32ac57912518018012"
+      },
+      "pipeline": "data/build_corpus_v2.py: licence allow-list, SCP quality filters, exact dedup, 13-gram decontamination (HumanEval, MBPP, GSM8K), hash-based ~1% val split, forge tokenize (= scp_model.bpe), eos per document"
+    },
+    "base": {
+      "store": "base-v2",
+      "tokens": 402549216,
+      "val_tokens": 3961861,
+      "dtype": "uint16",
+      "vocab_size": 8192,
+      "bin": "train.bin",
+      "val_bin": "train.val.bin",
+      "mix": {
+        "code": 145996,
+        "general": 16454
+      },
+      "mix_fractions": {
+        "code": 0.8987134502923977,
+        "general": 0.10128654970760234
+      },
+      "sha256": {
+        "train.bin": "42623b49ad13e0827c81dfa235de733c3a746b3e5a8eec0e42f4f6721dd014a1",
+        "train.val.bin": "0e2920b9da10f483008fc9590076bf715d21061566e6891dce2119157addfbca",
+        "tokenizer.json": "fe1ee90ae9275c55bb8583c1c5dc231d1197e8c2ca8eea32ac57912518018012"
+      },
+      "pipeline": "data/build_corpus_v2.py: licence allow-list, SCP quality filters, exact dedup, 13-gram decontamination (HumanEval, MBPP, GSM8K), hash-based ~1% val split, forge tokenize (= scp_model.bpe), eos per document"
+    }
+  },
+  "packages": {
+    "ok": 2959,
+    "rejected-licence": 219,
+    "no-sdist": 35,
+    "unavailable": 1
+  },
+  "evals_decontaminated_against": [
+    "humaneval",
+    "mbpp",
+    "gsm8k"
+  ]
+}
