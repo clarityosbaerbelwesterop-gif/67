@@ -50,16 +50,6 @@ const INT8: MiniFloat = MiniFloat {
     bias: 0,
     max_code: 127,
 };
-const E4M3: MiniFloat = MiniFloat {
-    m_bits: 3,
-    bias: 7,
-    max_code: 0x7e,
-};
-const E5M2: MiniFloat = MiniFloat {
-    m_bits: 2,
-    bias: 15,
-    max_code: 0x7b,
-};
 
 impl Elem {
     /// All element types.
@@ -105,8 +95,8 @@ impl Elem {
     #[inline(always)]
     const fn minifloat(self) -> MiniFloat {
         match self {
-            Elem::Fp8E4M3 => E4M3,
-            Elem::Fp8E5M2 => E5M2,
+            Elem::Fp8E4M3 => fp8::Kind::E4M3.minifloat(),
+            Elem::Fp8E5M2 => fp8::Kind::E5M2.minifloat(),
             Elem::Fp4E2M1 => fp4::E2M1,
             Elem::Int8 => INT8,
         }

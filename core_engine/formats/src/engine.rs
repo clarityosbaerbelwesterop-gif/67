@@ -209,8 +209,8 @@ pub const fn stochastic_bits(seed: u32, index: u64) -> u32 {
     sr_bits(sr_key(seed, (index >> 32) as u32), index as u32)
 }
 
-/// Run `f(i, element_rounding)` for `i in 0..n`, with the rounding-mode match
-/// hoisted out of the loop. For `Stochastic(seed)`, element `i` gets
+/// Test helper: run `f(i, element_rounding)` for `i in 0..n`. For
+/// `Stochastic(seed)`, element `i` gets
 /// `Stochastic(stochastic_bits(seed, base + i))`.
 #[cfg(test)]
 pub(crate) fn for_each_rounding(

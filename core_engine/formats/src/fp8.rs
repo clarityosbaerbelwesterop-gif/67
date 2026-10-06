@@ -60,6 +60,12 @@ impl Kind {
         }
     }
 
+    /// Engine parameters (shared with the MX element encoders).
+    #[inline(always)]
+    pub(crate) const fn minifloat(self) -> MiniFloat {
+        self.spec().mf
+    }
+
     /// Exponent bits.
     pub const fn exponent_bits(self) -> u32 {
         match self {

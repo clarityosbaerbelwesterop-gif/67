@@ -12,9 +12,29 @@
 //! | FP4 E2M1        | [`fp4`] | s.2.1, bias 1     | none (saturating)            | 6          |
 //! | MX blocks       | [`mx`]  | 32 elems + E8M0   | NaN scale 0xFF               |            |
 //!
-//! Everything is implemented with integer bit manipulation (no float
-//! arithmetic on the rounding path), so results are identical on every
-//! platform and independent of the FPU rounding mode.
+//! Every conversion is integer bit manipulation (no float arithmetic on the
+//! rounding path), so results are identical on every platform and
+//! independent of the FPU rounding mode. The only float operations are the
+//! MX scale multiplications on dequantization, which are exact.
+//!
+//! # Performance
+//!
+//! The per-element encoders are branch-free 32-bit lane code. The slice
+//! entry points (`encode_slice`, `decode_slice`, `encode_packed`,
+//! [`mx::quantize`], [`fake_quant`], ...) are compiled for the baseline
+//! target, x86-64-v3 (AVX2) and AVX-512, and dispatch at run time; every
+//! level is bit-identical ([`set_isa_limit`] caps it for tests and
+//! benchmarks). `examples/bench.rs` measures throughput.
+//!
+//! # Conventions beyond the specifications
+//!
+//! * `TowardZero` saturates finite overflow even for non-saturating FP8
+//!   encodes (IEEE 754 §7.4); see below.
+//! * FP4 has no NaN: [`fp4::encode`] maps NaN to `+6`; [`fake_quant`] passes
+//!   NaN through instead.
+//! * An MX block containing NaN or ±Inf gets the NaN scale (0xFF).
+//! * MX INT8 elements are clamped symmetrically to ±127 (-128 is never
+//!   produced but decodes to -2).
 //!
 //! # Rounding
 //!
