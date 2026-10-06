@@ -403,3 +403,98 @@ fn diloco_over_the_tcp_ring_with_bf16_pseudo_gradients() {
     }
     std::fs::remove_dir_all(out).ok();
 }
+
+fn weights_of(tr: &Trainer) -> std::collections::BTreeMap<String, ckpt::Tensor> {
+    model::params(&tr.cfg.model)
+        .into_iter()
+        .map(|p| {
+            let data = tr.param(&p.name).unwrap().to_vec();
+            (
+                p.name,
+                ckpt::Tensor {
+                    shape: p.shape,
+                    data,
+                },
+            )
+        })
+        .collect()
+}
+
+#[test]
+fn kv_cache_decoder_matches_the_isa_forward_pass() {
+    use crate::decode::Decoder;
+    let out = std::env::temp_dir().join(format!("forge-kv-{}", std::process::id()));
+    let mut c = cfg("kv", out.to_str().unwrap(), 1);
+    c.model = ModelConfig {
+        vocab_size: 37,
+        dim: 24,
+        n_layers: 3,
+        n_heads: 6,
+        n_kv_heads: 2,
+        ffn_hidden: Some(40),
+        max_seq_len: 24,
+        rope_theta: 10_000.0,
+        norm_eps: 1e-5,
+    };
+    let (sink, _) = collect();
+    let tr = Trainer::new(c.clone(), sink).unwrap();
+    let w = weights_of(&tr);
+    let ids: Vec<u32> = (0..20).map(|i| (i * 7 + 3) % 37).collect();
+    let mut s = Sampler::new(&c.model, &w, 24, 2).unwrap();
+    let mut d = Decoder::new(&c.model, &w, 2).unwrap();
+    let close = |a: &[f32], b: &[f32], at: usize| {
+        let scale = a.iter().fold(1f32, |m, v| m.max(v.abs()));
+        let err = a.iter().zip(b).fold(0f32, |m, (x, y)| m.max((x - y).abs()));
+        assert!(
+            err <= 1e-4 * scale,
+            "position {at}: max |Δlogit| {err} (scale {scale})"
+        );
+    };
+    // A prompt block of 8 positions, then one position at a time.
+    let got = d.feed(&ids[..8]).unwrap();
+    close(&s.next_logits(&ids[..8]).unwrap(), &got, 8);
+    for i in 9..=ids.len() {
+        let got = d.feed(&ids[i - 1..i]).unwrap();
+        close(&s.next_logits(&ids[..i]).unwrap(), &got, i);
+    }
+    assert_eq!(d.len(), 20);
+    assert!(
+        d.feed(&[1, 2, 3, 4, 5]).is_err(),
+        "context overflow must be an error"
+    );
+    assert!(
+        d.feed(&[99]).is_err(),
+        "token outside the vocabulary must be an error"
+    );
+    std::fs::remove_dir_all(out).ok();
+}
+
+#[test]
+fn kv_cache_generation_equals_window_sampling() {
+    use crate::decode::Decoder;
+    let out = std::env::temp_dir().join(format!("forge-kvg-{}", std::process::id()));
+    let (sink, _) = collect();
+    let mut tr = Trainer::new(cfg("kvg", out.to_str().unwrap(), 60), sink).unwrap();
+    tr.run(None).unwrap();
+    let w = weights_of(&tr);
+    let m = tiny(8);
+    let mut s = Sampler::new(&m, &w, m.max_seq_len, 2).unwrap();
+    let mut d = Decoder::new(&m, &w, 2).unwrap();
+    for prompt in [vec![2u32, 3, 4, 0], vec![0], vec![4, 0, 1, 2, 3, 4, 0, 1]] {
+        let n = m.max_seq_len - prompt.len();
+        let want = s.generate(&prompt, n, 0.0, 1, 0, None).unwrap();
+        assert_eq!(d.generate(&prompt, n, 0.0, 1, 0, None).unwrap(), want);
+        // Sampled decoding draws from the same RNG stream.
+        let want = s.generate(&prompt, n, 0.8, 4, 9, None).unwrap();
+        assert_eq!(d.generate(&prompt, n, 0.8, 4, 9, None).unwrap(), want);
+    }
+    assert_eq!(
+        d.generate(&[2, 3], 6, 0.0, 1, 0, None).unwrap(),
+        vec![4, 0, 1, 2, 3, 4]
+    );
+    // Longer than the context: the cache is rebuilt and decoding continues.
+    let long = d.generate(&[0, 1, 2], 40, 0.0, 1, 0, None).unwrap();
+    assert_eq!(long.len(), 40);
+    assert!(long.windows(2).all(|p| p[1] == (p[0] + 1) % 5), "{long:?}");
+    std::fs::remove_dir_all(out).ok();
+}

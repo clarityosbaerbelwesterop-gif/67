@@ -1,4 +1,4 @@
-"""HumanEval pass@1 (greedy) for forge checkpoints, with real execution.
+"""HumanEval / MBPP pass@1 (greedy) for forge checkpoints, with real execution.
 
 Prompts are encoded with the shared SCP tokenizer, completions come from
 `forge generate --prompts-file` (weights loaded once), and every completion runs
@@ -6,7 +6,10 @@ against the official tests in an isolated Python subprocess (`-I`, empty env,
 temp dir, CPU/memory/file-size limits, 10 s timeout). Results are measured,
 including the expected zero for small models.
 
-Usage: python3 scripts/humaneval.py runs/quasnir-1/FINAL [--limit 164] [--max-new 192]
+MBPP uses the standard test split (task ids 11-510) and the prompt of Austin
+et al. (2021): the task text and the first test inside a docstring.
+
+Usage: python3 scripts/humaneval.py runs/quasnir-1/FINAL [--suite humaneval|mbpp] [--limit N] [--max-new 192]
 """
 import argparse
 import importlib.util
@@ -21,7 +24,23 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 SCP = Path(os.environ.get("SCP_ROOT", "/home/user/swarm-compute-protocol-")) / "model" / "scp_model"
-STOPS = ["\ndef ", "\nclass ", "\nif __name__", "\nprint(", "\n#", "\nassert"]
+STOPS = {
+    "humaneval": ["\ndef ", "\nclass ", "\nif __name__", "\nprint(", "\n#", "\nassert"],
+    "mbpp": ["\nassert", '\n"""', "\nif __name__", "\nprint(", "\n#"],
+}
+
+
+def problems(suite: str) -> list:
+    rows = [json.loads(l) for l in (ROOT / f"data/stores/evals/{suite}.jsonl").read_text().splitlines() if l.strip()]
+    if suite == "humaneval":
+        return [{"prompt": p["prompt"], "tail": "\n\n" + p["test"] + f"\ncheck({p['entry_point']})\n"} for p in rows]
+    out = []
+    for p in rows:
+        if 11 <= p["task_id"] <= 510:
+            prompt = f'"""\n{p["text"]}\n{p["test_list"][0]}\n"""\n'
+            tail = "\n\n" + p.get("test_setup_code", "") + "\n" + "\n".join(p["test_list"]) + "\n"
+            out.append({"prompt": prompt, "tail": tail})
+    return out
 
 
 def tokenizer(path: Path):
@@ -55,12 +74,13 @@ def passes(program: str) -> bool:
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("ckpt")
-    ap.add_argument("--limit", type=int, default=164)
+    ap.add_argument("--suite", choices=["humaneval", "mbpp"], default="humaneval")
+    ap.add_argument("--limit", type=int, default=None)
     ap.add_argument("--max-new", type=int, default=192)
     ap.add_argument("--tokenizer", default=str(ROOT / "data/stores/base/tokenizer.json"))
     args = ap.parse_args()
     tok = tokenizer(Path(args.tokenizer))
-    probs = [json.loads(l) for l in (ROOT / "data/stores/evals/humaneval.jsonl").read_text().splitlines() if l.strip()][: args.limit]
+    probs = problems(args.suite)[: args.limit]
     with tempfile.NamedTemporaryFile("w", suffix=".jsonl", delete=False) as f:
         for p in probs:
             f.write(json.dumps(tok.encode(p["prompt"])) + "\n")
@@ -72,10 +92,10 @@ def main() -> int:
     solved = 0
     for p, g in zip(probs, gens):
         text = tok.decode([i for i in g["ids"] if i < 256 + len(tok.merges)])
-        cut = min([text.find(s) for s in STOPS if s in text] + [len(text)])
-        program = p["prompt"] + text[:cut] + "\n\n" + p["test"] + f"\ncheck({p['entry_point']})\n"
+        cut = min([text.find(s) for s in STOPS[args.suite] if s in text] + [len(text)])
+        program = p["prompt"] + text[:cut] + p["tail"]
         solved += passes(program)
-    result = {"ckpt": args.ckpt, "suite": "humaneval", "problems": len(probs), "passed": solved, "pass@1": solved / max(1, len(probs)),
+    result = {"ckpt": args.ckpt, "suite": args.suite, "problems": len(probs), "passed": solved, "pass@1": solved / max(1, len(probs)),
               "decoding": "greedy", "max_new_tokens": args.max_new}
     print(json.dumps(result))
     return 0

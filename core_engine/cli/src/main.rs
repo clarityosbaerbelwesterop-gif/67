@@ -6,7 +6,8 @@
 //!                  [--inner-steps H] [--outer-lr 0.7] [--momentum 0.9] [--compression none|bf16|int8[:B]]
 //!   forge merge    --base DIR --child DIR --child DIR [--method ties|linear] [--density D] [--lambda L] --out DIR
 //!   forge eval     --ckpt DIR --data META [--split val|train] [--batch B] [--seq T] [--batches K]
-//!   forge generate --ckpt DIR --prompt-ids 1,2,3 [--max-new N] [--temperature T] [--top-k K] [--seed S]
+//!   forge generate --ckpt DIR --prompt-ids 1,2,3 | --prompts-file F [--max-new N] [--temperature T] [--top-k K]
+//!                  [--seed S] [--stop-id ID] [--decoder kv|window]
 //!   forge disasm   --config run.json [--limit N]
 
 use forge_isa::{compile, disassemble, CompileOptions};
@@ -291,6 +292,12 @@ fn eval_cmd(a: &Args) -> Result<(), String> {
         a.num("--seq", cfg.max_seq_len.min(256))?,
         a.num("--batches", 20)?,
     );
+    if shape.1 < 2 || shape.1 > cfg.max_seq_len || shape.0 == 0 || shape.2 == 0 {
+        return Err(format!(
+            "--seq must be in 2..={} for this model, --batch and --batches positive",
+            cfg.max_seq_len
+        ));
+    }
     let (loss, acc) = forge_train::evaluate_weights(
         &cfg,
         &w,
@@ -315,7 +322,6 @@ fn generate_cmd(a: &Args) -> Result<(), String> {
             .map(|x| x.trim().parse().map_err(|_| format!("bad id {x}")))
             .collect()
     };
-    let mut s = forge_train::Sampler::new(&cfg, &w, a.num("--ctx", cfg.max_seq_len)?, threads(a)?)?;
     let (max_new, temp, top_k, seed) = (
         a.num("--max-new", 32)?,
         a.num("--temperature", 0.0)?,
@@ -326,6 +332,24 @@ fn generate_cmd(a: &Args) -> Result<(), String> {
         .get("--stop-id")
         .map(|v| v.parse().map_err(|_| "bad --stop-id".to_string()))
         .transpose()?;
+    // Default: KV-cache decoding. `--decoder window` (or an explicit `--ctx`)
+    // re-runs the ISA window program for every token, as a reference.
+    type Gen = Box<dyn FnMut(&[u32], u64) -> Result<Vec<u32>, String>>;
+    let window = a.get("--decoder").as_deref() == Some("window") || a.get("--ctx").is_some();
+    let (mut generate, decoder): (Gen, &str) = if window {
+        let mut s =
+            forge_train::Sampler::new(&cfg, &w, a.num("--ctx", cfg.max_seq_len)?, threads(a)?)?;
+        (
+            Box::new(move |ids, seed| s.generate(ids, max_new, temp, top_k, seed, stop)),
+            "window",
+        )
+    } else {
+        let mut d = forge_train::decode::Decoder::new(&cfg, &w, threads(a)?)?;
+        (
+            Box::new(move |ids, seed| d.generate(ids, max_new, temp, top_k, seed, stop)),
+            "kv",
+        )
+    };
     // Batch mode: one JSON array of prompt ids per line; weights are loaded once.
     if let Some(file) = a.get("--prompts-file") {
         let text = std::fs::read_to_string(&file).map_err(|e| format!("{file}: {e}"))?;
@@ -333,19 +357,19 @@ fn generate_cmd(a: &Args) -> Result<(), String> {
             let ids: Vec<u32> =
                 serde_json::from_str(line).map_err(|e| format!("{file}:{}: {e}", i + 1))?;
             let t0 = Instant::now();
-            let out = s.generate(&ids, max_new, temp, top_k, seed + i as u64, stop)?;
+            let out = generate(&ids, seed + i as u64)?;
             println!(
                 "{}",
-                json!({"type": "generate", "index": i, "ids": out, "seconds": t0.elapsed().as_secs_f64()})
+                json!({"type": "generate", "index": i, "ids": out, "decoder": decoder, "seconds": t0.elapsed().as_secs_f64()})
             );
         }
         return Ok(());
     }
     let ids = parse(&a.need("--prompt-ids")?)?;
-    let out = s.generate(&ids, max_new, temp, top_k, seed, stop)?;
+    let out = generate(&ids, seed)?;
     println!(
         "{}",
-        json!({"type": "generate", "prompt_ids": ids, "ids": out})
+        json!({"type": "generate", "prompt_ids": ids, "ids": out, "decoder": decoder})
     );
     Ok(())
 }

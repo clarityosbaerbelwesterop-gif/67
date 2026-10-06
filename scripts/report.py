@@ -2,6 +2,7 @@
 same windows (fixed seed) and apply the Darus acceptance rule. Writes
 runs/report.json and prints a table. Numbers are measured, never edited."""
 import json
+import os
 import subprocess
 import sys
 
@@ -17,6 +18,8 @@ def evaluate(ckpt: str, data: str) -> dict:
 
 
 def main() -> int:
+    if os.path.isdir("runs/darus-1/FINAL-default"):  # fixed settings, before scripts/merge_search.py
+        MODELS["darus-1-default"] = "runs/darus-1/FINAL-default"
     merge = json.load(open("training/configs/darus-1.merge.json"))
     tol = merge["acceptance"]["max_regression_vs_parents"]
     rows = {m: {s: evaluate(c, d) for s, d in SUITES.items()} for m, c in MODELS.items()}

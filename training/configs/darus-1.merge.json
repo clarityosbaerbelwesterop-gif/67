@@ -15,5 +15,11 @@
       "general",
       "code"
     ]
+  },
+  "search": {
+    "budget": 24,
+    "select_seed": 777,
+    "select_batches": 16,
+    "rng_seed": 67
   }
 }

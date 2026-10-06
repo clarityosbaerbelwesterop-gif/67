@@ -111,5 +111,17 @@ safetensors under SCP's PyTorch parameter names, so checkpoints load into
   ingestion, command validation, the FIFO control channel, both agents in
   every mode (including that replayed history never triggers an action),
   token auth, the WebSocket protocol and checkpoint serving confined to `runs/`.
+- `forge generate` decodes with a KV cache: the prompt runs as one block of
+  GEMMs and each new token as a single row. Its logits match the ISA forward
+  pass to a relative 1e-4, and greedy and sampled outputs are identical. It
+  is about 20× faster per token than re-running the window.
+- `scripts/humaneval.py --suite humaneval|mbpp` measures pass@1 with real,
+  sandboxed execution. The harness passes the reference solutions (20/20 on
+  both suites) and fails wrong code.
+- `scripts/darus_finish.sh` completes Darus after training:
+  - an evolutionary merge search (`scripts/merge_search.py`: TIES or linear,
+    density and λ, minimising the worst-case regression against the better
+    parent);
+  - then the report and both code benchmarks for all four models.
 - `runs/report.json` holds measured losses, perplexities and accuracies of
   every model. No number in this repository is a projection.

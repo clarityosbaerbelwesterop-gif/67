@@ -4,6 +4,7 @@
 pub mod ckpt;
 pub mod config;
 pub mod data;
+pub mod decode;
 pub mod diloco;
 pub mod merge;
 pub mod model;
@@ -96,33 +97,7 @@ impl Sampler {
         let mut ids = prompt.to_vec();
         for _ in 0..max_new {
             let logits = self.next_logits(&ids)?;
-            let next = if temperature <= 0.0 {
-                logits
-                    .iter()
-                    .enumerate()
-                    .max_by(|a, b| a.1.total_cmp(b.1))
-                    .map(|(i, _)| i as u32)
-                    .unwrap()
-            } else {
-                let mut idx: Vec<usize> = (0..logits.len()).collect();
-                idx.sort_by(|&a, &b| logits[b].total_cmp(&logits[a]));
-                idx.truncate(top_k.max(1));
-                let mx = logits[idx[0]];
-                let w: Vec<f64> = idx
-                    .iter()
-                    .map(|&i| (((logits[i] - mx) / temperature) as f64).exp())
-                    .collect();
-                let mut r = rng.next_f64() * w.iter().sum::<f64>();
-                let mut pick = idx[idx.len() - 1];
-                for (k, &i) in idx.iter().enumerate() {
-                    r -= w[k];
-                    if r <= 0.0 {
-                        pick = i;
-                        break;
-                    }
-                }
-                pick as u32
-            };
+            let next = pick(&logits, temperature, top_k, &mut rng);
             ids.push(next);
             if Some(next) == stop {
                 break;
@@ -130,6 +105,35 @@ impl Sampler {
         }
         Ok(ids[prompt.len()..].to_vec())
     }
+}
+
+/// Next token from `logits`: argmax when `temperature <= 0`, otherwise
+/// temperature sampling restricted to the `top_k` largest logits.
+pub fn pick(logits: &[f32], temperature: f32, top_k: usize, rng: &mut rng::Rng) -> u32 {
+    if temperature <= 0.0 {
+        return logits
+            .iter()
+            .enumerate()
+            .max_by(|a, b| a.1.total_cmp(b.1))
+            .map(|(i, _)| i as u32)
+            .unwrap();
+    }
+    let mut idx: Vec<usize> = (0..logits.len()).collect();
+    idx.sort_by(|&a, &b| logits[b].total_cmp(&logits[a]));
+    idx.truncate(top_k.max(1));
+    let mx = logits[idx[0]];
+    let w: Vec<f64> = idx
+        .iter()
+        .map(|&i| (((logits[i] - mx) / temperature) as f64).exp())
+        .collect();
+    let mut r = rng.next_f64() * w.iter().sum::<f64>();
+    for (k, &i) in idx.iter().enumerate() {
+        r -= w[k];
+        if r <= 0.0 {
+            return i as u32;
+        }
+    }
+    idx[idx.len() - 1] as u32
 }
 
 /// Mean loss and next-token accuracy of `weights` on `batches` windows of a split.
