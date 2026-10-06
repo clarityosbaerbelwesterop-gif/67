@@ -158,6 +158,14 @@ unsafe fn micro<const M: usize>(
     beta: f32,
     nr: usize,
 ) {
+    // Pull the C tile towards L1 while the FMA loop runs (it was usually
+    // evicted since the previous depth block touched it).
+    for i in 0..M {
+        let row = c.wrapping_add(i * ldc).cast::<i8>().cast_const();
+        _mm_prefetch::<_MM_HINT_T0>(row);
+        _mm_prefetch::<_MM_HINT_T0>(row.wrapping_add(64));
+        _mm_prefetch::<_MM_HINT_T0>(row.wrapping_add(nr * 4 - 1));
+    }
     let mut c0 = [_mm512_setzero_ps(); M];
     let mut c1 = [_mm512_setzero_ps(); M];
     let (mut pa, mut pb) = (a, b);

@@ -6,6 +6,8 @@ use std::arch::x86_64::*;
 pub(crate) mod amx;
 pub(crate) mod avx2;
 pub(crate) mod avx512;
+#[cfg(test)]
+mod probe;
 
 /// In-register transpose of an 8×8 f32 block: on return `r[j]` holds column
 /// `j` of the input rows.
