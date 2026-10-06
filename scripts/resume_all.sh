@@ -8,16 +8,21 @@ set -uo pipefail
 cd "$(dirname "$0")/.."
 mkdir -p runs
 running() { pgrep -f "$1" > /dev/null; }
-if [ ! -e runs/benchmarks.jsonl ] || ! grep -q '"finished"' runs/benchmarks.jsonl 2>/dev/null; then
-  if ! running "bash scripts/train_all.sh"; then
-    setsid nohup bash -c 'echo $$ > runs/pipeline.pid; exec bash scripts/train_all.sh' >> runs/pipeline.log 2>&1 < /dev/null &
-    sleep 1
-    echo "started generation-1 pipeline"
-  fi
-  if ! running "bash scripts/darus_finish.sh"; then
-    setsid nohup bash scripts/darus_finish.sh "$(cat runs/pipeline.pid 2>/dev/null)" > runs/darus_finish.log 2>&1 < /dev/null &
-    echo "started darus finish chain"
-  fi
+gen1_trained=1
+for r in base-s rouge-1 quasnir-1 darus-1; do [ -e "runs/$r/FINAL" ] || gen1_trained=0; done
+# Training of generation 1: only while one of its checkpoints is missing (rerunning
+# train_all.sh after it finished would redo the fixed merge over the searched Darus).
+if [ "$gen1_trained" = 0 ] && ! running "bash scripts/train_all.sh"; then
+  setsid nohup bash -c 'echo $$ > runs/pipeline.pid; exec bash scripts/train_all.sh' >> runs/pipeline.log 2>&1 < /dev/null &
+  sleep 1
+  echo "started generation-1 pipeline"
+fi
+# Merge search, report and benchmarks: until benchmarks.jsonl says finished.
+if ! grep -q '"finished"' runs/benchmarks.jsonl 2>/dev/null && ! running "bash scripts/darus_finish.sh"; then
+  wait_pid=""
+  running "bash scripts/train_all.sh" && wait_pid="$(cat runs/pipeline.pid 2>/dev/null)"
+  setsid nohup bash scripts/darus_finish.sh $wait_pid > runs/darus_finish.log 2>&1 < /dev/null &
+  echo "started darus finish chain"
 fi
 if [ ! -e runs/longrun/STOP ] && ! running "scripts/supervise.sh"; then
   setsid nohup scripts/supervise.sh --days "${LONGRUN_DAYS:-10}" > /dev/null 2>&1 < /dev/null &
