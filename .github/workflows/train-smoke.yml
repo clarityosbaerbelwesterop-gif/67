@@ -34,6 +34,15 @@ jobs:
         env:
           CONFIG: ${{ inputs.config }}
         run: ./target/release/forge train --config "training/configs/$CONFIG" < /dev/null | tee train.jsonl
+      - name: DiLoCo across two processes (forge-comm TCP ring, int8 pseudo-gradients)
+        run: |
+          set -euo pipefail
+          P=127.0.0.1:47610,127.0.0.1:47611
+          ./target/release/forge diloco --config training/configs/smoke.json --rank 1 --world 2 --peers $P --inner-steps 10 --compression int8 > diloco1.jsonl &
+          W1=$!
+          ./target/release/forge diloco --config training/configs/smoke.json --rank 0 --world 2 --peers $P --inner-steps 10 --compression int8 > diloco0.jsonl
+          wait $W1
+          for w in 0 1; do grep '"type":"done"' diloco$w.jsonl; done
       - name: Benchmark
         run: ./target/release/forge bench --config training/configs/smoke.json --steps 5 | tee bench.jsonl
       - name: Summary
@@ -46,5 +55,6 @@ jobs:
           name: smoke-run
           path: |
             train.jsonl
+            diloco*.jsonl
             bench.jsonl
           retention-days: 14

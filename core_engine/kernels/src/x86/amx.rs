@@ -58,7 +58,9 @@ fn xcr0() -> u64 {
     let (lo, hi): (u32, u32);
     // SAFETY: XGETBV with ECX = 0 is valid whenever OSXSAVE is set, which is
     // checked by the caller through CPUID leaf 1 ECX bit 27.
-    unsafe { asm!("xgetbv", in("ecx") 0u32, out("eax") lo, out("edx") hi, options(nomem, nostack)) };
+    unsafe {
+        asm!("xgetbv", in("ecx") 0u32, out("eax") lo, out("edx") hi, options(nomem, nostack))
+    };
     ((hi as u64) << 32) | lo as u64
 }
 
@@ -66,7 +68,13 @@ fn request_permission() -> bool {
     const ARCH_REQ_XCOMP_PERM: libc::c_long = 0x1023;
     const XFEATURE_XTILEDATA: libc::c_long = 18;
     // SAFETY: plain syscall with integer arguments; failure is reported via the return value.
-    unsafe { libc::syscall(libc::SYS_arch_prctl, ARCH_REQ_XCOMP_PERM, XFEATURE_XTILEDATA) == 0 }
+    unsafe {
+        libc::syscall(
+            libc::SYS_arch_prctl,
+            ARCH_REQ_XCOMP_PERM,
+            XFEATURE_XTILEDATA,
+        ) == 0
+    }
 }
 
 fn detect() -> bool {
@@ -91,8 +99,16 @@ fn self_test() -> bool {
     let (m, n, k) = (32usize, 32usize, 64usize);
     let a: Vec<f32> = (0..m * k).map(|i| ((i * 7) % 5) as f32 - 2.0).collect();
     let b: Vec<f32> = (0..k * n).map(|i| ((i * 3) % 7) as f32 - 3.0).collect();
-    let am = MatRef { ptr: a.as_ptr(), ld: k, trans: crate::Trans::N };
-    let bm = MatRef { ptr: b.as_ptr(), ld: n, trans: crate::Trans::N };
+    let am = MatRef {
+        ptr: a.as_ptr(),
+        ld: k,
+        trans: crate::Trans::N,
+    };
+    let bm = MatRef {
+        ptr: b.as_ptr(),
+        ld: n,
+        trans: crate::Trans::N,
+    };
     let mut ap = vec![0u16; Amx::a_panel_len(k)];
     let mut bp = vec![0u16; Amx::b_panel_len(k)];
     let mut c = vec![f32::NAN; m * n];
@@ -102,7 +118,17 @@ fn self_test() -> bool {
         Amx::pack_a(&am, 0, m, 0, k, k, ap.as_mut_ptr());
         Amx::pack_b(&bm, 0, k, k, 0, n, bp.as_mut_ptr());
         Amx::begin();
-        Amx::kernel_block(m, n, k, ap.as_ptr(), bp.as_ptr(), c.as_mut_ptr(), n, 1.0, 0.0);
+        Amx::kernel_block(
+            m,
+            n,
+            k,
+            ap.as_ptr(),
+            bp.as_ptr(),
+            c.as_mut_ptr(),
+            n,
+            1.0,
+            0.0,
+        );
         Amx::end();
     }
     (0..m).all(|i| {
@@ -132,14 +158,26 @@ impl Engine for Amx {
     const TASK_FLOPS: f64 = 8.0e6;
 
     /// Panel: per 32-deep block, 32 rows × 32 bf16 (tile 0 = rows 0..16, tile 1 = rows 16..32).
-    unsafe fn pack_a(a: &MatRef, i0: usize, mr: usize, p0: usize, kc: usize, kc_pad: usize, dst: *mut u16) {
+    unsafe fn pack_a(
+        a: &MatRef,
+        i0: usize,
+        mr: usize,
+        p0: usize,
+        kc: usize,
+        kc_pad: usize,
+        dst: *mut u16,
+    ) {
         for kb in 0..kc_pad / KT {
             let block = dst.add(kb * MR * KT);
             for i in 0..MR {
                 let row = block.add(i * KT);
                 for kk in 0..KT {
                     let p = kb * KT + kk;
-                    *row.add(kk) = if i < mr && p < kc { bf16(a.at(i0 + i, p0 + p)) } else { 0 };
+                    *row.add(kk) = if i < mr && p < kc {
+                        bf16(a.at(i0 + i, p0 + p))
+                    } else {
+                        0
+                    };
                 }
             }
         }
@@ -147,7 +185,15 @@ impl Engine for Amx {
 
     /// Panel: per 32-deep block, two VNNI tiles (columns 0..16 and 16..32), each
     /// 16 pair-rows of [b(2r, j), b(2r+1, j)] for 16 columns j.
-    unsafe fn pack_b(b: &MatRef, p0: usize, kc: usize, kc_pad: usize, j0: usize, nr: usize, dst: *mut u16) {
+    unsafe fn pack_b(
+        b: &MatRef,
+        p0: usize,
+        kc: usize,
+        kc_pad: usize,
+        j0: usize,
+        nr: usize,
+        dst: *mut u16,
+    ) {
         for kb in 0..kc_pad / KT {
             for t in 0..2 {
                 let tile = dst.add(kb * 2 * TILE + t * TILE);
@@ -157,7 +203,11 @@ impl Engine for Amx {
                         let j = t * 16 + jj;
                         for e in 0..2 {
                             let p = kb * KT + 2 * r + e;
-                            *row.add(2 * jj + e) = if j < nr && p < kc { bf16(b.at(p0 + p, j0 + j)) } else { 0 };
+                            *row.add(2 * jj + e) = if j < nr && p < kc {
+                                bf16(b.at(p0 + p, j0 + j))
+                            } else {
+                                0
+                            };
                         }
                     }
                 }
@@ -237,7 +287,13 @@ unsafe fn block(
 /// packed panels of `blocks` depth blocks; `out` holds MR×NR f32.
 unsafe fn micro(a: *const u16, b: *const u16, blocks: usize, out: *mut f32) {
     let stride = ROW_BYTES;
-    asm!("tilezero tmm0", "tilezero tmm1", "tilezero tmm2", "tilezero tmm3", options(nostack, nomem));
+    asm!(
+        "tilezero tmm0",
+        "tilezero tmm1",
+        "tilezero tmm2",
+        "tilezero tmm3",
+        options(nostack, nomem)
+    );
     for kb in 0..blocks {
         let (a0, a1) = (a.add(kb * MR * KT), a.add(kb * MR * KT + TILE));
         let (b0, b1) = (b.add(kb * 2 * TILE), b.add(kb * 2 * TILE + TILE));
@@ -316,10 +372,26 @@ mod tests {
         const NC: usize = 96;
         const TASK_FLOPS: f64 = 1.0e4;
 
-        unsafe fn pack_a(a: &MatRef, i0: usize, mr: usize, p0: usize, kc: usize, kc_pad: usize, dst: *mut u16) {
+        unsafe fn pack_a(
+            a: &MatRef,
+            i0: usize,
+            mr: usize,
+            p0: usize,
+            kc: usize,
+            kc_pad: usize,
+            dst: *mut u16,
+        ) {
             Amx::pack_a(a, i0, mr, p0, kc, kc_pad, dst)
         }
-        unsafe fn pack_b(b: &MatRef, p0: usize, kc: usize, kc_pad: usize, j0: usize, nr: usize, dst: *mut u16) {
+        unsafe fn pack_b(
+            b: &MatRef,
+            p0: usize,
+            kc: usize,
+            kc_pad: usize,
+            j0: usize,
+            nr: usize,
+            dst: *mut u16,
+        ) {
             Amx::pack_b(b, p0, kc, kc_pad, j0, nr, dst)
         }
         #[allow(clippy::too_many_arguments)]
@@ -363,16 +435,43 @@ mod tests {
     #[test]
     fn driver_through_tile_layout_matches_reference() {
         let mut rng = Rng::new(31);
-        let shapes = [(1, 1, 1), (32, 32, 32), (33, 31, 65), (70, 100, 130), (5, 97, 3), (64, 64, 200)];
+        let shapes = [
+            (1, 1, 1),
+            (32, 32, 32),
+            (33, 31, 65),
+            (70, 100, 130),
+            (5, 97, 3),
+            (64, 64, 200),
+        ];
         for &(m, n, k) in &shapes {
-            for (ta, tb) in [(Trans::N, Trans::N), (Trans::T, Trans::N), (Trans::N, Trans::T), (Trans::T, Trans::T)] {
+            for (ta, tb) in [
+                (Trans::N, Trans::N),
+                (Trans::T, Trans::N),
+                (Trans::N, Trans::T),
+                (Trans::T, Trans::T),
+            ] {
                 for &(alpha, beta) in &[(1.0f32, 0.0f32), (0.5, 1.0), (-1.25, 0.75)] {
                     let a: Vec<f32> = (0..m * k).map(|_| rng.sym()).collect();
                     let b: Vec<f32> = (0..k * n).map(|_| rng.sym()).collect();
                     let c0: Vec<f32> = (0..m * n).map(|_| rng.sym()).collect();
-                    let (lda, ldb) = (if ta == Trans::N { k } else { m }, if tb == Trans::N { n } else { k });
-                    let at = |i: usize, p: usize| if ta == Trans::N { a[i * k + p] } else { a[p * m + i] };
-                    let bt = |p: usize, j: usize| if tb == Trans::N { b[p * n + j] } else { b[j * k + p] };
+                    let (lda, ldb) = (
+                        if ta == Trans::N { k } else { m },
+                        if tb == Trans::N { n } else { k },
+                    );
+                    let at = |i: usize, p: usize| {
+                        if ta == Trans::N {
+                            a[i * k + p]
+                        } else {
+                            a[p * m + i]
+                        }
+                    };
+                    let bt = |p: usize, j: usize| {
+                        if tb == Trans::N {
+                            b[p * n + j]
+                        } else {
+                            b[j * k + p]
+                        }
+                    };
                     let mut c = c0.clone();
                     let p = Problem {
                         m,
@@ -380,8 +479,16 @@ mod tests {
                         k,
                         alpha,
                         beta,
-                        a: MatRef { ptr: a.as_ptr(), ld: lda, trans: ta },
-                        b: MatRef { ptr: b.as_ptr(), ld: ldb, trans: tb },
+                        a: MatRef {
+                            ptr: a.as_ptr(),
+                            ld: lda,
+                            trans: ta,
+                        },
+                        b: MatRef {
+                            ptr: b.as_ptr(),
+                            ld: ldb,
+                            trans: tb,
+                        },
                         c: c.as_mut_ptr(),
                         ldc: n,
                     };

@@ -2,6 +2,8 @@
 //!
 //!   forge bench    [--threads N] [--config run.json] [--steps K]
 //!   forge train    --config run.json
+//!   forge diloco   --config run.json --rank R --world W --peers h0:p,h1:p,.. [--listen ADDR]
+//!                  [--inner-steps H] [--outer-lr 0.7] [--momentum 0.9] [--compression none|bf16|int8[:B]]
 //!   forge merge    --base DIR --child DIR --child DIR [--method ties|linear] [--density D] [--lambda L] --out DIR
 //!   forge eval     --ckpt DIR --data META [--split val|train] [--batch B] [--seq T] [--batches K]
 //!   forge generate --ckpt DIR --prompt-ids 1,2,3 [--max-new N] [--temperature T] [--top-k K] [--seed S]
@@ -45,6 +47,92 @@ impl Args {
             v.parse().map_err(|_| format!("bad value for {k}: {v}"))
         })
     }
+}
+
+/// One DiLoCo worker on a forge-comm TCP ring: `max_steps` local AdamW steps
+/// in rounds of `--inner-steps`, exchanging only pseudo-gradients. Every rank
+/// samples its own data windows (seed + rank); rank 0 writes the checkpoint.
+fn diloco_cmd(a: &Args) -> Result<(), String> {
+    use forge_train::diloco::{Collective, DiLoCo, RingCollective};
+    let mut cfg = load_config(&a.need("--config")?)?;
+    let rank: usize = a.num("--rank", 0)?;
+    let world: usize = a.num("--world", 1)?;
+    let peers = a
+        .need("--peers")?
+        .split(',')
+        .map(|p| p.trim().parse().map_err(|e| format!("peer {p}: {e}")))
+        .collect::<Result<Vec<std::net::SocketAddr>, String>>()?;
+    let listen: std::net::SocketAddr = match a.get("--listen") {
+        Some(l) => l.parse().map_err(|e| format!("--listen {l}: {e}"))?,
+        None => {
+            let p = peers.get(rank).ok_or("--rank outside --peers")?;
+            let any: std::net::IpAddr = if p.is_ipv4() {
+                [0u8; 4].into()
+            } else {
+                [0u16; 8].into()
+            };
+            (any, p.port()).into()
+        }
+    };
+    let inner: usize = a.num("--inner-steps", 50)?;
+    let outer_lr: f32 = a.num("--outer-lr", 0.7)?;
+    let momentum: f32 = a.num("--momentum", 0.9)?;
+    let comp_name = a.get("--compression").unwrap_or_else(|| "none".into());
+    let compression =
+        forge_comm::Compression::parse(&comp_name).ok_or("--compression none|bf16|int8[:block]")?;
+    let timeout = std::time::Duration::from_secs(a.num("--timeout-s", 120u64)?);
+    if inner == 0 {
+        return Err("--inner-steps must be positive".into());
+    }
+    cfg.seed += rank as u64;
+    if rank != 0 {
+        cfg.run = format!("{}-w{rank}", cfg.run);
+    }
+    let rounds = cfg.max_steps.div_ceil(inner);
+    let ring = forge_comm::Ring::connect(rank, world, listen, &peers, timeout)
+        .map_err(|e| format!("ring: {e}"))?;
+    let mut coll = RingCollective { ring, compression };
+    let mut tr = trainer::Trainer::new(cfg.clone(), trainer::stdout_sink())?;
+    if cfg.autotune {
+        tr.autotune();
+    }
+    let mut d = DiLoCo::new(&tr, inner, outer_lr, momentum);
+    d.synchronise(&mut tr, &mut coll)?;
+    let wall = |t: Instant| t.elapsed().as_secs_f64() * 1e3;
+    for round in 1..=rounds {
+        let t0 = Instant::now();
+        let loss = d.round(&mut tr, &mut coll)?;
+        let st = coll.ring.stats();
+        println!(
+            "{}",
+            json!({"type": "diloco", "run": cfg.run, "rank": rank, "world": coll.world(), "round": round,
+                   "rounds": rounds, "step": tr.step, "inner_steps": inner, "loss": loss, "round_ms": wall(t0),
+                   "comm_ms": st.last_ms, "bytes_sent": st.bytes_sent, "bytes_received": st.bytes_received,
+                   "compression": comp_name, "ts": unix_now()})
+        );
+    }
+    let (val_loss, val_acc) = tr.evaluate()?;
+    println!(
+        "{}",
+        json!({"type": "eval", "run": cfg.run, "rank": rank, "step": tr.step, "val_loss": val_loss, "val_acc": val_acc, "ts": unix_now()})
+    );
+    if rank == 0 {
+        tr.checkpoint()?;
+    }
+    coll.ring
+        .barrier()
+        .map_err(|e| format!("final barrier: {e}"))?;
+    println!(
+        "{}",
+        json!({"type": "done", "run": cfg.run, "rank": rank, "step": tr.step, "val_loss": val_loss, "ts": unix_now()})
+    );
+    Ok(())
+}
+
+fn unix_now() -> f64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0.0, |d| d.as_secs_f64())
 }
 
 fn load_config(path: &str) -> Result<TrainConfig, String> {
@@ -318,6 +406,7 @@ fn main() {
             let mut tr = trainer::Trainer::new(cfg, trainer::stdout_sink())?;
             tr.run(Some(trainer::stdin_control())).map(|_| ())
         }),
+        "diloco" => diloco_cmd(&a),
         "merge" => merge_cmd(&a),
         "eval" => eval_cmd(&a),
         "generate" => generate_cmd(&a),
@@ -327,7 +416,7 @@ fn main() {
             println!("{}", json!({"available": forge_kernels::available().iter().map(|v: &GemmVariant| v.name()).collect::<Vec<_>>()}));
             Ok(())
         }
-        _ => Err("usage: forge bench|train|merge|eval|generate|disasm|engines [options] (see core_engine/cli/src/main.rs)".into()),
+        _ => Err("usage: forge bench|train|diloco|merge|eval|generate|disasm|engines [options] (see core_engine/cli/src/main.rs)".into()),
     };
     if let Err(e) = result {
         eprintln!("forge: {e}");

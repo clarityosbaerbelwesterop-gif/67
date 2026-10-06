@@ -156,6 +156,19 @@ pub fn local_rings(world: usize) -> std::io::Result<Vec<Ring>>;
 ```
 
 Wire frames: `b"F67C" u32 seq u32 len_bytes u32 crc32 payload`. A CRC mismatch is an error.
+A hello frame `[0x4F4C4C45, rank, world]` on every new connection rejects a
+miswired ring. Each ring step sends and receives concurrently (no deadlock on
+full socket buffers). Compression is wire-only: partial sums stay f32, and the
+all-gather forwards the received bytes unchanged, so every rank decodes the
+same encoding and ends bit-identical. `Int8Block` sends one f32 scale
+(max|x|/127) plus i8 codes per block.
+
+DiLoCo transport: `forge_train::diloco::RingCollective { ring, compression }`
+implements `Collective`; the initial synchronisation is an exact `broadcast`
+from rank 0, and only the pseudo-gradients are compressed. CLI:
+`forge diloco --config C --rank R --world W --peers h0:p,…,hW-1:p
+[--inner-steps H] [--outer-lr 0.7] [--momentum 0.9] [--compression none|bf16|int8[:B]]`
+(rank r samples with seed + r; rank 0 writes the checkpoint).
 
 ## 7. forge-data — SCP contract
 

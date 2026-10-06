@@ -15,6 +15,47 @@ pub trait Collective: Send {
     fn world(&self) -> usize;
     /// Replace `buf` by the element-wise mean over all workers.
     fn all_reduce_mean(&mut self, buf: &mut [f32]) -> Result<(), String>;
+    /// Replace `buf` by `root`'s copy. The default goes through the mean
+    /// (zeros elsewhere, times the world size); transports override it with
+    /// an exact copy.
+    fn broadcast(&mut self, buf: &mut [f32], root: usize) -> Result<(), String> {
+        if self.rank() != root {
+            buf.iter_mut().for_each(|x| *x = 0.0);
+        }
+        self.all_reduce_mean(buf)?;
+        let w = self.world() as f32;
+        buf.iter_mut().for_each(|x| *x *= w);
+        Ok(())
+    }
+}
+
+/// The forge-comm TCP ring as DiLoCo transport. `compression` applies to the
+/// pseudo-gradients; the initial synchronisation is always exact.
+pub struct RingCollective {
+    pub ring: forge_comm::Ring,
+    pub compression: forge_comm::Compression,
+}
+
+impl Collective for RingCollective {
+    fn rank(&self) -> usize {
+        self.ring.rank
+    }
+    fn world(&self) -> usize {
+        self.ring.world
+    }
+    fn all_reduce_mean(&mut self, buf: &mut [f32]) -> Result<(), String> {
+        self.ring
+            .all_reduce_sum(buf, self.compression)
+            .map_err(|e| format!("all-reduce: {e}"))?;
+        let inv = 1.0 / self.ring.world as f32;
+        buf.iter_mut().for_each(|x| *x *= inv);
+        Ok(())
+    }
+    fn broadcast(&mut self, buf: &mut [f32], root: usize) -> Result<(), String> {
+        self.ring
+            .broadcast(buf, root)
+            .map_err(|e| format!("broadcast: {e}"))
+    }
 }
 
 pub struct DiLoCo {
@@ -56,18 +97,13 @@ impl DiLoCo {
         &self.global
     }
 
-    /// Start every worker from the same θ (rank 0's), via one averaging round.
+    /// Start every worker from the same θ: rank 0's, broadcast.
     pub fn synchronise(
         &mut self,
         tr: &mut Trainer,
         coll: &mut dyn Collective,
     ) -> Result<(), String> {
-        if coll.rank() != 0 {
-            self.global.iter_mut().for_each(|x| *x = 0.0);
-        }
-        coll.all_reduce_mean(&mut self.global)?;
-        let w = coll.world() as f32;
-        self.global.iter_mut().for_each(|x| *x *= w);
+        coll.broadcast(&mut self.global, 0)?;
         self.write_back(tr);
         Ok(())
     }

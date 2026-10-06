@@ -346,3 +346,60 @@ fn resume_continues_exactly_where_the_run_stopped() {
     }
     std::fs::remove_dir_all(out).ok();
 }
+
+#[test]
+fn diloco_over_the_tcp_ring_with_bf16_pseudo_gradients() {
+    use crate::diloco::{Collective, DiLoCo, RingCollective};
+    let out = std::env::temp_dir().join(format!("forge-dl3-{}", std::process::id()));
+    let rings = forge_comm::local_rings(2).unwrap();
+    let handles: Vec<_> = rings
+        .into_iter()
+        .map(|ring| {
+            let out = out.clone();
+            std::thread::spawn(move || {
+                let mut coll = RingCollective {
+                    ring,
+                    compression: forge_comm::Compression::Bf16,
+                };
+                let (sink, _) = collect();
+                let mut c = cfg(&format!("t{}", coll.rank()), out.to_str().unwrap(), 1000);
+                c.seed = 7 + coll.rank() as u64;
+                c.threads = 1;
+                let mut tr = Trainer::new(c, sink).unwrap();
+                let mut d = DiLoCo::new(&tr, 10, 0.7, 0.9);
+                d.synchronise(&mut tr, &mut coll).unwrap();
+                let synced = d.global().to_vec();
+                let first = tr.evaluate().unwrap().0;
+                for _ in 0..10 {
+                    d.round(&mut tr, &mut coll).unwrap();
+                }
+                let stats = coll.ring.stats();
+                (
+                    synced,
+                    first,
+                    tr.evaluate().unwrap().0,
+                    d.global().to_vec(),
+                    stats,
+                )
+            })
+        })
+        .collect();
+    let r: Vec<_> = handles.into_iter().map(|h| h.join().unwrap()).collect();
+    assert_eq!(
+        r[0].0, r[1].0,
+        "broadcast must start both workers from rank 0's θ bit for bit"
+    );
+    assert_eq!(
+        r[0].3, r[1].3,
+        "workers must hold identical global parameters"
+    );
+    for (_, first, val, _, stats) in &r {
+        assert!(
+            *val < 0.3 * first,
+            "DiLoCo over TCP did not learn: {first} -> {val}"
+        );
+        // 10 rounds of bf16 pseudo-gradients + 1 exact f32 broadcast on the wire.
+        assert!(stats.bytes_sent > 0 && stats.ops == 11, "{stats:?}");
+    }
+    std::fs::remove_dir_all(out).ok();
+}

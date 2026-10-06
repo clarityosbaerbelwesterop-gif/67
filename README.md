@@ -65,6 +65,27 @@ used here one training step of 8,192 tokens at 12.6M parameters takes ~4.7 s
 (~1,700 tok/s, 0.14 TFLOPS sustained), so `base-s` is the compute-optimal size
 (Chinchilla) for roughly four hours of this machine.
 
+## Scaling across your own machines
+
+More compute comes only from more silicon. `forge diloco` trains one model on
+several machines you own, connected by an ordinary network. It uses DiLoCo
+(Douillard et al., 2023) over the forge-comm TCP ring:
+
+- Each machine takes `--inner-steps` local AdamW steps.
+- Only the averaged pseudo-gradient crosses the network, optionally as bf16
+  or int8.
+- The machines exchange about 1/H of what synchronous data parallelism would
+  need, where H is the number of inner steps.
+
+```bash
+# machine A (rank 0) and machine B (rank 1), same config and peer list on both
+forge diloco --config training/configs/base-s.json --rank 0 --world 2 --peers 10.0.0.1:47610,10.0.0.2:47610 --inner-steps 50 --compression bf16
+forge diloco --config training/configs/base-s.json --rank 1 --world 2 --peers 10.0.0.1:47610,10.0.0.2:47610 --inner-steps 50 --compression bf16
+```
+
+Throughput adds up machine by machine. It does not create FLOPs; see
+`docs/PHYSICS.md`.
+
 ## The three models
 
 | Model | Data | Origin |

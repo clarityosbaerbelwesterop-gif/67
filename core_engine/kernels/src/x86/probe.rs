@@ -26,7 +26,17 @@ fn kernel_gflops<E: Engine<P = f32>>(mc: usize, nc: usize, kc: usize) -> f64 {
     let bp: Vec<f32> = (0..sb * nc.div_ceil(E::NR)).map(|_| rng.sym()).collect();
     let mut c = vec![0.0f32; mc * nc];
     let secs = best_of(20, || unsafe {
-        E::kernel_block(mc, nc, kc, ap.as_ptr(), bp.as_ptr(), c.as_mut_ptr(), nc, 1.0, 0.0)
+        E::kernel_block(
+            mc,
+            nc,
+            kc,
+            ap.as_ptr(),
+            bp.as_ptr(),
+            c.as_mut_ptr(),
+            nc,
+            1.0,
+            0.0,
+        )
     });
     2.0 * (mc * nc * kc) as f64 / secs * 1e-9
 }
@@ -35,23 +45,59 @@ fn kernel_gflops<E: Engine<P = f32>>(mc: usize, nc: usize, kc: usize) -> f64 {
 fn pack_rate<E: Engine<P = f32>>(t: Trans, a_side: bool, rows: usize, kc: usize) -> f64 {
     let mut rng = Rng::new(2);
     let data: Vec<f32> = (0..rows * kc).map(|_| rng.sym()).collect();
-    let (ld, panel, width) = if a_side { (E::MR, E::a_panel_len(kc), E::MR) } else { (E::NR, E::b_panel_len(kc), E::NR) };
+    let (ld, panel, width) = if a_side {
+        (E::MR, E::a_panel_len(kc), E::MR)
+    } else {
+        (E::NR, E::b_panel_len(kc), E::NR)
+    };
     let _ = ld;
     let x = match t {
         // op(X) is rows × kc (A side) or kc × rows (B side).
-        Trans::N if a_side => MatRef { ptr: data.as_ptr(), ld: kc, trans: t },
-        Trans::T if a_side => MatRef { ptr: data.as_ptr(), ld: rows, trans: t },
-        Trans::N => MatRef { ptr: data.as_ptr(), ld: rows, trans: t },
-        Trans::T => MatRef { ptr: data.as_ptr(), ld: kc, trans: t },
+        Trans::N if a_side => MatRef {
+            ptr: data.as_ptr(),
+            ld: kc,
+            trans: t,
+        },
+        Trans::T if a_side => MatRef {
+            ptr: data.as_ptr(),
+            ld: rows,
+            trans: t,
+        },
+        Trans::N => MatRef {
+            ptr: data.as_ptr(),
+            ld: rows,
+            trans: t,
+        },
+        Trans::T => MatRef {
+            ptr: data.as_ptr(),
+            ld: kc,
+            trans: t,
+        },
     };
     let panels = rows / width;
     let mut dst = vec![0.0f32; panel * panels];
     let secs = best_of(20, || unsafe {
         for i in 0..panels {
             if a_side {
-                E::pack_a(&x, i * width, width, 0, kc, kc, dst.as_mut_ptr().add(i * panel));
+                E::pack_a(
+                    &x,
+                    i * width,
+                    width,
+                    0,
+                    kc,
+                    kc,
+                    dst.as_mut_ptr().add(i * panel),
+                );
             } else {
-                E::pack_b(&x, 0, kc, kc, i * width, width, dst.as_mut_ptr().add(i * panel));
+                E::pack_b(
+                    &x,
+                    0,
+                    kc,
+                    kc,
+                    i * width,
+                    width,
+                    dst.as_mut_ptr().add(i * panel),
+                );
             }
         }
     });

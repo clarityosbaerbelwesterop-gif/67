@@ -23,12 +23,60 @@ struct Shape {
 }
 
 const SHAPES: [Shape; 6] = [
-    Shape { label: "4096x512x512   NN", ta: Trans::N, tb: Trans::N, m: 4096, n: 512, k: 512, batch: 1 },
-    Shape { label: "4096x1408x512  NN", ta: Trans::N, tb: Trans::N, m: 4096, n: 1408, k: 512, batch: 1 },
-    Shape { label: "4096x512x1408  NN", ta: Trans::N, tb: Trans::N, m: 4096, n: 512, k: 1408, batch: 1 },
-    Shape { label: "512x512x4096   TN", ta: Trans::T, tb: Trans::N, m: 512, n: 512, k: 4096, batch: 1 },
-    Shape { label: "256x256x64 x32 NT", ta: Trans::N, tb: Trans::T, m: 256, n: 256, k: 64, batch: 32 },
-    Shape { label: "2048x2048x2048 NN", ta: Trans::N, tb: Trans::N, m: 2048, n: 2048, k: 2048, batch: 1 },
+    Shape {
+        label: "4096x512x512   NN",
+        ta: Trans::N,
+        tb: Trans::N,
+        m: 4096,
+        n: 512,
+        k: 512,
+        batch: 1,
+    },
+    Shape {
+        label: "4096x1408x512  NN",
+        ta: Trans::N,
+        tb: Trans::N,
+        m: 4096,
+        n: 1408,
+        k: 512,
+        batch: 1,
+    },
+    Shape {
+        label: "4096x512x1408  NN",
+        ta: Trans::N,
+        tb: Trans::N,
+        m: 4096,
+        n: 512,
+        k: 1408,
+        batch: 1,
+    },
+    Shape {
+        label: "512x512x4096   TN",
+        ta: Trans::T,
+        tb: Trans::N,
+        m: 512,
+        n: 512,
+        k: 4096,
+        batch: 1,
+    },
+    Shape {
+        label: "256x256x64 x32 NT",
+        ta: Trans::N,
+        tb: Trans::T,
+        m: 256,
+        n: 256,
+        k: 64,
+        batch: 32,
+    },
+    Shape {
+        label: "2048x2048x2048 NN",
+        ta: Trans::N,
+        tb: Trans::N,
+        m: 2048,
+        n: 2048,
+        k: 2048,
+        batch: 1,
+    },
 ];
 
 fn data(len: usize, seed: u64) -> Vec<f32> {
@@ -82,10 +130,13 @@ fn gflops(pool: &Pool, v: GemmVariant, s: &Shape, budget: f64, min_reps: usize, 
     let secs = time_secs(
         || {
             if s.batch == 1 {
-                gemm(pool, v, s.ta, s.tb, s.m, s.n, s.k, 1.0, &a, ac, &b, bc, 0.0, &mut c, s.n);
+                gemm(
+                    pool, v, s.ta, s.tb, s.m, s.n, s.k, 1.0, &a, ac, &b, bc, 0.0, &mut c, s.n,
+                );
             } else {
                 gemm_batched(
-                    pool, v, s.ta, s.tb, s.batch, s.m, s.n, s.k, 1.0, &a, ac, sa, &b, bc, sb, 0.0, &mut c, s.n, sc,
+                    pool, v, s.ta, s.tb, s.batch, s.m, s.n, s.k, 1.0, &a, ac, sa, &b, bc, sb, 0.0,
+                    &mut c, s.n, sc,
                 );
             }
         },
@@ -97,18 +148,28 @@ fn gflops(pool: &Pool, v: GemmVariant, s: &Shape, budget: f64, min_reps: usize, 
 }
 
 fn parse_list<T>(arg: Option<String>, f: impl Fn(&str) -> Option<T>) -> Option<Vec<T>> {
-    arg.map(|s| s.split(',').map(|x| f(x.trim()).unwrap_or_else(|| panic!("bad value {x:?}"))).collect())
+    arg.map(|s| {
+        s.split(',')
+            .map(|x| f(x.trim()).unwrap_or_else(|| panic!("bad value {x:?}")))
+            .collect()
+    })
 }
 
 fn main() {
     let mut args = std::env::args().skip(1);
-    let (mut threads, mut variants, mut shapes, mut budget, mut best) = (None, None, None, 0.5, false);
+    let (mut threads, mut variants, mut shapes, mut budget, mut best) =
+        (None, None, None, 0.5, false);
     while let Some(a) = args.next() {
         match a.as_str() {
             "--threads" => threads = parse_list(args.next(), |x| x.parse::<usize>().ok()),
             "--variants" => variants = parse_list(args.next(), GemmVariant::from_name),
             "--shapes" => shapes = args.next(),
-            "--budget" => budget = args.next().and_then(|x| x.parse().ok()).expect("--budget <seconds>"),
+            "--budget" => {
+                budget = args
+                    .next()
+                    .and_then(|x| x.parse().ok())
+                    .expect("--budget <seconds>")
+            }
             "--best" => best = true,
             "-h" | "--help" => {
                 println!("bench [--threads 1,4] [--variants scalar,avx2-fma,...] [--shapes substr,...] [--budget secs] [--best]");
@@ -122,9 +183,16 @@ fn main() {
     let variants = variants.unwrap_or_else(available);
     let shapes: Vec<&Shape> = SHAPES
         .iter()
-        .filter(|s| shapes.as_ref().is_none_or(|f: &String| f.split(',').any(|x| s.label.contains(x))))
+        .filter(|s| {
+            shapes
+                .as_ref()
+                .is_none_or(|f: &String| f.split(',').any(|x| s.label.contains(x)))
+        })
         .collect();
-    println!("available: {:?}", available().iter().map(|v| v.name()).collect::<Vec<_>>());
+    println!(
+        "available: {:?}",
+        available().iter().map(|v| v.name()).collect::<Vec<_>>()
+    );
     for &t in &threads {
         let pool = Pool::new(t);
         let stat = if best { "best" } else { "median" };
@@ -142,7 +210,14 @@ fn main() {
                     continue;
                 }
                 // Long single runs (scalar on large shapes) get fewer repetitions.
-                let g = gflops(&pool, v, s, budget, if v == GemmVariant::Scalar { 1 } else { 3 }, best);
+                let g = gflops(
+                    &pool,
+                    v,
+                    s,
+                    budget,
+                    if v == GemmVariant::Scalar { 1 } else { 3 },
+                    best,
+                );
                 print!("{g:>12.1}");
                 use std::io::Write;
                 std::io::stdout().flush().ok();
