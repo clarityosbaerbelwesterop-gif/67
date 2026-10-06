@@ -86,6 +86,14 @@ forge diloco --config training/configs/base-s.json --rank 1 --world 2 --peers 10
 Throughput adds up machine by machine. It does not create FLOPs; see
 `docs/PHYSICS.md`.
 
+## Long run and controlled RSI
+
+`scripts/longrun.py` trains continuously in cycles for 3–20 days. Each cycle
+runs: base on corpus v2 → Quasnir (code) + RSI → Rouge 1 (restricted) + RSI →
+Darus merge search + RSI → report. Every RSI promotion needs a human approval
+in the headcenter. After a restart, `scripts/resume_all.sh` brings everything
+back. See `docs/LONGRUN.md`.
+
 ## The three models
 
 | Model | Data | Origin |
