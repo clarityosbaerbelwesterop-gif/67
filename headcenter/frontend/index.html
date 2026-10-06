@@ -481,6 +481,16 @@ function renderResults() {
     parts.push(`<div class="scroll"><table class="tbl"><tr><th>validation</th>${head}</tr>${rows}</table></div>
       <div class="hint">Darus acceptance: <b class="${rep.accepted ? "ok" : "bad"}">${rep.accepted ? "accepted" : "not accepted"}</b> — ${verdict}</div>`);
   }
+  const qz = rep && rep.darus_quantized;
+  if (qz && qz.formats) {
+    const suites = Object.keys(rep.evaluations["darus-1"] || {});
+    const row = (name, mb, cells) => `<tr><td>${esc(name)}</td><td>${(mb / 1e6).toFixed(1)} MB</td>${cells}</tr>`;
+    const base = row("f32", qz.f32_weight_bytes, suites.map((s) => `<td>${fmt(rep.evaluations["darus-1"][s].loss, 4)}</td><td>—</td>`).join(""));
+    const rows = Object.entries(qz.formats).map(([q, r]) => row(q, r.weight_bytes,
+      suites.map((s) => `<td>${fmt(r[s].loss, 4)}</td><td>${r[s].delta_vs_f32 >= 0 ? "+" : ""}${fmt(r[s].delta_vs_f32, 4)}</td>`).join(""))).join("");
+    parts.push(`<div class="scroll" style="margin-top:10px"><table class="tbl"><tr><th>Darus weights as</th><th>size</th>${
+      suites.map((s) => `<th>${esc(s)} loss</th><th>Δ</th>`).join("")}</tr>${base}${rows}</table></div>`);
+  }
   const se = res.search;
   if (se && se.best) {
     const b = se.best;

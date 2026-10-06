@@ -765,3 +765,43 @@ fn compiler_fuses_places_and_preserves_semantics() {
     assert!(ya.iter().zip(&yb).all(|(p, q)| (p - q).abs() < 1e-6));
     assert_eq!(a.m.hbvm_stats().live, 4, "placement freed every transient");
 }
+
+#[test]
+fn quant_executes_every_forge_formats_code() {
+    // Crosses the machine's parallel chunks and ends in a partial MX block.
+    let n = (1 << 14) * 2 + 77;
+    let data: Vec<f32> = rnd(n, 21)
+        .iter()
+        .enumerate()
+        .map(|(i, v)| v * (1.0 + (i % 97) as f32))
+        .collect();
+    for f in forge_formats::Format::ALL {
+        let mut h = H::new();
+        let mut b = Builder::new();
+        let x = h.set(&mut b, "x", &data);
+        b.emit(Instr::Quant {
+            x,
+            format: f.code(),
+        });
+        h.run(b);
+        let mut want = data.clone();
+        forge_formats::fake_quant(&mut want, f, forge_formats::Rounding::NearestEven);
+        let got = h.get("x");
+        assert!(
+            got.iter()
+                .zip(&want)
+                .all(|(a, b)| a.to_bits() == b.to_bits()),
+            "{} differs from forge_formats::fake_quant",
+            f.name()
+        );
+    }
+    let mut h = H::new();
+    let mut b = Builder::new();
+    let x = h.set(&mut b, "x", &data[..8]);
+    b.emit(Instr::Quant { x, format: 200 });
+    let mut lp = h.m.load(b.finish()).unwrap();
+    assert!(
+        h.m.run(&mut lp).is_err(),
+        "unknown format codes are an error"
+    );
+}

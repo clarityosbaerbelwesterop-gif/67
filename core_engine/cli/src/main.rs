@@ -5,7 +5,7 @@
 //!   forge diloco   --config run.json --rank R --world W --peers h0:p,h1:p,.. [--listen ADDR]
 //!                  [--inner-steps H] [--outer-lr 0.7] [--momentum 0.9] [--compression none|bf16|int8[:B]]
 //!   forge merge    --base DIR --child DIR --child DIR [--method ties|linear] [--density D] [--lambda L] --out DIR
-//!   forge eval     --ckpt DIR --data META [--split val|train] [--batch B] [--seq T] [--batches K]
+//!   forge eval     --ckpt DIR --data META [--split val|train] [--batch B] [--seq T] [--batches K] [--quant FORMAT]
 //!   forge generate --ckpt DIR --prompt-ids 1,2,3 | --prompts-file F [--max-new N] [--temperature T] [--top-k K]
 //!                  [--seed S] [--stop-id ID] [--decoder kv|window]
 //!   forge generate --ckpt DIR --prompt "text" [--tokenizer tokenizer.json] [...]   (text in, text out)
@@ -283,7 +283,31 @@ fn merge_cmd(a: &Args) -> Result<(), String> {
 
 fn eval_cmd(a: &Args) -> Result<(), String> {
     let dir = a.need("--ckpt")?;
-    let (cfg, w, sha) = ckpt_model(&dir)?;
+    let (cfg, mut w, sha) = ckpt_model(&dir)?;
+    // Post-training quantisation: every weight matrix (embedding included) is
+    // fake-quantised; the 1-D norm gains stay f32.
+    let quant = match a.get("--quant") {
+        None => None,
+        Some(name) => {
+            let f = forge_formats::Format::from_name(&name).ok_or_else(|| {
+                let all: Vec<&str> = forge_formats::Format::ALL
+                    .iter()
+                    .map(|f| f.name())
+                    .collect();
+                format!("--quant must be one of {all:?}")
+            })?;
+            let mut weight_bits = 0.0f64;
+            for t in w.values_mut() {
+                if t.shape.len() >= 2 {
+                    forge_formats::fake_quant(&mut t.data, f, forge_formats::Rounding::NearestEven);
+                    weight_bits += t.data.len() as f64 * forge_formats::bits_per_element(f) as f64;
+                } else {
+                    weight_bits += t.data.len() as f64 * 32.0;
+                }
+            }
+            Some((f, weight_bits / 8.0))
+        }
+    };
     let split = if a.get("--split").as_deref() == Some("train") {
         Split::Train
     } else {
@@ -312,7 +336,9 @@ fn eval_cmd(a: &Args) -> Result<(), String> {
     println!(
         "{}",
         json!({"type": "eval", "ckpt": dir, "sha256": sha, "data": a.get("--data"), "split": format!("{split:?}"),
-               "tokens": shape.0 * shape.1 * shape.2, "loss": loss, "perplexity": loss.exp(), "next_token_acc": acc})
+               "tokens": shape.0 * shape.1 * shape.2, "loss": loss, "perplexity": loss.exp(), "next_token_acc": acc,
+               "quant": quant.map_or("f32", |q| q.0.name()),
+               "weight_bytes": quant.map_or(4.0 * cfg.num_params() as f64, |q| q.1)})
     );
     Ok(())
 }

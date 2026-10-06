@@ -1045,23 +1045,16 @@ fn exec(
     Ok(bytes)
 }
 
-/// Fake quantisation for low-precision simulation. Codes: 1 = BF16 (round to
-/// nearest even); further formats are provided by forge-formats.
+/// Fake quantisation (quantise, then dequantise) for low-precision simulation.
+/// `format` is a `forge_formats::Format::code()`: 0 f32, 1 bf16, 2 fp16,
+/// 3/4 fp8 e4m3/e5m2, 5 fp4 e2m1, 6..=9 MX blocks; round to nearest even.
+/// Work is split into chunks that are whole MX blocks, so the result equals
+/// `forge_formats::fake_quant` on the whole buffer.
 fn quant(x: &mut [f32], format: u8) -> Result<(), MachineError> {
-    match format {
-        1 => {
-            x.par_chunks_mut(CHUNK).for_each(|c| {
-                for v in c.iter_mut() {
-                    let u = v.to_bits();
-                    if v.is_nan() {
-                        continue;
-                    }
-                    let r = u.wrapping_add(0x7FFF + ((u >> 16) & 1)) & 0xFFFF_0000;
-                    *v = f32::from_bits(r);
-                }
-            });
-            Ok(())
-        }
-        _ => Err(MachineError::Unsupported("QUANT format code")),
-    }
+    let f = forge_formats::Format::from_code(format)
+        .ok_or(MachineError::Unsupported("QUANT format code"))?;
+    let chunk = CHUNK.next_multiple_of(forge_formats::mx::BLOCK);
+    x.par_chunks_mut(chunk)
+        .for_each(|c| forge_formats::fake_quant(c, f, forge_formats::Rounding::NearestEven));
+    Ok(())
 }

@@ -126,5 +126,13 @@ safetensors under SCP's PyTorch parameter names, so checkpoints load into
     density and λ, minimising the worst-case regression against the better
     parent);
   - then the report and both code benchmarks for all four models.
+- The ISA's `QUANT` instruction executes every forge-formats code: bf16,
+  fp16, FP8 E4M3/E5M2, FP4 E2M1 and the MX block formats. Each result is
+  bit-identical to the reference codecs.
+- `forge eval --quant FORMAT` measures post-training quantisation, and the
+  report includes Darus in each format. On a 500-step base checkpoint:
+  - FP8 E4M3 costs +0.001 in loss at a quarter of the f32 size;
+  - MX-FP4 costs +0.02 at an eighth;
+  - FP4 without block scales collapses (loss 9.0).
 - `runs/report.json` holds measured losses, perplexities and accuracies of
   every model. No number in this repository is a projection.
