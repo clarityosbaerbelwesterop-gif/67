@@ -365,7 +365,7 @@ def create_app(
     @app.post("/api/rsi/{model}/approve")
     def rsi_approve(model: str, request: Request, body: dict = Body(...)) -> dict:
         check(request)
-        return call(rsi.decide, model, body.get("round"), body.get("approved"))
+        return call(rsi.decide, model, body.get("round"), body.get("approved"), body.get("candidate_sha256"))
 
     @app.post("/api/rsi/{model}/stop")
     def rsi_stop(model: str, request: Request) -> dict:

@@ -2,7 +2,7 @@
 # After a container or machine restart: (re)start whatever is not running.
 # Idempotent; every component resumes from its own checkpoints/state.
 #   generation 1  scripts/train_all.sh + scripts/darus_finish.sh (until runs/report.json exists)
-#   long run      scripts/supervise.sh --days ${LONGRUN_DAYS:-3}
+#   long run      scripts/supervise.sh --days ${LONGRUN_DAYS:-10}
 #   headcenter    python3 -m headcenter.backend (loopback, port 8067)
 set -uo pipefail
 cd "$(dirname "$0")/.."
@@ -20,7 +20,7 @@ if [ ! -e runs/benchmarks.jsonl ] || ! grep -q '"finished"' runs/benchmarks.json
   fi
 fi
 if [ ! -e runs/longrun/STOP ] && ! running "scripts/supervise.sh"; then
-  setsid nohup scripts/supervise.sh --days "${LONGRUN_DAYS:-3}" > /dev/null 2>&1 < /dev/null &
+  setsid nohup scripts/supervise.sh --days "${LONGRUN_DAYS:-10}" > /dev/null 2>&1 < /dev/null &
   echo "started long-run supervisor"
 fi
 if ! running "headcenter.backend"; then

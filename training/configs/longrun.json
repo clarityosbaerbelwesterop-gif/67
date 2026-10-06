@@ -1,5 +1,5 @@
 {
-  "days": 3,
+  "days": 10,
   "forever": false,
   "cycle_hours": 24,
   "min_cycle_fraction": 0.25,
@@ -18,12 +18,12 @@
     "telemetry_min_samples": 10
   },
   "shares": {
-    "base": 0.55,
-    "quasnir": 0.14,
-    "quasnir_rsi": 0.05,
-    "rouge": 0.15,
-    "rouge_rsi": 0.03,
-    "darus": 0.05,
+    "base": 0.5,
+    "quasnir": 0.12,
+    "quasnir_rsi": 0.08,
+    "rouge": 0.13,
+    "rouge_rsi": 0.06,
+    "darus": 0.08,
     "report": 0.03
   },
   "names": {
@@ -40,7 +40,7 @@
   },
   "train": {
     "defaults": {
-      "ckpt_every": 250,
+      "ckpt_every": 100,
       "eval_every": 500,
       "eval_batches": 16,
       "log_every": 10,
@@ -70,6 +70,11 @@
       "base": "data/out/base-v2/train.meta.json",
       "code": "data/out/code-v2/train.meta.json",
       "general": "data/out/general-v2/train.meta.json"
+    },
+    "v3": {
+      "base": "data/out/base-v3/train.meta.json",
+      "code": "data/out/code-v2/train.meta.json",
+      "general": "data/out/general-v3/train.meta.json"
     },
     "v1": {
       "base": "data/stores/base/train.meta.json",
@@ -101,15 +106,13 @@
       "training.rsi.loop"
     ],
     "module_file": "training/rsi/loop.py",
-    "rounds": 4,
-    "tasks": 64,
-    "samples": 4,
-    "steps_per_round": 40,
+    "rounds": 8,
+    "tasks": 128,
+    "samples": 8,
+    "steps_per_round": 60,
     "min_wall_hours": 0.1,
-    "extra_args": [
-      "--approval-timeout-hours",
-      "6"
-    ],
+    "approval_timeout_hours": 6,
+    "extra_args": [],
     "models": {
       "quasnir": {
         "family": "code",

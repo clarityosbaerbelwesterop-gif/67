@@ -161,7 +161,7 @@ class RSI:
         except OSError:
             pass
 
-    def decide(self, model: Any, round_no: Any, approved: Any) -> dict:
+    def decide(self, model: Any, round_no: Any, approved: Any, candidate_sha256: Any = None) -> dict:
         d = self.model_dir(model)
         if not isinstance(round_no, int) or isinstance(round_no, bool) or not 1 <= round_no <= 10**9:
             raise RSIError('"round" must be a positive integer')
@@ -172,10 +172,13 @@ class RSI:
             raise RSIError(f"{model} has no pending approval", 409)
         if pending.get("round") != round_no:
             raise RSIError(f"{model} awaits approval for round {pending.get('round')}, not {round_no}", 409)
-        rec = {"approved": approved, "by": "headcenter", "ts": time.time()}
         sha = pending.get("candidate_sha256")
-        if isinstance(sha, str) and SHA_RE.match(sha):
-            rec["candidate_sha256"] = sha  # the loop rejects the approval if the candidate changed
+        if not (isinstance(sha, str) and SHA_RE.match(sha)):
+            raise RSIError(f"{model}: pending request has no valid candidate_sha256", 409)
+        if candidate_sha256 is not None and candidate_sha256 != sha:
+            raise RSIError("the candidate changed since you reviewed it; reload and decide again", 409)
+        # The loop accepts the decision only for exactly this candidate.
+        rec = {"approved": approved, "by": "headcenter", "ts": time.time(), "candidate_sha256": sha}
         _write_exclusive(d / f"approve-{round_no}.json", rec)
         self._log({"type": "rsi-approval", "model": model, "round": round_no, **rec})
         return rec

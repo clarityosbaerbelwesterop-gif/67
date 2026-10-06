@@ -80,7 +80,7 @@ CTL_STOP = b'{"cmd":"checkpoint"}\n{"cmd":"stop"}\n'
 # Built-in defaults; training/configs/longrun.json holds the same values (a test
 # keeps the two identical) and is deep-merged over them.
 DEFAULTS: dict = {
-    "days": 3,
+    "days": 10,
     "forever": False,
     "cycle_hours": 24,
     "min_cycle_fraction": 0.25,
@@ -94,13 +94,13 @@ DEFAULTS: dict = {
     "min_free_gb": 5,
     "min_steps": 20,
     "throughput": {"bench_steps": 3, "assumed_tokens_per_s": 1700, "telemetry_min_samples": 10},
-    "shares": {"base": 0.55, "quasnir": 0.14, "quasnir_rsi": 0.05, "rouge": 0.15, "rouge_rsi": 0.03,
-               "darus": 0.05, "report": 0.03},
+    "shares": {"base": 0.50, "quasnir": 0.12, "quasnir_rsi": 0.08, "rouge": 0.13, "rouge_rsi": 0.06,
+               "darus": 0.08, "report": 0.03},
     "names": {"base": "base-g{g}", "quasnir": "quasnir-g{g}", "rouge": "rouge-g{g}", "darus": "darus-g{g}"},
     "initial": {"base": "runs/base-s/FINAL", "quasnir": "runs/quasnir-1/FINAL", "rouge": "runs/rouge-1/FINAL",
                 "darus": "runs/darus-1/FINAL"},
     "train": {
-        "defaults": {"ckpt_every": 250, "eval_every": 500, "eval_batches": 16, "log_every": 10, "threads": 0},
+        "defaults": {"ckpt_every": 100, "eval_every": 500, "eval_batches": 16, "log_every": 10, "threads": 0},
         "base": {"lr": 0.0004, "min_lr": 0.00004, "warmup_steps": 200, "seed": 1000},
         "quasnir": {"lr": 0.0002, "min_lr": 0.00002, "warmup_steps": 50, "seed": 2000},
         "rouge": {"lr": 0.0002, "min_lr": 0.00002, "warmup_steps": 50, "seed": 3000},
@@ -108,6 +108,8 @@ DEFAULTS: dict = {
     "corpus": {
         "v2": {"base": "data/out/base-v2/train.meta.json", "code": "data/out/code-v2/train.meta.json",
                "general": "data/out/general-v2/train.meta.json"},
+        "v3": {"base": "data/out/base-v3/train.meta.json", "code": "data/out/code-v2/train.meta.json",
+               "general": "data/out/general-v3/train.meta.json"},
         "v1": {"base": "data/stores/base/train.meta.json", "code": "data/stores/code/train.meta.json",
                "general": "data/stores/general/train.meta.json"},
         "build_cmd": ["{python}", "data/build_corpus_v2.py"],
@@ -121,14 +123,16 @@ DEFAULTS: dict = {
         "enabled": True,
         "cmd": ["{python}", "-m", "training.rsi.loop"],
         "module_file": "training/rsi/loop.py",
-        "rounds": 4,
-        "tasks": 64,
-        "samples": 4,
-        "steps_per_round": 40,
+        "rounds": 8,
+        "tasks": 128,
+        "samples": 8,
+        "steps_per_round": 60,
         "min_wall_hours": 0.1,
-        # Every promotion needs a human approval; without one within 6 h the
-        # candidate is rejected and the champion stays (fail-safe, the run continues).
-        "extra_args": ["--approval-timeout-hours", "6"],
+        # Every promotion needs a human approval. The wait ends within the RSI
+        # phase (min(approval_timeout_hours, half of its remaining wall time)); no
+        # approval by then = rejected, the champion stays and the run continues.
+        "approval_timeout_hours": 6,
+        "extra_args": [],
         "models": {
             "quasnir": {"family": "code", "gates": ["code", "general"], "replay": "code", "require_approval": True},
             "rouge": {"family": "text", "gates": ["general", "base"], "replay": "rouge_mix", "require_approval": True},
@@ -620,6 +624,9 @@ class LongRun:
                     self.state["status"] = "prepared"
                     self.save()
                     return EX_OK
+                cyc = self.state["cycles"][str(g)]
+                if all(st.get("status") == "pending" for st in cyc.get("steps", {}).values()):
+                    self.ensure_corpus()  # adopt a newer corpus (e.g. v3) only between cycles, never mid-cycle
                 self.run_cycle(g)
         except Stopped as e:
             self.state["status"] = "stopped"
@@ -705,7 +712,10 @@ class LongRun:
                 rc = self.run_logged(cmd, logp, stop_kill=True)
                 build = {"cmd": cmd, "rc": rc, "log": self.rel(logp)}
             missing = [m for m in c["v2"].values() if not self.p(m).exists()]
-        if not missing:
+        if c.get("v3") and all(self.p(m).exists() for m in c["v3"].values()):
+            stores = {k: self.validate_store(v) for k, v in c["v3"].items()}
+            version = "v3"
+        elif not missing:
             stores = {k: self.validate_store(v) for k, v in c["v2"].items()}
             version = "v2"
         elif allow_v1:
@@ -1152,7 +1162,10 @@ class LongRun:
     # ---- RSI
     def rsi_stop(self, out: Path, model: str) -> None:
         out.mkdir(parents=True, exist_ok=True)
-        (out / "STOP").touch()
+        stop = out / "STOP"
+        if stop.exists():  # a person (or the headcenter) already stopped it: never claim or later remove that STOP
+            return
+        stop.write_text(json.dumps({"by": "longrun", "ts": now()}))
         (self.dir / f"rsi-stop-{model}").touch()  # marker: longrun created this STOP and removes it on restart
 
     def rsi_rounds_done(self, out: Path) -> int:
@@ -1199,8 +1212,13 @@ class LongRun:
             return {"status": "skipped", "reason": f"{rc_cfg['module_file']} not found", "model_dir": champion}
         marker = self.dir / f"rsi-stop-{model}"
         if marker.exists():
-            if (out / "STOP").exists():
-                (out / "STOP").unlink()
+            stop = out / "STOP"
+            try:
+                ours = json.loads(stop.read_text()).get("by") == "longrun"
+            except (OSError, ValueError, AttributeError):
+                ours = False
+            if ours:
+                stop.unlink()
             marker.unlink()
         remaining = int(rc_cfg["rounds"]) - self.rsi_rounds_done(out)
         left = hours - st.get("spent_hours", 0.0)
@@ -1218,7 +1236,8 @@ class LongRun:
         cmd += ["--rounds", str(remaining), "--tasks", str(rc_cfg["tasks"]), "--samples", str(rc_cfg["samples"]),
                 "--steps-per-round", str(rc_cfg["steps_per_round"]), "--max-wall-hours", f"{left:.4f}", "--out", out_rel]
         if mc.get("require_approval"):
-            cmd.append("--require-approval")
+            cap = float(rc_cfg.get("approval_timeout_hours", 6))
+            cmd += ["--require-approval", "--approval-timeout-hours", f"{max(0.1, min(cap, left * 0.5)):.3f}"]
         cmd += list(rc_cfg.get("extra_args") or [])
         restricted = fam in self.cfg["restricted_models"]
         if restricted:

@@ -367,13 +367,14 @@ def test_loop_flows_promote_reject_pending_stop(scratch):
     # 2. human rejects -> champion unchanged.
     loop, out = run("rejected", {"champ0": 0.25, "cand1": 0.5}, good_val, require_approval=True)
     out_rejected = out
-    when_pending(out, approve(out, 1, False, "bob"))
+    when_pending(out, approve(out, 1, False, "bob", candidate_sha256="cand1"))
     loop.run()
     rec = json.loads((out / "audit.jsonl").read_text().splitlines()[-1])
     assert rec["decision"] == "reject" and rec["approver"] == "bob" and not rec["self_improvement"]
     assert json.loads((out / "champion.json").read_text())["model_sha256"] == "champ0"
 
-    # 3. STOP while waiting -> pending-approval recorded, loop halts, pending.json stays for the headcenter.
+    # 3. STOP while waiting -> pending-approval recorded, loop halts, and the request is withdrawn so that
+    #    nobody can approve a candidate no loop is waiting for.
     loop, out = run("pending", {"champ0": 0.25, "cand1": 0.5}, good_val, require_approval=True, rounds=3)
     when_pending(out, lambda: (out / "approve-1.json").write_text(json.dumps({"approved": True, "by": "x", "candidate_sha256": "other"})))
     stopper = when_pending(out, lambda: (time.sleep(0.2), (out / "STOP").touch()))
@@ -382,17 +383,20 @@ def test_loop_flows_promote_reject_pending_stop(scratch):
     lines = (out / "audit.jsonl").read_text().splitlines()
     rec = json.loads(lines[-1])
     assert len(lines) == 1 and rec["decision"] == "pending-approval" and "STOP" in rec["halt"]  # mismatched sha never approves
-    pend = json.loads((out / "pending.json").read_text())
+    assert not (out / "pending.json").exists()
+    withdrawn = list(out.glob("pending-r1.withdrawn-*.json"))
+    assert len(withdrawn) == 1
+    pend = json.loads(withdrawn[0].read_text())
     assert pend["round"] == 1 and pend["candidate_sha256"] == "cand1" and pend["approve_file"].endswith("approve-1.json")
-    # A restart expires the orphaned request (and STOP still holds the loop).
+    # A restart finds no open request (and STOP still holds the loop); the champion is unchanged.
     loop2, _ = run("pending", {"champ0": 0.25, "cand1": 0.5}, good_val, require_approval=True)
     loop2.run()
-    assert not (out / "pending.json").exists() and len(list(out.glob("pending-r1.expired-*.json"))) == 1
+    assert not (out / "pending.json").exists()
     assert len((out / "audit.jsonl").read_text().splitlines()) == 1
 
     # 3b. the candidate file changes while awaiting approval -> approval cannot promote it.
     loop, out = run("tamper", {"champ0": 0.25, "cand1": 0.5}, good_val, require_approval=True)
-    when_pending(out, lambda: (StubLoop.tampered.add("cand1"), approve(out, 1, True, "dave")()))
+    when_pending(out, lambda: (StubLoop.tampered.add("cand1"), approve(out, 1, True, "dave", candidate_sha256="cand1")()))
     loop.run()
     StubLoop.tampered.clear()
     rec = json.loads((out / "audit.jsonl").read_text().splitlines()[-1])
@@ -505,3 +509,15 @@ def test_end_to_end_micro_round(scratch):
     assert tele[-1]["type"] == "event" and f"round 1 ({rec['kind']}): {rec['decision']}" in tele[-1]["msg"]
     assert json.loads((out / "champion.json").read_text())["model_sha256"] == rec["champion_sha256_after"]
     assert json.loads((out / "status.json").read_text())["phase"] == "idle"
+
+
+def test_approval_must_name_the_pending_candidate(scratch):
+    ap = scratch / "approve-bind.json"
+    ap.write_text(json.dumps({"approved": True, "by": "alice"}))
+    assert "invalid" in L.read_approval(ap, "cand1"), "an approval without the candidate hash must not count"
+    ap.write_text(json.dumps({"approved": True, "by": "alice", "candidate_sha256": "other"}))
+    assert "invalid" in L.read_approval(ap, "cand1")
+    ap.write_text(json.dumps({"approved": True, "by": "alice", "candidate_sha256": "cand1"}))
+    assert L.read_approval(ap, "cand1")["approved"] is True
+    # Past the deadline an approval no longer counts, even if it is already on disk.
+    assert L.wait_for_approval(ap, stop_check=lambda: False, deadline=time.time() - 1, poll=0.01, candidate_sha="cand1") == ("timeout", None)

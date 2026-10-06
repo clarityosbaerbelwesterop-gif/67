@@ -19,7 +19,7 @@ def test_longrun_json_equals_defaults():
 def test_every_rsi_promotion_requires_approval_with_failsafe_timeout():
     rsi = lr.DEFAULTS["rsi"]
     assert all(m["require_approval"] for m in rsi["models"].values())
-    assert "--approval-timeout-hours" in rsi["extra_args"]
+    assert 0 < rsi["approval_timeout_hours"] <= 6
     assert abs(sum(lr.DEFAULTS["shares"].values()) - 1.0) < 1e-9
 
 
@@ -33,6 +33,7 @@ def dry(days: str) -> dict:
 def test_dry_run_budget_scales_with_days():
     p3, p20 = dry("3"), dry("20")
     assert len(p3["cycles"]) == 3 and len(p20["cycles"]) == 20
+    assert len(dry("10")["cycles"]) == 10
     tok = lambda p: sum(c["phases"]["base"]["tokens"] for c in p["cycles"])  # noqa: E731
     assert 6.0 < tok(p20) / tok(p3) < 7.4
 

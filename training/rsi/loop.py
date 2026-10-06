@@ -135,8 +135,8 @@ def read_approval(path: Path, candidate_sha: str | None = None) -> dict | None:
         return {"invalid": f"unreadable: {e}"}
     if not isinstance(d, dict) or not isinstance(d.get("approved"), bool) or not isinstance(d.get("by"), str) or not d["by"].strip():
         return {"invalid": 'expected {"approved": bool, "by": non-empty str}'}
-    if candidate_sha is not None and "candidate_sha256" in d and d["candidate_sha256"] != candidate_sha:
-        return {"invalid": "candidate_sha256 does not match the pending candidate"}
+    if candidate_sha is not None and d.get("candidate_sha256") != candidate_sha:
+        return {"invalid": "candidate_sha256 missing or not the pending candidate's"}
     return d
 
 
@@ -147,14 +147,14 @@ def wait_for_approval(path: Path, *, stop_check, deadline: float | None, poll: f
     while True:
         if stop_check():
             return "stopped", None
+        if deadline is not None and time.time() >= deadline:
+            return "timeout", None
         a = read_approval(path, candidate_sha)
         if a is not None and "invalid" not in a:
             return ("approved" if a["approved"] else "rejected"), a["by"].strip()
         if a is not None and a["invalid"] != warned:
             warned = a["invalid"]
             log("approval-file-invalid", path=str(path), reason=warned)
-        if deadline is not None and time.time() >= deadline:
-            return "timeout", None
         sleep(poll)
 
 
@@ -520,6 +520,11 @@ class RSILoop:
             "init_from": str(champ.dir), "out_dir": str(self.mkdir(self.out / "rounds")), "log_every": max(1, steps // 20),
             "eval_every": 0, "eval_batches": 4, "ckpt_every": 0, "threads": self.s.threads, "autotune": self.s.autotune,
         }
+        run_dir = self.out / "rounds" / run
+        if run_dir.exists():  # an aborted attempt at this round, possibly the champion's own directory: never overwrite it
+            aside = self.guard(self.out / "rounds" / f"{run}.aborted-{time.time_ns()}")
+            os.replace(self.guard(run_dir), aside)
+            self.log("round-dir-moved-aside", round=k, moved_to=rel(aside))
         cfg_path = self.out / "configs" / f"r{k}.json"
         self.write_json(cfg_path, cfg)
         tele = self.guard(self.tele_dir / f"{run}.jsonl")
@@ -661,10 +666,13 @@ class RSILoop:
                                    delta=s.delta, tol=s.tol, require_improvement=s.require_improvement)
             rec["gates"] = gates
             rec["reasons"] += gates["reasons"]
+            self.check("after gating")
             decision = decide(gates, s.require_approval)
             if decision == "pending-approval":
                 decision, approver = self._await_approval(k, rec, cand)
                 rec["approver"] = approver
+            if decision == "promote" and self.stop_requested():
+                raise Halt("STOP file present (before promotion)")
             if decision == "promote" and self.model_file_sha(cand.dir) != cand.sha:
                 decision = "reject"
                 rec["reasons"].append("candidate model.safetensors changed after gating (sha256 mismatch)")
@@ -727,6 +735,10 @@ class RSILoop:
             return "reject", None
         rec["halt"] = "STOP file present while awaiting approval" if st == "stopped" else "--max-wall-hours reached while awaiting approval"
         rec["reasons"].append(rec["halt"])
+        # Withdraw the request so nobody can approve a candidate that no loop is waiting for.
+        pend = self.guard(self.out / "pending.json")
+        if pend.exists():
+            os.replace(pend, self.guard(self.out / f"pending-r{k}.withdrawn-{time.time_ns()}.json"))
         return "pending-approval", None
 
     def _finish(self, rec: dict, level: int, rate_now: float | None) -> dict:
@@ -750,6 +762,9 @@ class RSILoop:
         self.load_champion()
         past = self.audit()
         last = max((r["round"] for r in past), default=0)
+        cj = self.out / "champion.json"
+        if cj.exists():
+            last = max(last, int(json.loads(cj.read_text()).get("round") or 0))
         pend = self.out / "pending.json"
         if pend.exists():  # a previous loop halted while awaiting approval; nobody waits for that request any more
             old = json.loads(pend.read_text())
