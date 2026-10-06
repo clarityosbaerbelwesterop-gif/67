@@ -10,7 +10,18 @@ final() { # link the newest checkpoint of a run as FINAL
   local dir; dir=$(python3 -c "import json;print(json.load(open('runs/$1/latest.json'))['dir'])")
   ln -sfn "$(realpath "$dir")" "runs/$1/FINAL"
 }
-train() { "$FORGE" train --config "training/configs/$1.json" < /dev/null | tee "runs/$1.jsonl"; final "$1"; }
+# Each run resumes from its newest checkpoint after an interruption, and reads
+# control commands (pause, set_lr, checkpoint, ...) from the FIFO runs/<run>.ctl:
+#   echo '{"cmd":"checkpoint"}' > runs/base-s.ctl
+train() {
+  local run=$1 args=(--config "training/configs/$1.json")
+  if [ -e "runs/$run/latest.json" ]; then
+    args+=(--resume "$(python3 -c "import json;print(json.load(open('runs/$run/latest.json'))['dir'])")")
+  fi
+  [ -p "runs/$run.ctl" ] || mkfifo "runs/$run.ctl"
+  "$FORGE" train "${args[@]}" <>"runs/$run.ctl" | tee -a "runs/$run.jsonl"
+  final "$run"
+}
 mkdir -p runs
 [ -e runs/base-s/FINAL ] || train base-s
 [ -e runs/rouge-1/FINAL ] || train rouge-1

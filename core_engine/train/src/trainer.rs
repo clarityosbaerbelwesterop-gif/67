@@ -49,6 +49,8 @@ pub struct Trainer {
     parent_sha: Option<String>,
     last_stats: HashMap<Opcode, OpStats>,
     last_log: Instant,
+    /// `tokens_seen` at the last telemetry line (throughput is measured, not assumed).
+    log_tokens: u64,
     tokens_seen: u64,
     pub last_loss: f32,
     pub last_val: Option<f32>,
@@ -127,6 +129,7 @@ impl Trainer {
             parent_sha: None,
             last_stats: HashMap::new(),
             last_log: Instant::now(),
+            log_tokens: 0,
             tokens_seen: 0,
             last_loss: f32::NAN,
             last_val: None,
@@ -381,9 +384,8 @@ impl Trainer {
         }
         let secs = self.last_log.elapsed().as_secs_f64().max(1e-9);
         self.last_log = Instant::now();
-        let toks =
-            (self.cfg.batch * self.cfg.seq_len * self.cfg.grad_accum * self.cfg.log_every.max(1))
-                as f64;
+        let toks = (self.tokens_seen - self.log_tokens) as f64;
+        self.log_tokens = self.tokens_seen;
         let h = self.machine.hbvm_stats();
         let gn = self.machine.regs[regs::SUMSQ as usize].max(0.0).sqrt();
         let kernels = self.kernel_label();
@@ -523,6 +525,7 @@ impl Trainer {
         }
         self.machine.reset_stats();
         self.last_log = Instant::now();
+        self.log_tokens = self.tokens_seen;
         while self.step < self.cfg.max_steps && !self.stop {
             self.drain(control.as_ref());
             if self.paused {
