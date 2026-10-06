@@ -376,3 +376,23 @@ def test_models_served_from_final_or_latest_inside_runs_only(tmp_path):
         assert c.get("/webgpu/").status_code == 200
         assert "javascript" in c.get("/webgpu/forge-webgpu.mjs").headers["content-type"]
         assert c.get("/webgpu/package.json").status_code == 404
+
+
+def test_results_are_served_and_benchmarks_are_not_a_run(tmp_path):
+    write(tmp_path / "r.jsonl", tele(1))
+    (tmp_path / "report.json").write_text(json.dumps({"evaluations": {"darus-1": {"code": {"loss": 2.0}}}, "accepted": True}))
+    (tmp_path / "darus-1").mkdir()
+    (tmp_path / "darus-1" / "search.json").write_text(json.dumps(
+        {"selection": {"seed": 777}, "best_parent": {"code": 2.1}, "best": {"method": "ties", "objective": -0.01},
+         "candidates": [{}, {}, {}]}))
+    write(tmp_path / "benchmarks.jsonl", {"ckpt": "runs/darus-1/FINAL", "suite": "humaneval", "passed": 0, "problems": 164, "pass@1": 0.0},
+          {"type": "finished"})
+    app = create_app(tmp_path, token="t", poll=0.05)
+    with TestClient(app) as c:
+        res = c.get("/api/results", headers={"Authorization": "Bearer t"}).json()
+        assert res["report"]["accepted"] is True
+        assert res["search"]["candidates"] == 3 and res["search"]["best"]["method"] == "ties"
+        assert [b["suite"] for b in res["benchmarks"]] == ["humaneval"]
+        assert c.get("/api/results").status_code == 401
+        runs = c.get("/api/runs", headers={"Authorization": "Bearer t"}).json()
+        assert set(runs["runs"]) == {"r"} and runs["results"]["report"]["accepted"] is True

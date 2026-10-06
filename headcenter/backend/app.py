@@ -7,6 +7,7 @@
                                  newest checkpoint) and tokenizer.json; the token sits
                                  in the path because the runtime fetches a base URL
     GET  /api/health             liveness, no auth
+    GET  /api/results            measured results: report, Darus merge search, benchmarks
     GET  /api/runs               snapshot of every run, agent modes, recent decisions
     POST /api/runs/{run}/cmd     body: a trainer command, e.g. {"cmd":"pause"}
     POST /api/agents/{agent}     body: {"mode": "act" | "advise" | "off"}
@@ -61,6 +62,46 @@ def checkpoint_dir(runs_dir: Path, run: str) -> Path | None:
     return cand
 
 
+# Files in runs/ that are results, not run logs.
+NOT_RUNS = {"benchmarks"}
+
+
+def read_results(runs_dir: Path) -> dict:
+    """Everything the finish chain measured, as written (never recomputed here)."""
+
+    def load(path: Path):
+        try:
+            return json.loads(path.read_text())
+        except (OSError, ValueError):
+            return None
+
+    search = load(runs_dir / "darus-1" / "search.json")
+    if search:
+        search = {k: search.get(k) for k in ("selection", "best_parent", "best")} | {
+            "candidates": len(search.get("candidates") or [])
+        }
+    bench = []
+    try:
+        for line in (runs_dir / "benchmarks.jsonl").read_text().splitlines():
+            rec = parse(line)
+            if rec and "suite" in rec:
+                bench.append(rec)
+    except OSError:
+        pass
+    return {"report": load(runs_dir / "report.json"), "search": search, "benchmarks": bench}
+
+
+def results_stamp(runs_dir: Path) -> tuple:
+    out = []
+    for p in (runs_dir / "report.json", runs_dir / "darus-1" / "search.json", runs_dir / "benchmarks.jsonl"):
+        try:
+            st = p.stat()
+            out.append((st.st_mtime_ns, st.st_size))
+        except OSError:
+            out.append(None)
+    return tuple(out)
+
+
 class Hub:
     """Owns run state, agents, the control channel and connected clients."""
 
@@ -88,6 +129,7 @@ class Hub:
         self.decisions: deque = deque(maxlen=500)
         self.clients: set[asyncio.Queue] = set()
         self.audit = self.runs_dir / "headcenter" / "decisions.jsonl"
+        self.stamp: tuple | None = None
 
     # ---- ingestion -------------------------------------------------------
 
@@ -96,6 +138,8 @@ class Hub:
         msgs: list[dict] = []
         for path in sorted(self.runs_dir.glob("*.jsonl")):
             run = path.stem
+            if run in NOT_RUNS:
+                continue
             first = run not in self.tails
             if first:
                 self.tails[run] = Tail(path)
@@ -156,6 +200,7 @@ class Hub:
             "runs": {name: st.summary() for name, st in self.runs.items()},
             "agents": {name: a.mode for name, a in self.agents.items()},
             "decisions": list(self.decisions)[-100:],
+            "results": read_results(self.runs_dir),
         }
 
     # ---- control ---------------------------------------------------------
@@ -193,6 +238,11 @@ class Hub:
             if now - last_tick >= 5.0:
                 last_tick = now
                 msgs += self.tick(now)
+                stamp = results_stamp(self.runs_dir)
+                if stamp != self.stamp:
+                    if self.stamp is not None:
+                        msgs.append({"type": "results", "results": read_results(self.runs_dir)})
+                    self.stamp = stamp
             if msgs:
                 self.broadcast(msgs)
             await asyncio.sleep(self.poll)
@@ -254,6 +304,11 @@ def create_app(
         if ck is None:
             raise HTTPException(404)
         return FileResponse(ck / file)
+
+    @app.get("/api/results")
+    def results(request: Request) -> dict:
+        check(request)
+        return read_results(hub.runs_dir)
 
     @app.get("/api/models")
     def models(request: Request) -> dict:

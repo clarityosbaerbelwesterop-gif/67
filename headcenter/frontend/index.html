@@ -91,6 +91,12 @@ select, input[type=text], input[type=password] { min-height: 44px; border-radius
 .legend { display: flex; gap: 12px; font-size: 12px; color: var(--muted); }
 .legend i { display: inline-block; width: 10px; height: 3px; margin-right: 4px; vertical-align: middle; }
 .empty { color: var(--muted); font-size: 13px; }
+.tbl { width: 100%; border-collapse: collapse; font-size: 13px; font-variant-numeric: tabular-nums; }
+.tbl th, .tbl td { padding: 6px 8px; border-bottom: 1px solid var(--line); text-align: right; white-space: nowrap; }
+.tbl th:first-child, .tbl td:first-child { text-align: left; }
+.tbl th { color: var(--muted); font-weight: 600; }
+.scroll { overflow-x: auto; -webkit-overflow-scrolling: touch; margin-bottom: 12px; }
+.ok { color: var(--ok); } .bad { color: var(--crit); }
 </style>
 </head>
 <body>
@@ -166,6 +172,11 @@ select, input[type=text], input[type=password] { min-height: 44px; border-radius
     <h2>Events and checkpoints</h2>
     <div class="feed" id="events"></div>
   </section>
+
+  <section class="card wide">
+    <h2>Results <span class="hint">measured by scripts/darus_finish.sh, shown as written</span></h2>
+    <div id="results"><span class="empty">no results yet</span></div>
+  </section>
 </main>
 
 <div id="auth"><div class="card">
@@ -221,7 +232,7 @@ function connect() {
 function onMsg(m) {
   switch (m.type) {
     case "snapshot":
-      S.runs = m.runs; S.agents = m.agents; S.decisions = (m.decisions || []).slice().reverse();
+      S.runs = m.runs; S.agents = m.agents; S.decisions = (m.decisions || []).slice().reverse(); S.results = m.results;
       if (!S.sel || !S.runs[S.sel]) S.sel = pickRun();
       break;
     case "run": S.runs[m.run.name] = m.run; if (!S.sel) S.sel = m.run.name; break;
@@ -229,6 +240,7 @@ function onMsg(m) {
     case "decision": S.decisions.unshift(m); S.decisions.length = Math.min(S.decisions.length, 300);
       if (m.severity !== "info") toast(`${m.agent}: ${m.reason}`); break;
     case "agents": S.agents = m.agents; break;
+    case "results": S.results = m.results; toast("new results"); break;
     case "command": break;
     case "ack": {
       const p = S.pending.get(m.id); S.pending.delete(m.id);
@@ -304,7 +316,7 @@ function render() {
     const base = `${httpBase()}/models/${encodeURIComponent(token || "-")}/${encodeURIComponent(r.name)}/`;
     $("tryGpu").href = `${httpBase()}/webgpu/#base=${encodeURIComponent(base)}`;
   }
-  renderKpis(r); drawLoss(r); drawTput(r); renderOps(r); renderMem(r); renderCtl(r); renderAgents(); renderEvents(r);
+  renderKpis(r); drawLoss(r); drawTput(r); renderOps(r); renderMem(r); renderCtl(r); renderAgents(); renderEvents(r); renderResults();
 }
 
 function renderRuns() {
@@ -453,6 +465,35 @@ function renderEvents(r) {
   $("events").innerHTML = items.slice(0, 80).map((e) =>
     `<div class="item ${esc(e.cls)}"><div class="meta">${e.ts ? new Date(e.ts * 1000).toLocaleTimeString() : ""}</div>${esc(e.text)}</div>`
   ).join("") || '<span class="empty">none</span>';
+}
+
+function renderResults() {
+  const res = S.results || {};
+  const parts = [];
+  const rep = res.report;
+  if (rep && rep.evaluations) {
+    const suites = Object.keys(Object.values(rep.evaluations)[0] || {});
+    const head = suites.map((s) => `<th>${esc(s)} loss</th><th>${esc(s)} ppl</th><th>${esc(s)} acc</th>`).join("");
+    const rows = Object.entries(rep.evaluations).map(([m, r]) => `<tr><td>${esc(m)}</td>${suites.map((s) =>
+      `<td>${fmt(r[s].loss, 4)}</td><td>${fmt(r[s].perplexity, 2)}</td><td>${(r[s].next_token_acc * 100).toFixed(2)} %</td>`).join("")}</tr>`).join("");
+    const verdict = (rep.darus_acceptance || []).map((v) =>
+      `${esc(v.suite)}: ${fmt(v.darus_loss, 4)} vs best parent ${fmt(v.best_parent_loss, 4)} <span class="${v.within_tolerance ? "ok" : "bad"}">${v.within_tolerance ? "within" : "outside"} tolerance</span>`).join(" · ");
+    parts.push(`<div class="scroll"><table class="tbl"><tr><th>validation</th>${head}</tr>${rows}</table></div>
+      <div class="hint">Darus acceptance: <b class="${rep.accepted ? "ok" : "bad"}">${rep.accepted ? "accepted" : "not accepted"}</b> — ${verdict}</div>`);
+  }
+  const se = res.search;
+  if (se && se.best) {
+    const b = se.best;
+    parts.push(`<div class="hint" style="margin-top:10px">Merge search: ${se.candidates} candidates on validation (seed ${se.selection ? se.selection.seed : "?"});
+      best <b>${esc(b.method)}</b>${b.density != null ? ` density ${fmt(b.density, 2)}` : ""} λ ${fmt(b.lambda, 2)},
+      worst-case regression vs best parent ${(b.objective * 100).toFixed(2)} %</div>`);
+  }
+  const bench = res.benchmarks || [];
+  if (bench.length) {
+    const rows = bench.map((x) => `<tr><td>${esc(String(x.ckpt).replace(/^runs\//, "").replace(/\/FINAL$/, ""))}</td><td>${esc(x.suite)}</td><td>${x.passed} / ${x.problems}</td><td>${(x["pass@1"] * 100).toFixed(1)} %</td><td>${esc(x.decoding || "")}</td></tr>`).join("");
+    parts.push(`<div class="scroll" style="margin-top:10px"><table class="tbl"><tr><th>model</th><th>benchmark</th><th>solved</th><th>pass@1</th><th>decoding</th></tr>${rows}</table></div>`);
+  }
+  $("results").innerHTML = parts.join("") || '<span class="empty">no results yet</span>';
 }
 
 /* ---------- interaction ---------- */
