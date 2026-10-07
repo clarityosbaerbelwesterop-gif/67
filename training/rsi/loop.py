@@ -644,7 +644,8 @@ class RSILoop:
             manifest = build_store(self.mkdir(rd / "store"), docs, name=f"rsi-{s.model}-r{k}", replay_meta=self.replay,
                                    replay_ratio=s.replay_ratio if self.replay else 0.0, seed=self._seed(k, "store"),
                                    min_split_tokens=2 * (seq + 1), decon=self.decon, forbidden=[t.prompt for t in self.heldout_all()],
-                                   tokenizer=self.tokenizer, forge=self.forge)
+                                   tokenizer=self.tokenizer, forge=self.forge,
+                                   min_train_tokens=self.steps * s.batch * s.grad_accum * (seq + 1))
             rec["data"] = rel(rd / "store")
             rec["data_sha256"] = {k2: manifest["sha256"][k2] for k2 in ("train.bin", "train.val.bin")}
             rec["data_tokens"] = {"train": manifest["tokens"], "val": manifest["val_tokens"], "by_source": manifest["token_mix"]}

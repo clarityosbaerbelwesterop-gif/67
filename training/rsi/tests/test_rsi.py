@@ -208,6 +208,24 @@ def test_store_roundtrip_forge_eval(scratch):
     assert ev["type"] == "eval" and math.isfinite(ev["loss"]) and 0 < ev["loss"] < 20
 
 
+def test_store_tops_train_up_to_token_budget(scratch):
+    """A round's train split holds at least its token budget, filled with replay, so
+    fine-tuning does not cycle a few documents for many epochs; val stays small."""
+    tasks = [T.make_task("code", 0, s) for s in range(12)]
+    docs = [{"text": t.prompt + t.reference, "source": "supervised-reference", "task_id": t.task_id} for t in tasks]
+    plain = St.build_store(scratch / "plain", docs, name="budget", replay_meta=CODE_META, replay_ratio=0.5, seed=1, min_split_tokens=200)
+    m = St.build_store(scratch / "budget", docs, name="budget", replay_meta=CODE_META, replay_ratio=0.5, seed=1, min_split_tokens=200,
+                       min_train_tokens=20_000)
+    assert plain["tokens"] < 20_000 <= m["tokens"] < 20_000 + 2 * 256
+    assert m["val_tokens"] == plain["val_tokens"]
+    assert m["documents"]["train"] == plain["documents"]["train"] and m["replay_token_fraction"] > 0.8
+    assert m["decontamination"]["remaining_overlaps"] == 0
+    # Without a replay store the budget is ignored: own documents are never repeated to fill it.
+    none = St.build_store(scratch / "none", docs, name="budget", replay_meta=None, replay_ratio=0.0, seed=1, min_split_tokens=200,
+                          min_train_tokens=20_000)
+    assert none["tokens"] < 20_000
+
+
 # --------------------------------------------------------------------------- gates, approval, STOP
 
 def _gates(**kw):
