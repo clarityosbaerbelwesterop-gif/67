@@ -372,9 +372,13 @@ def test_loop_flows_promote_reject_pending_stop(scratch):
     loop, out = run("approve", {"champ0": 0.25, "cand1": 0.5}, good_val, require_approval=True)
     out.mkdir(parents=True)
     (out / "approve-1.json").write_text(json.dumps({"approved": True, "by": "stale"}))
-    when_pending(out, approve(out, 1, True, "alice", candidate_sha256="cand1"))
+    seen = {}
+    grant = approve(out, 1, True, "alice", candidate_sha256="cand1")
+    when_pending(out, lambda: (seen.update(json.loads((out / "pending.json").read_text())), grant()))
     assert loop.run() == 0
     assert len(list(out.glob("approve-1.stale-*.json"))) == 1
+    # pending.json names the real end of the wait: never after --max-wall-hours.
+    assert seen["created"] < seen["approve_by"] <= loop.deadline and seen["approve_by_utc"].endswith("Z")
     rec = json.loads((out / "audit.jsonl").read_text().splitlines()[-1])
     assert rec["decision"] == "promote" and rec["approver"] == "alice" and rec["kind"] == "self-generated" and rec["self_improvement"]
     assert rec["accepted"] == 8 and rec["documents_by_source"] == {"self-generated": 8, "supervised-reference": 0}

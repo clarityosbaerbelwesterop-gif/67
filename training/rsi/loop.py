@@ -712,18 +712,21 @@ class RSILoop:
             stale = self.guard(self.out / f"approve-{k}.stale-{time.time_ns()}.json")
             os.replace(approve, stale)
             self.log("approval-file-stale", round=k, moved_to=rel(stale))
+        # The wait ends at the approval timeout or at --max-wall-hours, whichever is first;
+        # pending.json carries that instant so whoever approves sees the real deadline.
+        deadline = self.deadline
+        if self.s.approval_timeout_hours is not None:
+            deadline = min(deadline, time.time() + self.s.approval_timeout_hours * 3600.0)
         pending = {"model": self.s.model, "round": k, "family": self.s.family, "difficulty": rec["difficulty"], "kind": rec["kind"],
                    "candidate": rel(cand.dir), "candidate_sha256": cand.sha, "champion": rel(self.champion.dir),
                    "champion_sha256": self.champion.sha, "heldout_pass_before": rec["heldout_pass_before"],
                    "heldout_pass_after": rec["heldout_pass_after"], "val_loss_before": rec["val_loss_before"],
                    "val_loss_after": rec["val_loss_after"], "gates": rec["gates"], "data_sha256": rec["data_sha256"],
-                   "approve_file": rel(approve), "approve_schema": {"approved": "bool", "by": "str"}, "created": time.time()}
+                   "approve_file": rel(approve), "approve_schema": {"approved": "bool", "by": "str"}, "created": time.time(),
+                   "approve_by": deadline, "approve_by_utc": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(deadline))}
         self.write_json(self.out / "pending.json", pending)
         self.status("awaiting-approval", round=k, approve_file=rel(approve))
         self.log("pending-approval", round=k, approve_file=rel(approve))
-        deadline = self.deadline
-        if self.s.approval_timeout_hours is not None:
-            deadline = min(deadline, time.time() + self.s.approval_timeout_hours * 3600.0)
         st, by = wait_for_approval(approve, stop_check=self.stop_requested, deadline=deadline, poll=self.s.poll_seconds, log=self.log,
                                    candidate_sha=cand.sha)
         if st in ("approved", "rejected"):
