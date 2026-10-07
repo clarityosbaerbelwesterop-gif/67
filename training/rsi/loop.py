@@ -197,6 +197,7 @@ class Settings:
     max_new_code: int = 160
     max_new_text: int = 24
     replay_ratio: float = 0.5
+    new_repeats: int = 1
     threads: int = 0
     gate_batches: int = 8
     gate_batch: int = 8
@@ -645,7 +646,7 @@ class RSILoop:
                                    replay_ratio=s.replay_ratio if self.replay else 0.0, seed=self._seed(k, "store"),
                                    min_split_tokens=2 * (seq + 1), decon=self.decon, forbidden=[t.prompt for t in self.heldout_all()],
                                    tokenizer=self.tokenizer, forge=self.forge,
-                                   min_train_tokens=self.steps * s.batch * s.grad_accum * (seq + 1))
+                                   min_train_tokens=self.steps * s.batch * s.grad_accum * (seq + 1), new_repeats=s.new_repeats)
             rec["data"] = rel(rd / "store")
             rec["data_sha256"] = {k2: manifest["sha256"][k2] for k2 in ("train.bin", "train.val.bin")}
             rec["data_tokens"] = {"train": manifest["tokens"], "val": manifest["val_tokens"], "by_source": manifest["token_mix"]}
@@ -813,6 +814,8 @@ def parse_args(argv=None) -> Settings:
     ap.add_argument("--gate", action="append", default=[], metavar="NAME=META", help="gate store (val loss must not regress), repeatable")
     ap.add_argument("--replay", default=None, help="store meta for replay mixing")
     ap.add_argument("--replay-ratio", type=float, default=d.replay_ratio, help="replay share of training tokens")
+    ap.add_argument("--new-repeats", type=int, default=d.new_repeats,
+                    help="copies of each new train document per round (the rest of the token budget is replay)")
     ap.add_argument("--rounds", type=int, required=True, help="hard limit: rounds in this invocation")
     ap.add_argument("--tasks", type=int, default=d.tasks, help="tasks per round (N)")
     ap.add_argument("--samples", type=int, default=d.samples, help="candidates per task (K)")

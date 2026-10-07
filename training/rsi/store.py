@@ -133,7 +133,7 @@ class _Decoder:
 def build_store(out_dir: Path, docs: list[dict], *, name: str, replay_meta: Path | None = None, replay_ratio: float = 0.5,
                 seed: int = 0, val_fraction: float = 0.1, min_split_tokens: int = 600, chunk_tokens: int = 256,
                 decon: Decontaminator | None = None, forbidden: list[str] | tuple = (), tokenizer: Path = TOKENIZER,
-                forge: Path = FORGE, min_train_tokens: int = 0) -> dict:
+                forge: Path = FORGE, min_train_tokens: int = 0, new_repeats: int = 1) -> dict:
     """Write an SCP store from `docs` ({"text", "source", ...}) plus replay; returns the manifest.
 
     Documents overlapping the eval sets (13-gram) or containing a forbidden
@@ -180,12 +180,12 @@ def build_store(out_dir: Path, docs: list[dict], *, name: str, replay_meta: Path
     ids = forge_tokenize([d["text"] for d in kept], out_dir, forge=forge, tokenizer=tokenizer)
     units = {"train": [], "val": []}  # (source, ids incl. eos, doc or None)
     for i, d in enumerate(kept):
-        units["val" if i < n_val else "train"].append((d["source"], ids[i] + [EOS], d))
+        units["val" if i < n_val else "train"].extend([(d["source"], ids[i] + [EOS], d)] * (1 if i < n_val else new_repeats))
 
     decode = _Decoder(tokenizer)
     replay_info = {"meta": str(replay_meta) if replay_meta else None, "ratio_target": replay_ratio, "chunk_tokens": chunk_tokens,
                    "chunks": {"train": 0, "val": 0}, "tokens": {"train": 0, "val": 0}, "topped_up_tokens": {"train": 0, "val": 0},
-                   "min_train_tokens": min_train_tokens}
+                   "min_train_tokens": min_train_tokens, "new_repeats": new_repeats}
     for split in ("train", "val"):
         new_tokens = sum(len(u[1]) for u in units[split])
         want = round(new_tokens * replay_ratio / (1.0 - replay_ratio)) if replay_ratio > 0 else 0
