@@ -261,6 +261,29 @@ def test_gate_logic_with_injected_metrics():
     assert L.decide(_gates(heldout_after=None), False) == "reject"
 
 
+def test_anchor_gate_bounds_drift_from_initial_champion():
+    g = _gates()  # existing callers pass no anchor: nothing changes, recorded as not checked
+    assert g["passed"] and g["anchor"] is None and g["anchor_ok"]
+    # general 3.01 is +0.33 % vs the champion (ok) but +2.03 % vs the anchor 2.95 (over 2 %); code +1.02 %.
+    g = _gates(anchor_val={"general": 2.95, "code": 1.97}, anchor_tol=0.02)
+    assert not g["passed"] and L.decide(g, False) == "reject" and g["val_loss_ok"] and not g["anchor_ok"]
+    assert not g["anchor"]["general"]["ok"] and g["anchor"]["code"]["ok"] and g["anchor_tol"] == 0.02
+    assert g["anchor"]["general"]["anchor"] == 2.95 and g["anchor"]["general"]["after"] == 3.01
+    assert abs(g["anchor"]["general"]["rel_change"] - (3.01 / 2.95 - 1)) < 1e-12
+    assert g["reasons"] == ["val loss on general drifted +2.03% from the anchor (the run's initial champion), beyond 2.00%"]
+    g = _gates(anchor_val={"general": 2.96, "code": 1.97}, anchor_tol=0.02)  # +1.69 %, +1.02 %
+    assert g["passed"] and g["anchor_ok"] and all(v["ok"] for v in g["anchor"].values())
+    # val_after <= anchor * (1 + anchor_tol): the bound itself passes.
+    exact = dict(val_after={"general": 3.0, "code": 2.0}, anchor_val={"general": 2.4, "code": 1.6})
+    assert _gates(**exact, anchor_tol=0.25)["passed"] and not _gates(**exact, anchor_tol=0.2499)["passed"]
+    # A missing or non-finite anchor value fails closed; anchor_tol <= 0 disables the guard.
+    g = _gates(anchor_val={"code": 1.97}, anchor_tol=0.02)
+    assert not g["passed"] and g["reasons"] == ["anchor val loss on general missing"]
+    assert not _gates(anchor_val={"general": float("nan"), "code": 1.97}, anchor_tol=0.02)["passed"]
+    g = _gates(anchor_val={"general": 1.0, "code": 1.0}, anchor_tol=0.0)
+    assert g["passed"] and g["anchor"] is None
+
+
 def test_approval_file_and_stop(scratch):
     d = scratch / "approval"
     d.mkdir()
@@ -490,6 +513,79 @@ def test_loop_flows_promote_reject_pending_stop(scratch):
     loop.release_lock()
     other.acquire_lock()
     other.release_lock()
+
+
+# Every candidate is within 1 % (--tol) of the champion it was trained from and raises held-out by 0.1,
+# but the general val loss drifts +0.90 %, +1.80 %, +2.70 % from champ0 (the anchor; --anchor-tol 2 %).
+DRIFT_RATES = {"champ0": 0.1, "cand1": 0.2, "cand2": 0.3, "cand3": 0.4}
+DRIFT_VAL = {"champ0": {"general": 3.0}, "cand1": {"general": 3.027}, "cand2": {"general": 3.054}, "cand3": {"general": 3.081}}
+
+
+def _audit(out: Path) -> list[dict]:
+    return [json.loads(x) for x in (out / "audit.jsonl").read_text().splitlines()]
+
+
+@needs_forge
+def test_anchor_rejects_compounding_drift(scratch):
+    import io
+
+    champ = _fake_ckpt(scratch / "anchor" / "champ", "champ0", None)
+    StubLoop.heldout_rates, StubLoop.val = DRIFT_RATES, DRIFT_VAL
+    out = scratch / "anchor" / "drift" / "rsi" / "stub"
+    assert StubLoop(_settings(out, champ, rounds=3), out_stream=io.StringIO()).run() == 0
+    recs = _audit(out)
+    assert [r["decision"] for r in recs] == ["promote", "promote", "reject"]
+    assert all(r["gates"]["val_loss_ok"] and r["gates"]["heldout_improved"] for r in recs)  # per round, every other gate passes
+    assert all(r["anchor_sha256"] == "champ0" and r["val_loss_anchor"] == {"general": 3.0} for r in recs)
+    assert recs[1]["gates"]["anchor_ok"] and 0.01 < recs[1]["gates"]["anchor"]["general"]["rel_change"] < 0.02
+    g = recs[2]["gates"]
+    assert not g["anchor_ok"] and g["anchor"]["general"]["anchor"] == 3.0 and g["anchor"]["general"]["after"] == 3.081
+    assert recs[2]["reasons"] == ["val loss on general drifted +2.70% from the anchor (the run's initial champion), beyond 2.00%"]
+    cj = json.loads((out / "champion.json").read_text())
+    assert cj["model_sha256"] == "cand2" and cj["anchor"] == {"dir": L.rel(champ), "model_sha256": "champ0"}
+    # --anchor-tol 0 disables the guard: the same three rounds all promote.
+    out = scratch / "anchor" / "off" / "rsi" / "stub"
+    StubLoop(_settings(out, champ, rounds=3, anchor_tol=0.0), out_stream=io.StringIO()).run()
+    recs = _audit(out)
+    assert [r["decision"] for r in recs] == ["promote"] * 3 and recs[2]["gates"]["anchor"] is None and recs[2]["val_loss_anchor"] is None
+    assert L.parse_args(["--model", "m", "--champion", "c", "--family", "code", "--gate", "g=x", "--rounds", "1",
+                         "--anchor-tol", "0.03"]).anchor_tol == 0.03
+
+
+@needs_forge
+def test_anchor_survives_resume_and_resets(scratch):
+    import io
+
+    champ = _fake_ckpt(scratch / "anchor-resume" / "champ", "champ0", None)
+    StubLoop.heldout_rates, StubLoop.val = DRIFT_RATES, DRIFT_VAL
+    out = scratch / "anchor-resume" / "rsi" / "stub"
+    StubLoop(_settings(out, champ, rounds=2), out_stream=io.StringIO()).run()
+    assert [r["decision"] for r in _audit(out)] == ["promote", "promote"]
+    # A restart resumes cand2 as champion, but the anchor is still champ0: round 3 (+0.88 % vs cand2) is rejected.
+    loop = StubLoop(_settings(out, champ, rounds=1), out_stream=io.StringIO())
+    assert loop.run() == 0
+    assert loop.champion.sha == "cand2" and loop.anchor.sha == "champ0" and loop.anchor.dir == champ.resolve()
+    rec = _audit(out)[-1]
+    assert rec["round"] == 3 and rec["decision"] == "reject" and rec["gates"]["val_loss_ok"] and not rec["gates"]["anchor_ok"]
+    assert json.loads((out / "champion.json").read_text())["anchor"]["model_sha256"] == "champ0"
+    # champion.json from before anchors existed: the latest round-0 ("initial") entry of its history is the anchor.
+    cj = json.loads((out / "champion.json").read_text())
+    del cj["anchor"]
+    cj["history"].insert(0, {"dir": "/elsewhere/old", "model_sha256": "old", "round": 0, "source": "initial"})
+    (out / "champion.json").write_text(json.dumps(cj))
+    legacy = StubLoop(_settings(out, champ), out_stream=io.StringIO())
+    legacy.load_champion()
+    assert legacy.champion.sha == "cand2" and legacy.anchor.sha == "champ0" and legacy.anchor.dir == champ.resolve()
+    # --reset-champion starts a new run: its --champion (here cand2) becomes the anchor, so round 4 promotes.
+    StubLoop.heldout_rates = {**DRIFT_RATES, "cand4": 0.4}
+    StubLoop.val = {**DRIFT_VAL, "cand4": {"general": 3.081}}
+    reset = StubLoop(_settings(out, out / "champion", rounds=1, reset_champion=True), out_stream=io.StringIO())
+    reset.run()
+    rec = _audit(out)[-1]
+    assert rec["round"] == 4 and rec["decision"] == "promote" and rec["anchor_sha256"] == "cand2" and rec["gates"]["anchor_ok"]
+    cj = json.loads((out / "champion.json").read_text())
+    assert cj["model_sha256"] == "cand4" and cj["anchor"]["model_sha256"] == "cand2"
+    assert [h["model_sha256"] for h in cj["history"]][-2:] == ["cand2", "cand2"]  # resumed entry, then the reset's round 0
 
 
 # --------------------------------------------------------------------------- end-to-end micro round (real forge)

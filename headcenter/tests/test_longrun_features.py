@@ -79,6 +79,26 @@ def test_rsi_approval_only_while_pending_and_stop(tmp_path):
         assert c.get("/api/longrun", headers=H).status_code == 200
 
 
+def test_longrun_view_includes_the_champions(tmp_path):
+    runs = tmp_path / "runs"
+    (runs / "longrun").mkdir(parents=True)
+    (runs / "longrun" / "state.json").write_text(json.dumps({"status": "running", "cycle": 3, "cycles": {}}))
+    champs = {"type": "champions", "cycle": 3, "champions": {
+        "quasnir": {"run": "quasnir-g3", "dir": "runs/quasnir-g3/FINAL", "metrics": {"val": {"code": 1.9}, "heldout_mean": 0.5},
+                    "decided": {"cycle": 3, "by": "arbiter", "changed": True}},
+        "rouge": {"run": "rouge-g3", "dir": "runs/rouge-g3/FINAL", "restricted": True}}}
+    (runs / "champions.json").write_text(json.dumps(champs))
+    with TestClient(create_app(runs, token="op", poll=0.05)) as c:
+        assert c.get("/api/longrun").status_code == 401, "operator token required, like every API call"
+        body = c.get("/api/longrun", headers=H).json()
+        assert body["champions"] == champs and body["state"]["cycle"] == 3
+        assert "champions" not in c.get("/api/runs", headers=H).json().get("runs", {}), "champions.json is not a run"
+        (runs / "champions.json").unlink()
+        assert c.get("/api/longrun", headers=H).json()["champions"] is None
+    page = (ROOT / "headcenter" / "frontend" / "index.html").read_text()
+    assert "renderChampions(lr.champions)" in page and "function renderChampions" in page
+
+
 def free_port() -> int:
     with socket.socket() as s:
         s.bind(("127.0.0.1", 0))

@@ -10,7 +10,8 @@
     GET  /api/rsi                controlled-RSI rounds and pending approvals per model
     POST /api/rsi/{model}/approve  {"round": n, "approved": bool}  (only while pending)
     POST /api/rsi/{model}/stop   the RSI loop halts at its next check
-    GET  /api/longrun            runs/longrun/state.json + history, as written
+    GET  /api/longrun            runs/longrun/state.json + history and runs/champions.json
+                                 (the current champion of every family), as written
     POST /api/swarm/{group}/open, POST /api/swarm/join, GET /api/swarm/{group}/assignment,
     POST /api/swarm/{group}/report, GET /api/swarm, DELETE /api/swarm/{group}
                                  rendezvous for real machines joining forge diloco
@@ -46,7 +47,7 @@ from fastapi.responses import FileResponse, JSONResponse
 from .agents import MODES, Agent, Decision, JitOptimizer, SiliconWatchdog
 from .access import Access
 from .control import RUN_RE, CommandError, Controller, NotLive
-from .rsi import RSI, RSIError, read_longrun
+from .rsi import RSI, RSIError, load_json, read_longrun
 from .swarm import Swarm, SwarmError
 from .telemetry import RunState, Tail, load_max_steps, parse
 
@@ -375,7 +376,7 @@ def create_app(
     @app.get("/api/longrun")
     def longrun(request: Request) -> dict:
         check(request)
-        return read_longrun(hub.runs_dir)
+        return {**read_longrun(hub.runs_dir), "champions": load_json(hub.runs_dir / "champions.json")}
 
     @app.get("/api/swarm")
     def swarm_overview(request: Request) -> dict:

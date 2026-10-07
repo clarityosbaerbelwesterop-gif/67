@@ -24,13 +24,14 @@ Typical families: Quasnir uses `code`, Rouge 1 uses `text`, and Darus uses
 | **Verifier, not self-judgement.** Code runs in the sandbox against hidden asserts. The sandbox follows `scripts/humaneval.py` and uses its `limits()`: `python -I`, empty env, temp dir, RLIMIT CPU/AS/FSIZE/NPROC, a wall timeout and a process-group kill. Text answers are compared exactly after normalisation. A random marker must be printed after the asserts (so `exit(0)` cannot pass), and a static filter rejects imports outside a small allow-list, `os`/`sys`/`open`/`exec`, dunder names and `class` (reward-hacking guards). | `verify.py` |
 | **Honest held-out set.** Train seeds come from [0, 1e9) and held-out seeds from [1e9, 2e9). Any training task whose prompt equals a held-out prompt at any level is dropped as well. Every task and every training document is checked for 13-gram overlap with `data/stores/evals/*.jsonl` (HumanEval, MBPP, GSM8K) and dropped on overlap. Missing eval files are an error. | `tasks.py`, `store.py` |
 | **Gates** (all must pass to promote): (1) the held-out pass rate (greedy, fixed set at the current level) must not drop and must rise by at least `--delta`; (2) validation loss on every `--gate` store may regress by at most `--tol` (1 % relative by default); (3) the round store has no contamination left (each written unit is decoded and re-checked); (4) the candidate descends from the champion (`state.json` `parent_sha256`). `--promote-on no-regression` drops the delta requirement, and the audit records that choice. | `loop.evaluate_gates` |
+| **Anchor guard.** Without `--require-approval` every candidate that passes the gates is promoted, so eight rounds that each stay within `--tol` could still add up to about 8 % val-loss drift. The run's anchor is its initial champion (`--champion` at round 0). Its sha256 and directory are kept in `champion.json` as `"anchor"` and survive restarts; `--reset-champion` starts a new anchor, and a `champion.json` written before anchors existed uses its latest round-0 history entry. A candidate also needs val loss ≤ anchor × (1 + `--anchor-tol`) on every gate store (2 % by default; ≤ 0 disables). The anchor's losses come from the same cached gate evals (`metrics.json`, per sha). The audit records `anchor_sha256`, `val_loss_anchor` and per store `gates.anchor` (`anchor`, `after`, `rel_change`, `ok`) plus `gates.anchor_ok`. | `loop.evaluate_gates`, `loop.RSILoop.load_champion` |
 | **Human approval.** With `--require-approval`, a candidate that passes the gates is written to `pending.json`, and the loop polls for `approve-<round>.json` = `{"approved": bool, "by": "name"}` (the headcenter writes it; an optional `"candidate_sha256"` must match the pending candidate). Rejected candidates are never promoted. A malformed approval file is ignored, logged, and polling continues. An approval file that already existed before the request (from an aborted attempt) is moved aside as stale. A `pending.json` left by a loop that halted is expired on restart. | `loop.wait_for_approval` |
 | **Integrity.** The champion's `model.safetensors` must hash to its recorded `model_sha256` when it is loaded. A candidate is hashed again right before promotion, so a file that changed while awaiting approval is rejected. | `loop.RSILoop.model_file_sha` |
 | **STOP.** If `runs/rsi/<model>/STOP` exists, the loop stops at the next check: before each round, between phases, and while waiting for approval. | `loop.RSILoop.check` |
 | **Hard limits.** `--rounds` (per invocation), `--max-steps-per-round` (caps `--steps-per-round`), `--max-wall-hours` (also bounds every forge subprocess) and `--approval-timeout-hours`. A lock file stops a second loop from running on the same directory. | `loop.py` |
 | **Write guard.** Every write goes through `RSILoop.guard`. It allows only `runs/rsi/<model>/` (data, configs, checkpoints, audit) and the round telemetry `runs/rsi-<model>-r<k>.jsonl`. The champion checkpoint and other models' runs are only read. | `loop.RSILoop.guard` |
 | **Replay.** Each round store holds at least the round's training token budget (steps × batch × grad_accum × (seq+1)); new documents are stored `--new-repeats` times (default 8) and replay chunks from an existing store (`--replay`, at least `--replay-ratio`) fill the rest, so fine-tuning never cycles a tiny store. Defaults lr 2e-5 and grad_accum 4 match the champions' final lr and batch. Measured on quasnir-g2, one round (0/64 held-out before): 1 repeat → 1/64, val +0.4 %; 16 repeats → 42/64, code val +1.15 % (over the 1 % gate). The previous setting (lr 1e-4, batch 8, 14.5k-token store) reached ~49/64 but regressed val loss by 8–13 %. | `store.py` |
-| **Audit.** `audit.jsonl` holds one JSON line per round (fields below). `champion.json` (with history) and the `champion` symlink name the current champion. `metrics.json` caches measured held-out and val numbers per checkpoint sha. `status.json` gives the live phase. | `loop.py` |
+| **Audit.** `audit.jsonl` holds one JSON line per round (fields below). `champion.json` (with history and the anchor) and the `champion` symlink name the current champion. `metrics.json` caches measured held-out and val numbers per checkpoint sha. `status.json` gives the live phase. | `loop.py` |
 
 ## Data kinds are never mixed up
 
@@ -100,8 +101,8 @@ Audit fields (always present): `round, model, family, difficulty, tasks,
 samples, accepted, kind, signal, data_sha256, heldout_pass_before,
 heldout_pass_after, val_loss_before, val_loss_after, decision, approver,
 champion, candidate, self_improvement, difficulty_next, ts`. Detail fields
-include `gates`, `reasons`, `verify_status`, `task_stats`, `data_tokens`,
-`documents_by_source`, `train_done` and `seconds`.
+include `gates`, `reasons`, `anchor_sha256`, `val_loss_anchor`, `verify_status`,
+`task_stats`, `data_tokens`, `documents_by_source`, `train_done` and `seconds`.
 
 ## Tasks
 
@@ -126,9 +127,10 @@ include `gates`, `reasons`, `verify_status`, `task_stats`, `data_tokens`,
 `tests/test_rsi.py` cover: determinism and seed-space disjointness;
 decontamination; sandbox verdicts (wrong, timeout, crash, syntax, exit hacks,
 output floods) and that reference solutions pass for every family and level; a
-store round trip through `forge eval`; the gate logic; approval and STOP;
-stubbed promote/reject/pending flows; and one real micro round with a freshly
-trained tiny model.
+store round trip through `forge eval`; the gate logic, including the anchor
+guard; approval and STOP; stubbed promote/reject/pending flows; anchor drift
+that compounds over rounds and across a restart; and one real micro round
+with a freshly trained tiny model.
 
 ```
 nice -n 15 python3 -m pytest -q training/rsi/tests/test_rsi.py

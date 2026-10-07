@@ -14,9 +14,11 @@ One round r for model M with champion checkpoint C:
      `forge train` (init_from C, small lr) into runs/rsi/M/rounds/;
   6. gates on the candidate vs C: held-out pass rate (fixed held-out set,
      disjoint seed space) must not drop and must rise by >= delta; validation
-     loss on every --gate store must not regress by more than tol (relative);
-     the round store must be contamination-free; the candidate must descend
-     from C (state.json parent_sha256);
+     loss on every --gate store must not regress by more than tol (relative)
+     and must stay within anchor_tol of the run's anchor (its initial
+     champion, kept in champion.json across restarts), so per-round
+     regressions cannot compound; the round store must be contamination-free;
+     the candidate must descend from C (state.json parent_sha256);
   7. decision promote / reject / pending-approval (--require-approval: write
      pending.json and poll for approve-<r>.json {"approved": bool, "by": str});
   8. curriculum: raise the difficulty when the champion's held-out pass rate at
@@ -82,20 +84,34 @@ def _abs(p: str | Path) -> Path:
 # --------------------------------------------------------------------------- gates (pure functions)
 
 def evaluate_gates(*, heldout_before: float | None, heldout_after: float | None, val_before: dict, val_after: dict,
-                   contamination: int, lineage_ok: bool, delta: float, tol: float, require_improvement: bool = True) -> dict:
-    """All promotion gates of one candidate against the champion."""
+                   contamination: int, lineage_ok: bool, delta: float, tol: float, require_improvement: bool = True,
+                   anchor_val: dict | None = None, anchor_tol: float = 0.0) -> dict:
+    """All promotion gates of one candidate against the champion.
+
+    With `anchor_val` (gate-store val losses of the run's anchor) and anchor_tol > 0,
+    every gate store must also satisfy val_after <= anchor * (1 + anchor_tol), so
+    promotions of up to `tol` each cannot compound into unbounded drift."""
     val = {}
     for name, b in val_before.items():
         a = val_after.get(name)
         ok_nums = all(isinstance(x, (int, float)) and math.isfinite(x) for x in (a, b)) and b > 0
         rel_change = (a - b) / b if ok_nums else None
         val[name] = {"before": b, "after": a, "rel_change": rel_change, "ok": rel_change is not None and rel_change <= tol}
+    anchor = None
+    if anchor_val is not None and anchor_tol > 0:
+        anchor = {}
+        for name in val_before:
+            r, a = anchor_val.get(name), val_after.get(name)
+            ok_nums = all(isinstance(x, (int, float)) and math.isfinite(x) for x in (a, r)) and r > 0
+            anchor[name] = {"anchor": r, "after": a, "rel_change": (a - r) / r if ok_nums else None,
+                            "ok": ok_nums and a <= r * (1 + anchor_tol)}
     have = heldout_before is not None and heldout_after is not None
     no_drop = have and heldout_after >= heldout_before
     improved = have and heldout_after - heldout_before >= delta - 1e-12
     gates = {
         "heldout_no_drop": no_drop, "heldout_improved": improved, "heldout_delta": delta,
         "val_loss": val, "val_loss_ok": all(v["ok"] for v in val.values()), "val_tol": tol,
+        "anchor": anchor, "anchor_ok": anchor is None or all(v["ok"] for v in anchor.values()), "anchor_tol": anchor_tol,
         "contamination": contamination, "contamination_free": contamination == 0,
         "lineage_ok": lineage_ok, "require_improvement": require_improvement,
     }
@@ -107,6 +123,10 @@ def evaluate_gates(*, heldout_before: float | None, heldout_after: float | None,
     for name, v in val.items():
         if not v["ok"]:
             reasons.append(f"val loss on {name} regressed beyond {tol:.2%}" if v["rel_change"] is not None else f"val loss on {name} missing")
+    for name, v in (anchor or {}).items():
+        if not v["ok"]:
+            reasons.append(f"val loss on {name} drifted {v['rel_change']:+.2%} from the anchor (the run's initial champion), "
+                           f"beyond {anchor_tol:.2%}" if v["rel_change"] is not None else f"anchor val loss on {name} missing")
     if contamination:
         reasons.append(f"{contamination} contaminated training units")
     if not lineage_ok:
@@ -188,6 +208,7 @@ class Settings:
     heldout: int = 64
     delta: float = 0.03
     tol: float = 0.01
+    anchor_tol: float = 0.02  # bound on the drift vs the run's initial champion across all promotions; <= 0 disables
     advance_at: float = 0.7
     require_improvement: bool = True
     min_accepted: int = 8
@@ -257,6 +278,7 @@ class RSILoop:
         self._decoder = None
         self._lock = None
         self.champion: Ckpt | None = None
+        self.anchor: Ckpt | None = None
         self.model_cfg: dict = {}
 
     # ---------------------------------------------------------------- guarded writes
@@ -362,15 +384,28 @@ class RSILoop:
             if ck.sha != c["model_sha256"]:
                 raise RuntimeError(f"champion.json sha {c['model_sha256']} != {ck.sha} of {ck.dir}")
             self.champion = ck
-            self.log("champion-resumed", dir=rel(ck.dir), sha256=ck.sha, round=c.get("round"))
+            self.anchor = self._stored_anchor(c)
+            self.log("champion-resumed", dir=rel(ck.dir), sha256=ck.sha, round=c.get("round"), anchor_sha256=self.anchor.sha)
         else:
             ck = self._ckpt(_abs(self.s.champion))
             self.champion = ck
+            self.anchor = ck  # the run's origin, persisted in champion.json; --reset-champion starts a new one
             self._write_champion(ck, round_no=0, source="initial", approver=None)
             self.log("champion-initial", dir=rel(ck.dir), sha256=ck.sha)
         if self.model_file_sha(self.champion.dir) != self.champion.sha:
             raise RuntimeError(f"{self.champion.dir}/model.safetensors does not match model_sha256 {self.champion.sha}")
         self.model_cfg = self.champion.info["model"]
+
+    @staticmethod
+    def _stored_anchor(c: dict) -> Ckpt:
+        """The anchor named in champion.json. A file written before anchors existed falls
+        back to its latest round-0 entry ("initial"), i.e. where the current run started."""
+        a = c.get("anchor")
+        if not a:
+            chain = list(c.get("history") or []) + [c]
+            a = next((h for h in reversed(chain) if h.get("source") == "initial"), chain[0])
+        d = Path(a["dir"])
+        return Ckpt(dir=d if d.is_absolute() else ROOT / d, sha=a["model_sha256"])
 
     def _write_champion(self, ck: Ckpt, *, round_no: int, source: str, approver: str | None) -> None:
         prev = None
@@ -381,7 +416,8 @@ class RSILoop:
         if prev:
             history = history + [{k: prev.get(k) for k in ("dir", "model_sha256", "round", "source", "approver", "ts")}]
         self.write_json(cj, {"model": self.s.model, "dir": rel(ck.dir), "model_sha256": ck.sha, "round": round_no, "source": source,
-                             "approver": approver, "ts": time.time(), "history": history})
+                             "approver": approver, "ts": time.time(), "history": history,
+                             "anchor": {"dir": rel(self.anchor.dir), "model_sha256": self.anchor.sha}})
         link = self.guard(self.out / "champion", replace_link=True)
         tmp = self.guard(self.out / "champion.tmp-link", replace_link=True)
         if tmp.is_symlink() or tmp.exists():
@@ -569,7 +605,7 @@ class RSILoop:
         rec = {f: None for f in AUDIT_FIELDS}
         rec.update(round=k, model=s.model, family=s.family, difficulty=level, tasks=0, samples=0, accepted=0, kind=None, signal=None,
                    decision=None, approver=None, champion=rel(self.champion.dir), champion_sha256=self.champion.sha,
-                   self_improvement=False, difficulty_next=level, ts_start=time.time(), reasons=[])
+                   anchor_sha256=self.anchor.sha, self_improvement=False, difficulty_next=level, ts_start=time.time(), reasons=[])
         rd = self.mkdir(self.out / "data" / f"r{k}")
         champ = self.champion
         try:
@@ -662,10 +698,12 @@ class RSILoop:
             self.status("gating", round=k)
             ha = self.heldout_pass(cand, level)
             vb, va = self.val_losses(champ), self.val_losses(cand)
-            rec.update(heldout_pass_after=ha["pass_rate"], val_loss_before=vb, val_loss_after=va)
+            van = self.val_losses(self.anchor) if s.anchor_tol > 0 else None  # cached per sha (== vb while the anchor is champion)
+            rec.update(heldout_pass_after=ha["pass_rate"], val_loss_before=vb, val_loss_after=va, val_loss_anchor=van)
             gates = evaluate_gates(heldout_before=hb["pass_rate"], heldout_after=ha["pass_rate"], val_before=vb, val_after=va,
                                    contamination=manifest["decontamination"]["remaining_overlaps"], lineage_ok=cand.lineage_ok,
-                                   delta=s.delta, tol=s.tol, require_improvement=s.require_improvement)
+                                   delta=s.delta, tol=s.tol, require_improvement=s.require_improvement,
+                                   anchor_val=van, anchor_tol=s.anchor_tol)
             rec["gates"] = gates
             rec["reasons"] += gates["reasons"]
             self.check("after gating")
@@ -778,7 +816,8 @@ class RSILoop:
             self.log("pending-expired", round=old.get("round"), moved_to=rel(moved))
         level = past[-1]["difficulty_next"] if past else self.s.level
         self.log("start", out=rel(self.out), champion=rel(self.champion.dir), level=level, first_round=last + 1, rounds=self.s.rounds,
-                 steps_per_round=self.steps, require_approval=self.s.require_approval, warmstart=self.s.warmstart)
+                 steps_per_round=self.steps, require_approval=self.s.require_approval, warmstart=self.s.warmstart,
+                 anchor=rel(self.anchor.dir), anchor_tol=self.s.anchor_tol)
         exit_code = 0
         try:
             if not past and not self.stop_requested():  # curriculum for the initial champion
@@ -840,6 +879,9 @@ def parse_args(argv=None) -> Settings:
     ap.add_argument("--heldout", type=int, default=d.heldout, help="held-out tasks per level")
     ap.add_argument("--delta", type=float, default=d.delta, help="held-out pass-rate rise that counts as improvement")
     ap.add_argument("--tol", type=float, default=d.tol, help="max relative val-loss regression per gate store")
+    ap.add_argument("--anchor-tol", type=float, default=d.anchor_tol,
+                    help="max relative val-loss regression per gate store vs the run's anchor (its initial champion, kept "
+                         "across restarts; --reset-champion resets it), bounding drift over all promotions; <= 0 disables")
     ap.add_argument("--advance-at", type=float, default=d.advance_at, help="held-out pass rate that raises the difficulty")
     ap.add_argument("--promote-on", choices=("improvement", "no-regression"), default="improvement",
                     help="'no-regression' drops the delta requirement (still recorded in the audit)")
@@ -858,7 +900,8 @@ def parse_args(argv=None) -> Settings:
     ap.add_argument("--poll-seconds", type=float, default=d.poll_seconds)
     ap.add_argument("--approval-timeout-hours", type=float, default=None)
     ap.add_argument("--seed", type=int, default=d.seed)
-    ap.add_argument("--reset-champion", action="store_true", help="ignore champion.json in --out and start from --champion")
+    ap.add_argument("--reset-champion", action="store_true",
+                    help="ignore champion.json in --out and start from --champion (also the new anchor)")
     ap.add_argument("--autotune", action="store_true", help="run the forge JIT autotuner before each round's training")
     ap.add_argument("--forge", default=d.forge)
     ap.add_argument("--tokenizer", default=d.tokenizer)

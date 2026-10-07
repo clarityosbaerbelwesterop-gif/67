@@ -18,12 +18,13 @@
     "telemetry_min_samples": 10
   },
   "shares": {
-    "base": 0.5,
+    "base": 0.47,
     "quasnir": 0.12,
     "quasnir_rsi": 0.08,
     "rouge": 0.13,
     "rouge_rsi": 0.06,
     "darus": 0.08,
+    "champions": 0.03,
     "report": 0.03
   },
   "names": {
@@ -73,7 +74,7 @@
     },
     "v3": {
       "base": "data/out/base-v3/train.meta.json",
-      "code": "data/out/code-v2/train.meta.json",
+      "code": "data/out/code-v3/train.meta.json",
       "general": "data/out/general-v3/train.meta.json"
     },
     "v1": {
@@ -113,6 +114,7 @@
     "new_repeats": 16,
     "min_wall_hours": 0.1,
     "approval_timeout_hours": 6,
+    "anchor_tol": 0.02,
     "extra_args": [],
     "models": {
       "quasnir": {
@@ -122,7 +124,7 @@
           "general"
         ],
         "replay": "code",
-        "require_approval": true
+        "require_approval": false
       },
       "rouge": {
         "family": "text",
@@ -131,7 +133,7 @@
           "base"
         ],
         "replay": "rouge_mix",
-        "require_approval": true
+        "require_approval": false
       },
       "darus": {
         "family": "mixed",
@@ -140,9 +142,40 @@
           "code"
         ],
         "replay": "base",
-        "require_approval": true
+        "require_approval": false
       }
     }
+  },
+  "champions": {
+    "enabled": true,
+    "families": [
+      "quasnir",
+      "rouge",
+      "darus"
+    ],
+    "levels": [
+      0,
+      1,
+      2
+    ],
+    "heldout_tasks": 128,
+    "margin": 0.03,
+    "threads": 0,
+    "cache": "runs/longrun/champions-cache.json",
+    "log": "runs/longrun/champions.jsonl",
+    "out": "runs/champions.json"
+  },
+  "rebase": {
+    "enabled": true,
+    "families": [
+      "quasnir",
+      "rouge"
+    ],
+    "lams": [
+      1.0,
+      0.5
+    ],
+    "heldout_levels": []
   },
   "merge": {
     "cmd": [

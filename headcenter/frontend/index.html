@@ -174,7 +174,7 @@ select, input[type=text], input[type=password] { min-height: 44px; border-radius
   </section>
 
   <section class="card wide">
-    <h2>Controlled RSI <span class="hint">every promotion needs your approval; no answer in 6 h = rejected</span></h2>
+    <h2>Controlled RSI <span class="hint">promotion is automatic when every gate passes; approval only where longrun.json re-enables it</span></h2>
     <div id="rsi"><span class="empty">no RSI rounds yet</span></div>
   </section>
 
@@ -561,7 +561,23 @@ function renderLongrun(lr) {
     <div class="kpi"><div class="l">Phase</div><div class="v" style="font-size:15px">${esc((Object.entries(cyc.steps || {}).find(([, v]) => v.status === "running") || ["–"])[0])}</div></div>
     <div class="kpi"><div class="l">Status</div><div class="v" style="font-size:15px">${esc(st.status ?? "–")}${lr.stop ? " (STOP set)" : ""}</div></div></div>
     ${st.message ? `<div class="item warn">${esc(st.message)}</div>` : ""}
+    ${renderChampions(lr.champions)}
     ${hist.map((h) => `<div class="item info">${esc(JSON.stringify(h).slice(0, 220))}</div>`).join("")}`;
+}
+function renderChampions(cf) {
+  const fams = Object.entries((cf && cf.champions) || {});
+  if (!fams.length) return "";
+  const num = (x) => (x == null ? "–" : Number(x).toFixed(3));
+  const rows = fams.map(([fam, c]) => {
+    const m = c.metrics || {}, d = c.decided || {};
+    const val = Object.entries(m.val || {}).map(([s, v]) => `${esc(s)} ${num(v)}`).join(", ") || "–";
+    const since = d.cycle != null ? `g${esc(d.cycle)} ${d.changed ? "new" : "kept"} (${esc(d.by || "")})` : `g${esc(c.gen ?? "–")}`;
+    return `<tr><td>${esc(fam)}${c.restricted ? ' <span class="hint">restricted</span>' : ""}</td>
+      <td title="${esc(c.dir || "")}">${esc(c.run || "–")} <span class="hint">${esc(c.source || "")}</span></td>
+      <td>${m.heldout_mean == null ? "–" : pct(m.heldout_mean)}</td><td>${val}</td><td>${since}</td></tr>`;
+  }).join("");
+  return `<div style="margin:8px 0"><b>Champions</b> <span class="hint">cycle ${esc(cf.cycle ?? "–")}, ${esc(cf.updated_at_iso || "")}</span>
+    <div class="scroll"><table class="tbl"><tr><th>model</th><th>champion</th><th>held-out</th><th>val loss</th><th>since</th></tr>${rows}</table></div></div>`;
 }
 function renderSwarm(sw) {
   const groups = Object.values((sw && sw.groups) || {});

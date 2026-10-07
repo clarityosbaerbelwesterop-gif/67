@@ -10,26 +10,37 @@ One cycle (generation g = 2, 3, ...; generation 1 is base-s / rouge-1 /
 quasnir-1 / darus-1 from scripts/train_all.sh):
 
   base       base-g<g>: continue pretraining from the current base FINAL on
-             base-v2 (lr re-warm + cosine)                          ~55 % of the cycle
+             base-v2 (lr re-warm + cosine)                          ~47 % of the cycle
   base_gate  base-g<g> becomes the current base only if base-v2 val loss does
              not regress beyond the tolerance
-  quasnir    quasnir-g<g> (coding): init_from the base on code-v2   ~14 %
-  quasnir_rsi controlled RSI, family code (training.rsi.loop)       ~5 %
-  quasnir_gate
+  quasnir    quasnir-g<g> (coding) on code-v2, init_from the base or, if
+             that measures better, the current Quasnir champion rebased onto
+             it (scripts/rebase.py: base + lam * (champion - its base))   ~12 %
+  quasnir_rsi controlled RSI, family code (training.rsi.loop)       ~8 %
+  quasnir_gate (deferred to the champion arbiter)
   rouge_mix  base-v2 + general-v2 mix store (re-sliced documents, built once)
-  rouge      rouge-g<g> (Rouge 1, restricted): init_from the base   ~15 %
-  rouge_rsi  controlled RSI, family text                            ~3 %
-  rouge_gate
+  rouge      rouge-g<g> (Rouge 1, restricted): init like quasnir    ~13 %
+  rouge_rsi  controlled RSI, family text                            ~6 %
+  rouge_gate (deferred to the champion arbiter)
   darus_merge evolutionary TIES/linear merge search (scripts/merge_search.py)
-  darus_rsi  controlled RSI, family mixed            merge + RSI    ~5 %
-  darus_gate
+  darus_rsi  controlled RSI, family mixed            merge + RSI    ~8 %
+  darus_gate (deferred to the champion arbiter)
+  champions  champion arbiter (scripts/champions.py) for quasnir, rouge and
+             darus: incumbent vs this cycle's FINAL vs its RSI champion, one
+             rule (docs/LONGRUN.md); promotion is automatic. Writes runs/
+             champions.json and runs/longrun/champions.jsonl            ~3 %
   report     forge eval of all four models on the v2 val stores,
              HumanEval/MBPP for Darus and Quasnir -> report-g<g>.json   ~3 %
-  hygiene    keep FINAL + the last N step checkpoints per finished run
+  hygiene    keep FINAL + the last N step checkpoints per finished run; never
+             a champion, a champion's base or a rebased init still in use
 
 Step counts come from the wall budget (--days), the cycle length and a measured
 throughput: `forge bench --config <base config> --steps 3` once at the start;
 later cycles use the median tokens/s of the previous base run's telemetry.
+
+The config file is re-read at every phase boundary when its sha256 changed
+(validated like at startup; an invalid edit is logged and ignored), so edits
+apply without a restart. A newer corpus (v3) is adopted only between cycles.
 
 Live control: every `forge train` reads commands from the FIFO runs/<run>.ctl
 (opened read-write, like scripts/train_all.sh) and its stdout is appended to
@@ -52,6 +63,7 @@ import argparse
 import copy
 import fcntl
 import hashlib
+import importlib.util
 import json
 import math
 import os
@@ -73,8 +85,10 @@ EOS_BYTES = EOS.to_bytes(2, "little")
 STEP_RE = re.compile(r"^step-(\d{6,})$")
 TRAIN_FAMILIES = ("base", "quasnir", "rouge")
 FAMILIES = ("base", "quasnir", "rouge", "darus")
+ARBITER_FAMILIES = ("quasnir", "rouge", "darus")
 CYCLE_STEPS = ("base", "base_gate", "quasnir", "quasnir_rsi", "quasnir_gate", "rouge_mix", "rouge", "rouge_rsi",
-               "rouge_gate", "darus_merge", "darus_rsi", "darus_gate", "report", "hygiene")
+               "rouge_gate", "darus_merge", "darus_rsi", "darus_gate", "champions", "report", "hygiene")
+REBASED_PREFIX = "rebased-init-"  # runs/<run>/rebased-init-<champion sha12>-lam<lam>: a specialist's rebased init
 CTL_STOP = b'{"cmd":"checkpoint"}\n{"cmd":"stop"}\n'
 
 # Built-in defaults; training/configs/longrun.json holds the same values (a test
@@ -94,8 +108,8 @@ DEFAULTS: dict = {
     "min_free_gb": 5,
     "min_steps": 20,
     "throughput": {"bench_steps": 3, "assumed_tokens_per_s": 1700, "telemetry_min_samples": 10},
-    "shares": {"base": 0.50, "quasnir": 0.12, "quasnir_rsi": 0.08, "rouge": 0.13, "rouge_rsi": 0.06,
-               "darus": 0.08, "report": 0.03},
+    "shares": {"base": 0.47, "quasnir": 0.12, "quasnir_rsi": 0.08, "rouge": 0.13, "rouge_rsi": 0.06,
+               "darus": 0.08, "champions": 0.03, "report": 0.03},
     "names": {"base": "base-g{g}", "quasnir": "quasnir-g{g}", "rouge": "rouge-g{g}", "darus": "darus-g{g}"},
     "initial": {"base": "runs/base-s/FINAL", "quasnir": "runs/quasnir-1/FINAL", "rouge": "runs/rouge-1/FINAL",
                 "darus": "runs/darus-1/FINAL"},
@@ -108,7 +122,7 @@ DEFAULTS: dict = {
     "corpus": {
         "v2": {"base": "data/out/base-v2/train.meta.json", "code": "data/out/code-v2/train.meta.json",
                "general": "data/out/general-v2/train.meta.json"},
-        "v3": {"base": "data/out/base-v3/train.meta.json", "code": "data/out/code-v2/train.meta.json",
+        "v3": {"base": "data/out/base-v3/train.meta.json", "code": "data/out/code-v3/train.meta.json",
                "general": "data/out/general-v3/train.meta.json"},
         "v1": {"base": "data/stores/base/train.meta.json", "code": "data/stores/code/train.meta.json",
                "general": "data/stores/general/train.meta.json"},
@@ -132,17 +146,38 @@ DEFAULTS: dict = {
         "steps_per_round": 120,
         "new_repeats": 16,
         "min_wall_hours": 0.1,
-        # Every promotion needs a human approval. The wait ends within the RSI
-        # phase (min(approval_timeout_hours, half of its remaining wall time)); no
-        # approval by then = rejected, the champion stays and the run continues.
+        # Owner decision (2026-10-07): promotion is automatic for every model whenever
+        # the gates pass, with no wait for a human; the champion arbiter (step
+        # champions) verifies the true champion of every family once per cycle.
+        # require_approval: true re-enables the approval for a model: the wait then
+        # ends within the RSI phase (min(approval_timeout_hours, half of its remaining
+        # wall time)); no approval by then = rejected, the champion stays.
         "approval_timeout_hours": 6,
+        # bound on the val-loss drift from the RSI run's initial champion over all its
+        # promotions (training.rsi.loop --anchor-tol; <= 0 disables)
+        "anchor_tol": 0.02,
         "extra_args": [],
+        # gates: the family's gate stores, for the loop's per-round gate and for the
+        # champion arbiter alike
         "models": {
-            "quasnir": {"family": "code", "gates": ["code", "general"], "replay": "code", "require_approval": True},
-            "rouge": {"family": "text", "gates": ["general", "base"], "replay": "rouge_mix", "require_approval": True},
-            "darus": {"family": "mixed", "gates": ["general", "code"], "replay": "base", "require_approval": True},
+            "quasnir": {"family": "code", "gates": ["code", "general"], "replay": "code", "require_approval": False},
+            "rouge": {"family": "text", "gates": ["general", "base"], "replay": "rouge_mix", "require_approval": False},
+            "darus": {"family": "mixed", "gates": ["general", "code"], "replay": "base", "require_approval": False},
         },
     },
+    # Champion arbiter (scripts/champions.py), once per cycle after the darus phase:
+    # candidates are the current champion (incumbent), this cycle's FINAL (Darus: the
+    # merge) and this cycle's RSI champion. Val loss on rsi.models.<fam>.gates with
+    # gate.eval's forge eval flags, greedy held-out pass rate on `levels` (n =
+    # heldout_tasks), selected with tol = gate.tolerance and `margin`.
+    "champions": {"enabled": True, "families": ["quasnir", "rouge", "darus"], "levels": [0, 1, 2],
+                  "heldout_tasks": 128, "margin": 0.03, "threads": 0, "cache": "runs/longrun/champions-cache.json",
+                  "log": "runs/longrun/champions.jsonl", "out": "runs/champions.json"},
+    # Cross-cycle accumulation: a specialist starts from new base + lam * (current
+    # champion - the base it derives from) (scripts/rebase.py) instead of the plain
+    # new base when that measures better on its gate.stores (val loss; held-out too
+    # with heldout_levels), so every cycle's specialist and RSI gains carry over.
+    "rebase": {"enabled": True, "families": ["quasnir", "rouge"], "lams": [1.0, 0.5], "heldout_levels": []},
     "merge": {"cmd": ["{python}", "scripts/merge_search.py"], "method": "ties", "density": 0.5, "lambda": 1.0,
               "acceptance": {"max_regression_vs_parents": 0.02},
               "search": {"budget": 16, "select_seed": 777, "select_batches": 16, "rng_seed": 67}},
@@ -281,6 +316,23 @@ def tokens_per_step(train_cfg: dict) -> int:
     return int(train_cfg["batch"]) * int(train_cfg["seq_len"]) * int(train_cfg.get("grad_accum", 1))
 
 
+_TOOLS: dict = {}
+# What a failed measurement of one checkpoint raises (champions.evaluate: forge eval or
+# generation failed, sha256 mismatch, files missing, timeout); it never crowns anyone.
+MEASURE_ERRORS = (RuntimeError, ValueError, OSError, KeyError, subprocess.SubprocessError)
+
+
+def tool(name: str):
+    """scripts/<name>.py (champions, rebase) as a module, imported on first use so a
+    broken tool never keeps the orchestrator from starting."""
+    if name not in _TOOLS:
+        spec = importlib.util.spec_from_file_location(f"longrun_{name}", REPO / "scripts" / f"{name}.py")
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        _TOOLS[name] = mod
+    return _TOOLS[name]
+
+
 # --------------------------------------------------------------------------- planning (pure)
 
 def plan_cycle(cfg: dict, g: int, seconds: float, tps: float, tps_source: str, tok_step: int) -> dict:
@@ -292,7 +344,8 @@ def plan_cycle(cfg: dict, g: int, seconds: float, tps: float, tps_source: str, t
         steps = max(int(cfg["min_steps"]), int(math.floor(sec * tps / tok_step + 1e-9)))
         phases[fam] = {"run": cfg["names"][fam].format(g=g), "kind": "train", "share": sh[fam], "steps": steps,
                        "tokens": steps * tok_step, "hours": steps * tok_step / tps / 3600}
-    for key, kind in (("quasnir_rsi", "rsi"), ("rouge_rsi", "rsi"), ("darus", "merge+rsi"), ("report", "eval")):
+    for key, kind in (("quasnir_rsi", "rsi"), ("rouge_rsi", "rsi"), ("darus", "merge+rsi"), ("champions", "eval"),
+                      ("report", "eval")):
         phases[key] = {"kind": kind, "share": sh[key], "hours": sh[key] * seconds / 3600}
     phases["darus"]["run"] = cfg["names"]["darus"].format(g=g)
     return {"generation": g, "seconds": seconds, "hours": seconds / 3600, "tokens_per_s": tps,
@@ -471,6 +524,10 @@ class LongRun:
         self.forge = forge if os.path.isabs(forge) else str(root / forge)
         self.poll = float(cfg["control"]["poll_seconds"])
         self.lock_fd = None
+        cp = Path(getattr(args, "config", None) or "training/configs/longrun.json")
+        self.cfg_path = cp if cp.is_absolute() else root / cp
+        self.cfg_file_sha = sha256_file(self.cfg_path) if self.cfg_path.is_file() else None
+        self.cfg_bad_sha = None
 
     # ---- small utilities
     def p(self, rel: str | Path) -> Path:
@@ -520,6 +577,43 @@ class LongRun:
             if self.stop_requested():
                 raise Stopped("STOP requested while waiting")
             time.sleep(min(self.poll, max(0.0, end - now())))
+
+    def has_model(self, path: str | None) -> bool:
+        return bool(path) and (self.p(path) / "model.safetensors").is_file() and (self.p(path) / "state.json").is_file()
+
+    def reload_config(self) -> bool:
+        """Phase boundary: adopt the config file if its sha256 changed and it validates
+        like at startup (load_config, same model); otherwise keep the running config."""
+        try:
+            sha = sha256_file(self.cfg_path)
+        except OSError:
+            return False
+        if sha in (self.cfg_file_sha, self.cfg_bad_sha):
+            return False
+        try:
+            cfg = load_config(self.cfg_path)
+            base_cfg = read_json(self.p(cfg["base_config"]))
+            if not isinstance(base_cfg, dict):
+                raise Fatal(f"base config {cfg['base_config']} not found or invalid")
+            if base_cfg.get("model") != self.base_cfg.get("model"):
+                raise Fatal(f"base config {cfg['base_config']} changes the model; that needs a restart from scratch")
+            tok_step = tokens_per_step(base_cfg)
+            poll = float(cfg["control"]["poll_seconds"])
+        except (Fatal, KeyError, TypeError, ValueError) as e:
+            self.cfg_bad_sha = sha
+            self.log("WARNING: the config file changed but is invalid; keeping the running config",
+                     config=self.rel(self.cfg_path), error=str(e))
+            return False
+        changed = sorted(k for k in set(cfg) | set(self.cfg) if cfg.get(k) != self.cfg.get(k))
+        self.cfg, self.base_cfg, self.tok_step, self.poll = cfg, base_cfg, tok_step, poll
+        if not (self.args.forge or os.environ.get("FORGE")):
+            self.forge = cfg["forge"] if os.path.isabs(cfg["forge"]) else str(self.root / cfg["forge"])
+        self.cfg_file_sha, self.cfg_bad_sha = sha, None
+        self.state["config_sha256"] = hashlib.sha256(json.dumps(cfg, sort_keys=True).encode()).hexdigest()
+        self.state["config_reloaded_at"] = now()
+        self.save()
+        self.log("config reloaded", config=self.rel(self.cfg_path), changed=changed)
+        return True
 
     # ---- lifecycle
     def acquire(self) -> None:
@@ -614,10 +708,12 @@ class LongRun:
             self.save()
             self.adopt_orphans()
             self.wait_prerequisites()
-            self.ensure_corpus()
+            self.ensure_corpus(adopt=self.between_cycles())
             self.check_lineage()
             self.ensure_bench()
+            self.write_champions()
             while True:
+                self.reload_config()
                 g = self.next_cycle()
                 if g is None:
                     return EX_OK
@@ -629,8 +725,8 @@ class LongRun:
                     self.save()
                     return EX_OK
                 cyc = self.state["cycles"][str(g)]
-                if all(st.get("status") == "pending" for st in cyc.get("steps", {}).values()):
-                    self.ensure_corpus()  # adopt a newer corpus (e.g. v3) only between cycles, never mid-cycle
+                if self.between_cycles():
+                    self.ensure_corpus(adopt=True)  # adopt a newer corpus (e.g. v3) only between cycles, never mid-cycle
                 self.run_cycle(g)
         except Stopped as e:
             self.state["status"] = "stopped"
@@ -700,8 +796,25 @@ class LongRun:
         return {"meta": meta_path, "tokens": int(meta["tokens"]), "val_tokens": int(meta["val_tokens"]),
                 "meta_sha256": sha256_file(mp)}
 
-    def ensure_corpus(self) -> None:
+    def between_cycles(self) -> bool:
+        """No cycle in progress: none yet, the last one done, or the current one not started."""
+        g = self.state.get("cycle")
+        cyc = self.state.get("cycles", {}).get(str(g)) if g is not None else None
+        return not cyc or cyc.get("status") == "done" or all(st.get("status") == "pending"
+                                                              for st in cyc.get("steps", {}).values())
+
+    def ensure_corpus(self, adopt: bool = True) -> None:
+        """Validate the corpus stores. adopt=False (a restart mid-cycle) keeps the corpus the
+        cycle started with; adopt=True also switches to v3 once all its stores exist and
+        validate (an invalid v3 is logged and ignored)."""
         c = self.cfg["corpus"]
+        cur = self.state.get("corpus") or {}
+        pinned = {k: v.get("meta") for k, v in (cur.get("stores") or {}).items()}
+        if not adopt and cur.get("version") and pinned and all(m and self.p(m).exists() for m in pinned.values()):
+            stores = {k: self.validate_store(m) for k, m in pinned.items()}
+            self.state["corpus"] = {**cur, "stores": stores, "checked_at": now()}
+            self.save()
+            return
         allow_v1 = bool(self.args.allow_v1)
         missing = [m for m in c["v2"].values() if not self.p(m).exists()]
         build = None
@@ -716,21 +829,24 @@ class LongRun:
                 rc = self.run_logged(cmd, logp, stop_kill=True)
                 build = {"cmd": cmd, "rc": rc, "log": self.rel(logp)}
             missing = [m for m in c["v2"].values() if not self.p(m).exists()]
+        stores, version = None, None
         if c.get("v3") and all(self.p(m).exists() for m in c["v3"].values()):
-            stores = {k: self.validate_store(v) for k, v in c["v3"].items()}
-            version = "v3"
-        elif not missing:
-            stores = {k: self.validate_store(v) for k, v in c["v2"].items()}
-            version = "v2"
-        elif allow_v1:
+            try:
+                stores, version = {k: self.validate_store(v) for k, v in c["v3"].items()}, "v3"
+            except Fatal as e:
+                self.log("WARNING: corpus v3 is present but does not validate; staying on v2", error=str(e))
+        if stores is None and not missing:
+            stores, version = {k: self.validate_store(v) for k, v in c["v2"].items()}, "v2"
+        elif stores is None and allow_v1:
             self.log("WARNING: corpus v2 unavailable; falling back to the v1 stores (--allow-v1)", missing=missing, build=build)
-            stores = {k: self.validate_store(v) for k, v in c["v1"].items()}
-            version = "v1-fallback"
-        else:
+            stores, version = {k: self.validate_store(v) for k, v in c["v1"].items()}, "v1-fallback"
+        elif stores is None:
             detail = f"; build {build['cmd']} -> rc {build['rc']}" + (f" ({build.get('error')})" if build.get("error") else
                                                                      f", log {build.get('log')}") if build else ""
             raise Fatal("corpus v2 missing: " + ", ".join(missing) + detail +
                         ". Fix data/build_corpus_v2.py (args in longrun.json corpus.build_args) or pass --allow-v1.")
+        if cur.get("version") and cur["version"] != version:
+            self.log(f"corpus {cur['version']} -> {version}", stores={k: v["meta"] for k, v in stores.items()})
         self.state["corpus"] = {"version": version, "stores": stores, "checked_at": now(), "build": build}
         self.save()
 
@@ -859,6 +975,7 @@ class LongRun:
                 continue
             if self.stop_requested():
                 raise Stopped("STOP requested between steps")
+            self.reload_config()  # phase boundary: config edits apply from the next step on
             st["status"] = "running"
             st.setdefault("started_at", now())
             self.save()
@@ -1035,6 +1152,7 @@ class LongRun:
             return
         if shutil.disk_usage(self.root).free < need:
             self.hygiene_all(superseded_only=True)
+            self.prune_rebased()
             free = shutil.disk_usage(self.root).free
             if free < need:
                 raise StepFailed(f"only {free / 1e9:.1f} GB free (< min_free_gb {self.cfg['min_free_gb']}); free disk space")
@@ -1042,7 +1160,10 @@ class LongRun:
     # ---- disk hygiene
     def protected(self) -> set:
         """Real paths that must never be deleted: every FINAL target, every
-        current model, every RSI champion (and its history), every latest.json."""
+        current model and the base it derives from, every champion in
+        runs/champions.json (and its base), every RSI champion (and its history),
+        every latest.json, and the init_from of every unfinished run (a rebased
+        init still in use)."""
         keep = set()
         runs = self.root / "runs"
         for link in runs.glob("*/FINAL"):
@@ -1052,8 +1173,20 @@ class LongRun:
             if v and v.get("dir"):
                 keep.add(self.p(v["dir"]).resolve())
         for cur in self.state.get("current", {}).values():
-            if cur and cur.get("dir"):
-                keep.add(self.p(cur["dir"]).resolve())
+            for k in ("dir", "base"):
+                if cur and cur.get(k):
+                    keep.add(self.p(cur[k]).resolve())
+        ch = read_json(self.p(self.cfg["champions"]["out"]))
+        champs = ch.get("champions") if isinstance(ch, dict) else None
+        for e in champs.values() if isinstance(champs, dict) else []:
+            for k in ("dir", "base"):
+                if isinstance(e, dict) and e.get(k):
+                    keep.add(self.p(e[k]).resolve())
+        for info in self.state.get("runs", {}).values():
+            if not info.get("finished") and info.get("config"):
+                init = (read_json(self.p(info["config"])) or {}).get("init_from")
+                if init:
+                    keep.add(self.p(init).resolve())
         for cj in runs.glob("rsi/*/champion.json"):
             v = read_json(cj) or {}
             for h in [v] + list(v.get("history") or []):
@@ -1096,6 +1229,23 @@ class LongRun:
             if superseded_only and not superseded:
                 continue
             removed += self.prune_run(run, int(h["keep_last_superseded"] if superseded else h["keep_last"]))
+        return removed
+
+    def prune_rebased(self) -> list:
+        """Rebased inits (runs/<run>/rebased-init-*) of finished runs; protected ones
+        (an unfinished run's init_from, a champion) stay."""
+        protect = self.protected()
+        removed = []
+        for run, info in self.state.get("runs", {}).items():
+            run_dir = self.root / "runs" / run
+            if not info.get("finished") or not run_dir.is_dir():
+                continue
+            for d in sorted(run_dir.glob(REBASED_PREFIX + "*")):
+                if d.is_dir() and not d.is_symlink() and d.resolve() not in protect:
+                    shutil.rmtree(d)
+                    removed.append(self.rel(d))
+        if removed:
+            self.log("pruned the rebased inits of finished runs", removed=removed)
         return removed
 
     def prune_rsi(self, model: str) -> list:
@@ -1157,11 +1307,230 @@ class LongRun:
                     (f"worst change {worst:+.4f} within {tol}" if accept else f"worst change {worst:+.4f} exceeds {tol}"),
                     "ts": now()}
         if accept:
-            self.state["current"][fam] = {"gen": g, "run": run, "dir": candidate, "sha256": decision["candidate"]["sha256"],
-                                          "source": source}
+            entry = {"gen": g, "run": run, "dir": candidate, "sha256": decision["candidate"]["sha256"], "source": source,
+                     "metrics": {"val": {s: r["candidate"] for s, r in stores.items()}},
+                     "decided": {"cycle": g, "by": "gate", "changed": True, "ts": now()}}
+            if fam != "base":
+                entry["base"] = self.state["cycles"].get(str(g), {}).get("parent_base")
+            self.state["current"][fam] = entry
             atomic_write_json(self.dir / "current.json", {"ts": now(), "current": self.state["current"]})
         self.save()
+        if accept:
+            self.write_champions()
         return decision
+
+    # ---- champions: lineage, arbiter, runs/champions.json
+    def known_bases(self) -> list:
+        """Every base checkpoint a model of this run can derive from."""
+        out = [self.cfg["initial"].get("base"), (self.state.get("current", {}).get("base") or {}).get("dir")]
+        out += [c.get("parent_base") for c in self.state.get("cycles", {}).values()]
+        out += [i.get("final") for i in self.state.get("runs", {}).values() if i.get("family") == "base"]
+        return [b for b in dict.fromkeys(out) if b and self.has_model(b)]
+
+    def lineage_base(self, start: str | None) -> str | None:
+        """The base `start` derives from, following state.json lineage (parent_sha256,
+        config.init_from); a rebased init derives from its new_base."""
+        bases = self.known_bases()
+        by_dir = {self.p(b).resolve(): b for b in bases}
+        by_sha = {}
+        for b in bases:
+            if model_sha(self.p(b)):
+                by_sha.setdefault(model_sha(self.p(b)), b)
+        d, hops = start, 0
+        while d and hops < 16:
+            hops += 1
+            path = self.p(d)
+            if path.resolve() in by_dir:
+                return by_dir[path.resolve()]
+            rb = read_json(path / "rebase.json")
+            if isinstance(rb, dict) and rb.get("type") == "rebase":
+                return self.rel(self.p(rb["inputs"]["new_base"]["dir"]))
+            st = read_json(path / "state.json") or {}
+            if st.get("parent_sha256") and st["parent_sha256"] in by_sha:
+                return by_sha[st["parent_sha256"]]
+            d = (st.get("config") or {}).get("init_from")
+        return None
+
+    def derived_base(self, entry: dict | None) -> str | None:
+        """The base a champion derives from (its task vector is champion - base):
+        recorded since champions were arbitrated; for entries written by older
+        versions derived from the run's train config (init_from), the cycle records
+        or the checkpoint lineage. None if unknown."""
+        if not entry:
+            return None
+        if entry.get("base"):
+            return entry["base"]
+        run = entry.get("run")
+        info = self.state.get("runs", {}).get(run) or {}
+        if info.get("base"):
+            return info["base"]
+        init = (read_json(self.p(info["config"])) or {}).get("init_from") if info.get("config") else None
+        for cyc in self.state.get("cycles", {}).values():
+            for st in cyc.get("steps", {}).values():
+                if init is None and st.get("final") == f"runs/{run}/FINAL" and st.get("init_from"):
+                    init = st["init_from"]
+        return (self.lineage_base(init) if init else None) or self.lineage_base(entry.get("dir"))
+
+    def arbiter_on(self, fam: str) -> bool:
+        ch = self.cfg["champions"]
+        return bool(ch.get("enabled")) and fam in ch.get("families", [])
+
+    def measure(self, ckpt: str, fam: str, stores: list, levels: list) -> dict:
+        """champions.evaluate with this run's settings (gate.eval flags, shared cache)."""
+        ch, ev = self.cfg["champions"], self.cfg["gate"]["eval"]
+        metas = {s: str(self.p(self.store_meta(s))) for s in stores}
+        return tool("champions").evaluate(self.p(ckpt), fam, metas, list(levels), int(ch["heldout_tasks"]), int(ev["batches"]),
+                                          int(ev["seed"]), cache=self.p(ch["cache"]), threads=int(ch.get("threads") or 0),
+                                          forge=self.forge)
+
+    def champion_candidates(self, fam: str, g: int, cyc: dict) -> tuple[list, list]:
+        """The arbiter's candidates: the incumbent (the current champion before this
+        cycle), this cycle's FINAL (Darus: the merge) and this cycle's RSI champion.
+        Only checkpoints whose files exist, one per model sha256 (the first wins)."""
+        cur = self.state["current"].get(fam)
+        gate = cyc["steps"].get(f"{fam}_gate", {})
+        if cur and cur.get("gen") == g and gate.get("decision") == "accept" and gate.get("previous"):
+            cur = gate["previous"]  # promoted by an older version's per-family gate: the arbiter decides again
+        run = self.name(fam, g)
+        base = cyc.get("parent_base") or (self.state["current"].get("base") or {}).get("dir")
+        merge = cyc["steps"].get("darus_merge", {})
+        final = (merge.get("final") if merge.get("status") == "done" else None) if fam == "darus" else f"runs/{run}/FINAL"
+        rsi = cyc["steps"].get(f"{fam}_rsi", {}).get("model_dir")
+        raw = []
+        if cur and cur.get("dir"):
+            raw.append({"name": f"incumbent:{cur.get('run')}", "incumbent": True, "entry": dict(cur)})
+        for name, d, source in ((f"final:{run}", final, "merge" if fam == "darus" else "final"),
+                                (f"rsi:{run}", rsi, "rsi-champion")):
+            if d:
+                raw.append({"name": name, "incumbent": False, "entry": {"gen": g, "run": run, "dir": d, "source": source,
+                                                                        "base": base}})
+        cands, skipped, seen = [], [], {}
+        for c in raw:
+            d = c["entry"]["dir"]
+            if not self.has_model(d):
+                skipped.append({"name": c["name"], "dir": d, "reason": "model.safetensors or state.json missing"})
+                continue
+            sha = model_sha(self.p(d)) or d
+            if sha in seen:
+                skipped.append({"name": c["name"], "dir": d, "reason": f"same model as {seen[sha]}"})
+                continue
+            seen[sha] = c["name"]
+            c["dir"] = d
+            cands.append(c)
+        return cands, skipped
+
+    def arbitrate(self, fam: str, g: int, cyc: dict) -> dict:
+        """Pick the family's champion of this cycle with champions.select and make it
+        current (automatic promotion). A failed measurement never crowns anyone: a
+        challenger that cannot be measured drops out, an incumbent that cannot be
+        measured stays."""
+        ch = self.cfg["champions"]
+        done = self.state["current"].get(fam) or {}
+        if (done.get("decided") or {}).get("by") == "arbiter" and done["decided"].get("cycle") == g:
+            return {"decision": "promote" if done["decided"].get("changed") else "keep", "reason": "decided before a restart",
+                    "chosen": {k: done.get(k) for k in ("run", "dir", "source", "sha256")}}
+        try:
+            C = tool("champions")
+        except Exception as e:  # noqa: BLE001 - a broken tool must not stop the run: fall back to the per-family gate
+            self.log(f"WARNING: scripts/champions.py unavailable; {fam} falls back to the per-family gate", error=repr(e))
+            res = self.family_gate(fam, g, cyc, defer=False)
+            return {"decision": res.get("decision"), "by": "gate (arbiter unavailable)", "reason": res.get("reason"),
+                    "error": repr(e)}
+        cands, skipped = self.champion_candidates(fam, g, cyc)
+        inc = next((c for c in cands if c["incumbent"]), None)
+        stores, levels = list(self.cfg["rsi"]["models"][fam]["gates"]), list(ch["levels"])
+        rows, errors, inc_failed = [], [], False
+        for c in cands:
+            if self.stop_requested():
+                raise Stopped(f"STOP during the {fam} champion arbiter")
+            try:
+                m = self.measure(c["dir"], fam, stores, levels)
+            except MEASURE_ERRORS as e:
+                if self.stop_requested():
+                    raise Stopped(f"STOP during the {fam} champion arbiter")
+                errors.append({"name": c["name"], "dir": c["dir"], "error": f"{type(e).__name__}: {e}"})
+                self.log(f"WARNING: {fam} arbiter could not measure {c['name']} ({c['dir']}); it is not a candidate",
+                         error=str(e)[-300:])
+                if c["incumbent"]:
+                    inc_failed = True
+                    break  # the incumbent stays whatever the others measure
+                continue
+            rows.append({"name": c["name"], "dir": c["dir"], "metrics": m, "incumbent": c["incumbent"]})
+        if inc_failed or not rows:
+            reason = ("the incumbent could not be measured: it stays" if inc_failed else
+                      "no candidate checkpoint exists" if not cands else "no candidate could be measured")
+            dec = {"type": "champion-decision", "chosen": None, "changed": False, "reasons": [reason]}
+            chosen = inc
+        else:
+            dec = C.select(rows, tol=float(self.cfg["gate"]["tolerance"]), margin=float(ch["margin"]))
+            chosen = next(c for c in cands if c["name"] == dec["chosen"]["name"])
+            if not self.has_model(chosen["dir"]):  # deleted while measuring: never crown a missing checkpoint
+                dec["reasons"].append(f"{chosen['name']} vanished after measuring; the incumbent stays")
+                chosen = inc
+        promoted = chosen is not None and not chosen["incumbent"]
+        picked = None
+        if chosen is not None:
+            picked = {"name": chosen["name"], **{k: chosen["entry"].get(k) for k in ("run", "dir", "source")},
+                      "sha256": model_sha(self.p(chosen["dir"]))}
+        rec = {"type": "champion-decision", "cycle": g, "family": fam, "ts": now(), "promoted": promoted, "chosen": picked,
+               "incumbent": inc["entry"] if inc else None,
+               "candidates": [{"name": c["name"], "dir": c["dir"], "sha256": model_sha(self.p(c["dir"]))} for c in cands],
+               "skipped": skipped, "errors": errors, "stores": stores, "levels": levels, "decision": dec}
+        self.append_decision(rec)
+        if chosen is not None:
+            m = next((r["metrics"] for r in rows if r["name"] == chosen["name"]), None)
+            entry = dict(chosen["entry"])
+            entry["sha256"] = picked["sha256"]
+            entry["base"] = self.derived_base(entry)
+            if m is not None:
+                entry["metrics"] = {"val": m["val"], "heldout": {lv: {k: r.get(k) for k in ("pass_rate", "passed", "n")}
+                                                                 for lv, r in m["heldout"].items()},
+                                    "heldout_mean": m["heldout_mean"], "stores": stores, "levels": levels}
+            entry["decided"] = {"cycle": g, "by": "arbiter", "changed": promoted, "ts": now()}
+            self.state["current"][fam] = entry
+            atomic_write_json(self.dir / "current.json", {"ts": now(), "current": self.state["current"]})
+        self.save()
+        self.write_champions()
+        res = {"decision": "promote" if promoted else "keep", "chosen": picked,
+               "previous": inc["entry"].get("dir") if inc else None, "reason": dec["reasons"][-1],
+               "candidates": len(cands), "errors": errors}
+        self.log(f"g{g} champion {fam}: {res['decision']} {chosen['dir'] if chosen else None}", reason=res["reason"])
+        return res
+
+    def append_decision(self, rec: dict) -> None:
+        """runs/longrun/champions.jsonl, at most once per (cycle, family, chosen)."""
+        path = self.p(self.cfg["champions"]["log"])
+        key = (rec["cycle"], rec["family"], json.dumps(rec["chosen"], sort_keys=True))
+        if path.exists():
+            for line in path.read_text().splitlines():
+                try:
+                    r = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if (r.get("cycle"), r.get("family"), json.dumps(r.get("chosen"), sort_keys=True)) == key:
+                    return
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with open(path, "a") as f:
+            f.write(json.dumps(rec, default=str) + "\n")
+
+    def write_champions(self) -> None:
+        """runs/champions.json: the current champion of every family with its metrics."""
+        fams = {}
+        for fam in FAMILIES:
+            cur = self.state.get("current", {}).get(fam)
+            if not cur:
+                continue
+            fams[fam] = {**{k: cur.get(k) for k in ("run", "dir", "sha256", "gen", "source")},
+                         "base": None if fam == "base" else self.derived_base(cur),
+                         "restricted": fam in self.cfg["restricted_models"], "metrics": cur.get("metrics"),
+                         "decided": cur.get("decided")}
+        atomic_write_json(self.p(self.cfg["champions"]["out"]), {
+            "type": "champions", "updated_at": now(), "updated_at_iso": iso(), "cycle": self.state.get("cycle"),
+            "rule": "automatic promotion; one rule per cycle by the champion arbiter (docs/LONGRUN.md)",
+            "eval": {"val": self.cfg["gate"]["eval"], "tol": self.cfg["gate"]["tolerance"],
+                     "levels": self.cfg["champions"]["levels"], "heldout_tasks": self.cfg["champions"]["heldout_tasks"],
+                     "margin": self.cfg["champions"]["margin"]},
+            "champions": fams})
 
     # ---- RSI
     def rsi_stop(self, out: Path, model: str) -> None:
@@ -1241,6 +1610,8 @@ class LongRun:
                 "--steps-per-round", str(rc_cfg["steps_per_round"]), "--max-wall-hours", f"{left:.4f}", "--out", out_rel]
         if rc_cfg.get("new_repeats"):
             cmd += ["--new-repeats", str(int(rc_cfg["new_repeats"]))]
+        if rc_cfg.get("anchor_tol") is not None:
+            cmd += ["--anchor-tol", f"{float(rc_cfg['anchor_tol']):g}"]
         if mc.get("require_approval"):
             cap = float(rc_cfg.get("approval_timeout_hours", 6))
             cmd += ["--require-approval", "--approval-timeout-hours", f"{max(0.1, min(cap, left * 0.5)):.3f}"]
@@ -1306,10 +1677,95 @@ class LongRun:
 
     def _specialist(self, fam, g, cyc, st, data):
         st["family"] = fam
+        run = self.name(fam, g)
         parent = cyc.get("parent_base") or self.state["current"]["base"]["dir"]
-        path = self.write_train_config(fam, g, cyc, init_from=parent, data=data)
+        written = self.dir / "configs" / f"{run}.json"
+        init = (read_json(written) or {}).get("init_from") if written.exists() else self.choose_init(fam, g, st, parent)
+        path = self.write_train_config(fam, g, cyc, init_from=init, data=data)
+        info = self.state["runs"].setdefault(run, {"config": path, "finished": False, "family": fam})
+        info.setdefault("base", parent)  # init is the base itself or base + task vector: the task vector is relative to it
+        info.setdefault("init_from", init)
         restricted = fam in self.cfg["restricted_models"]
-        return {"final": self.train(self.name(fam, g), path, st, restricted), "config": path, "init_from": parent}
+        return {"final": self.train(run, path, st, restricted), "config": path, "init_from": init, "base": parent}
+
+    def choose_init(self, fam: str, g: int, st: dict, parent: str) -> str:
+        """init_from of this cycle's specialist: the plain new base, or the current
+        champion rebased onto it (scripts/rebase.py: parent + lam * (champion - the
+        base it derives from)) when that measures better by champions.select (no
+        incumbent) on the family's gate.stores. Recorded in st["init_choice"]."""
+        rb = self.cfg["rebase"]
+        prev = st.get("init_choice") or {}
+        if prev.get("init") and self.has_model(prev["init"]):
+            return prev["init"]  # decided before a restart
+        run = self.name(fam, g)
+        rec = {"plain": parent, "init": parent, "ts": now()}
+
+        def decided(reason: str, **kw) -> str:
+            rec.update(reason=reason, **kw)
+            st["init_choice"] = rec
+            self.save()
+            self.log(f"{run}: init_from {rec['init']} ({reason})", **{k: v for k, v in kw.items() if k in ("lam", "errors")})
+            return rec["init"]
+
+        if not rb.get("enabled") or fam not in rb.get("families", []):
+            return decided("rebase disabled for this family")
+        cur = self.state["current"].get(fam)
+        if not cur or not self.has_model(cur.get("dir")):
+            return decided("no current champion to carry over")
+        old = self.derived_base(cur)
+        if not old or not self.has_model(old):
+            return decided(f"the base of the current champion {cur.get('dir')} is unknown or missing")
+        try:
+            R, C = tool("rebase"), tool("champions")
+        except Exception as e:  # noqa: BLE001 - a broken tool must not stop the run: train from the plain base
+            return decided(f"scripts/rebase.py or scripts/champions.py unavailable: {e!r}")
+        rec.update(champion={k: cur.get(k) for k in ("run", "dir", "sha256")}, old_base=old)
+        run_dir = self.root / "runs" / run
+        run_dir.mkdir(parents=True, exist_ok=True)
+        restricted = fam in self.cfg["restricted_models"]
+        if restricted:
+            os.chmod(run_dir, 0o700)
+        child_sha = (model_sha(self.p(cur["dir"])) or "unknown")[:12]
+        cands, errors = [{"name": "plain", "dir": parent, "lam": None}], []
+        for lam in rb.get("lams") or []:
+            lam = float(lam)
+            out = run_dir / f"{REBASED_PREFIX}{child_sha}-lam{lam:g}"
+            if not (out / "rebase.json").is_file():
+                if self.stop_requested():
+                    raise Stopped(f"STOP while rebasing the {fam} champion")
+                try:
+                    R.rebase(self.p(parent), self.p(old), self.p(cur["dir"]), out, lam)
+                except (ValueError, OSError) as e:
+                    errors.append({"lam": lam, "error": f"{type(e).__name__}: {e}"})
+                    continue
+            if restricted:
+                os.chmod(out, 0o700)
+            cands.append({"name": f"rebased-lam{lam:g}", "dir": self.rel(out), "lam": lam})
+        if len(cands) < 2:
+            return decided("no rebased init could be built", errors=errors)
+        rows = []
+        for c in cands:
+            if self.stop_requested():
+                raise Stopped(f"STOP while measuring the {fam} init candidates")
+            try:
+                m = self.measure(c["dir"], fam, self.cfg["gate"]["stores"][fam], rb.get("heldout_levels") or [])
+            except MEASURE_ERRORS as e:
+                if self.stop_requested():
+                    raise Stopped(f"STOP while measuring the {fam} init candidates")
+                errors.append({"name": c["name"], "error": f"{type(e).__name__}: {e}"})
+                if c["lam"] is None:
+                    return decided("the plain base could not be measured; it is the safe default", errors=errors)
+                continue
+            rows.append({"name": c["name"], "dir": c["dir"], "metrics": m, "incumbent": False})
+        if len(rows) < 2:
+            return decided("no rebased init could be measured", errors=errors)
+        dec = C.select(rows, tol=float(self.cfg["gate"]["tolerance"]), margin=float(self.cfg["champions"]["margin"]))
+        chosen = next(c for c in cands if c["name"] == dec["chosen"]["name"])
+        rec.update(init=chosen["dir"], candidates=[{"name": r["name"], "dir": r["dir"], "val": r["metrics"]["val"],
+                                                    "heldout_mean": r["metrics"]["heldout_mean"]} for r in rows],
+                   reasons=dec["reasons"])
+        return decided("rebased champion measures better" if chosen["lam"] is not None else "the plain base measures better",
+                       lam=chosen["lam"], errors=errors)
 
     def step_quasnir(self, g, cyc, st):
         return self._specialist("quasnir", g, cyc, st, self.store_meta("code"))
@@ -1317,15 +1773,26 @@ class LongRun:
     def step_quasnir_rsi(self, g, cyc, st):
         return self.rsi("quasnir", g, f"runs/{self.name('quasnir', g)}/FINAL", cyc["plan"]["phases"]["quasnir_rsi"]["hours"], st)
 
-    def _gate_after_rsi(self, fam, g, cyc, rsi_step):
+    def family_gate(self, fam, g, cyc, defer=True):
+        """With the champion arbiter on, promotion waits for step champions (one rule
+        for every family); otherwise the per-family gate promotes the RSI champion (or
+        FINAL) if its val loss does not regress beyond gate.tolerance."""
         run = self.name(fam, g)
         final = f"runs/{run}/FINAL"
-        r = cyc["steps"].get(rsi_step, {})
-        cand = r.get("model_dir") or final
-        return self.gate(fam, g, run, cand, "rsi-champion" if cand != final else "final")
+        if fam == "darus":
+            final = cyc["steps"].get("darus_merge", {}).get("final") or final
+        cand = cyc["steps"].get(f"{fam}_rsi", {}).get("model_dir") or final
+        source = "rsi-champion" if cand != final else "final"
+        if defer and self.arbiter_on(fam):
+            return {"family": fam, "generation": g, "decision": "deferred",
+                    "candidate": {"run": run, "dir": cand, "sha256": model_sha(self.p(cand)), "source": source},
+                    "reason": "the champion arbiter decides after the darus phase (step champions)", "ts": now()}
+        if fam == "darus" and cyc["steps"].get("darus_merge", {}).get("status") != "done":
+            return {"status": "skipped", "reason": "darus merge did not succeed"}
+        return self.gate(fam, g, run, cand, source)
 
     def step_quasnir_gate(self, g, cyc, st):
-        return self._gate_after_rsi("quasnir", g, cyc, "quasnir_rsi")
+        return self.family_gate("quasnir", g, cyc)
 
     def step_rouge_mix(self, g, cyc, st):
         m = self.cfg["rouge_mix"]
@@ -1352,7 +1819,7 @@ class LongRun:
         return self.rsi("rouge", g, f"runs/{self.name('rouge', g)}/FINAL", cyc["plan"]["phases"]["rouge_rsi"]["hours"], st)
 
     def step_rouge_gate(self, g, cyc, st):
-        return self._gate_after_rsi("rouge", g, cyc, "rouge_rsi")
+        return self.family_gate("rouge", g, cyc)
 
     def step_darus_merge(self, g, cyc, st):
         run = self.name("darus", g)
@@ -1385,9 +1852,30 @@ class LongRun:
         return self.rsi("darus", g, merge["final"], hours, st)
 
     def step_darus_gate(self, g, cyc, st):
-        if cyc["steps"].get("darus_merge", {}).get("status") != "done":
+        if cyc["steps"].get("darus_merge", {}).get("status") != "done" and not self.arbiter_on("darus"):
             return {"status": "skipped", "reason": "darus merge did not succeed"}
-        return self._gate_after_rsi("darus", g, cyc, "darus_rsi")
+        return self.family_gate("darus", g, cyc)
+
+    def step_champions(self, g, cyc, st):
+        fams = st.setdefault("families", {})
+        for fam in ARBITER_FAMILIES:
+            if fam in fams:
+                continue  # decided before a restart
+            if self.stop_requested():
+                raise Stopped("STOP during the champion arbiter")
+            if self.arbiter_on(fam):
+                fams[fam] = self.arbitrate(fam, g, cyc)
+            elif cyc["steps"].get(f"{fam}_gate", {}).get("decision") == "deferred":
+                d = self.family_gate(fam, g, cyc, defer=False)  # the arbiter was switched off after the gate deferred
+                fams[fam] = {"decision": d.get("decision"), "by": "gate", "reason": d.get("reason")}
+            else:
+                fams[fam] = {"decision": cyc["steps"].get(f"{fam}_gate", {}).get("decision"), "by": "gate"}
+            self.save()
+        self.write_champions()
+        ph = cyc["plan"]["phases"].get("champions") or {}  # absent in plans written before this step existed
+        hours = ph.get("hours", self.cfg["shares"]["champions"] * cyc["plan"]["seconds"] / 3600)
+        return {"families": fams, "champions": self.rel(self.p(self.cfg["champions"]["out"])), "budget_hours": hours,
+                "decision": ", ".join(f"{f} {r.get('decision')}" for f, r in fams.items())}
 
     def generation_models(self, g, cyc) -> dict:
         models = {"base": f"runs/{self.name('base', g)}/FINAL"}
@@ -1434,6 +1922,8 @@ class LongRun:
                 st["benchmarks"] = prev_bench
                 self.save()
         gates = {f: cyc["steps"].get(f"{f}_gate", {}) for f in FAMILIES}
+        arbiter = cyc["steps"].get("champions", {}).get("families") or {}
+        decisions = {f: (arbiter.get(f) or {}).get("decision") or gates[f].get("decision") for f in FAMILIES}
         rsi = {f: {k: cyc["steps"].get(f"{f}_rsi", {}).get(k) for k in
                    ("status", "rounds", "decisions", "kinds", "self_improvement_rounds", "promoted", "model_dir", "reason")}
                for f in ("quasnir", "rouge", "darus")}
@@ -1457,7 +1947,8 @@ class LongRun:
             "plan": cyc["plan"], "models": models,
             "restricted": {f: True for f in self.cfg["restricted_models"] if f in models},
             "evaluations": evals, "eval_settings": self.cfg["gate"]["eval"], "benchmarks": benches,
-            "gates": gates, "rsi": rsi, "merge_search": cyc["steps"].get("darus_merge", {}).get("best"),
+            "gates": gates, "champions": arbiter, "champions_file": read_json(self.p(self.cfg["champions"]["out"])),
+            "rsi": rsi, "merge_search": cyc["steps"].get("darus_merge", {}).get("best"),
             "current": self.state["current"], "trained": trained,
             "throughput": {"planned_tokens_per_s": cyc["plan"]["tokens_per_s"], "planned_source": cyc["plan"]["tps_source"],
                            "measured_base_median_tokens_per_s": med, "samples": n},
@@ -1470,8 +1961,7 @@ class LongRun:
         already = hist.exists() and any(json.loads(x).get("cycle") == g for x in hist.read_text().splitlines() if x.strip())
         if not already:
             line = {"cycle": g, "ts": now(), "wall_hours": (now() - cyc["started_at"]) / 3600,
-                    "decisions": {f: gates[f].get("decision") for f in FAMILIES}, "current": {f: (c or {}).get("run")
-                                                                                            for f, c in self.state["current"].items()},
+                    "decisions": decisions, "current": {f: (c or {}).get("run") for f, c in self.state["current"].items()},
                     "val_loss": {f: {s: r["loss"] for s, r in e.items()} for f, e in evals.items()},
                     "benchmarks": {f: {s: r.get("pass@1") for s, r in b.items()} for f, b in benches.items()},
                     "tokens": {f: t["tokens"] for f, t in trained.items()}, "report": self.rel(path)}
@@ -1480,7 +1970,7 @@ class LongRun:
         return {"report": self.rel(path), "errors": errors}
 
     def step_hygiene(self, g, cyc, st):
-        removed = self.hygiene_all()
+        removed = self.hygiene_all() + self.prune_rebased()
         for fam in ("quasnir", "rouge", "darus"):
             removed += self.prune_rsi(self.name(fam, g))
         return {"removed": len(removed), "disk_free_bytes": shutil.disk_usage(self.root).free}
@@ -1498,9 +1988,20 @@ def load_config(path: Path) -> dict:
     if not isinstance(over, dict):
         raise Fatal(f"config {path} not found or not JSON")
     cfg = deep_merge(DEFAULTS, strip_comments(over))
-    total = sum(cfg["shares"].values())
+    sh = cfg["shares"]
+    bad = [k for k in (*TRAIN_FAMILIES, "quasnir_rsi", "rouge_rsi", "darus", "champions", "report")
+           if not isinstance(sh.get(k), (int, float)) or sh[k] < 0]
+    if bad:
+        raise Fatal(f"shares in {path}: {bad} missing or not a number >= 0")
+    total = sum(sh.values())
     if abs(total - 1.0) > 1e-6:
         raise Fatal(f"shares in {path} sum to {total}, not 1")
+    if not set(cfg["champions"]["families"]) <= set(cfg["rsi"]["models"]):
+        raise Fatal(f"champions.families in {path} must be among the rsi.models {sorted(cfg['rsi']['models'])}")
+    if not set(cfg["rebase"]["families"]) <= {"quasnir", "rouge"}:
+        raise Fatal(f"rebase.families in {path}: only the trained specialists quasnir and rouge start from an init")
+    if not all(isinstance(x, (int, float)) and math.isfinite(x) for x in cfg["rebase"]["lams"]):
+        raise Fatal(f"rebase.lams in {path} must be finite numbers")
     return cfg
 
 
@@ -1528,7 +2029,12 @@ def dry_run(root: Path, cfg: dict, args) -> int:
     missing = [m for m in c["v2"].values() if not (root / m).exists()]
     plan["corpus"] = {"v2_missing": missing, "would_build": bool(missing),
                       "build_cmd": [sys.executable if x == "{python}" else x for x in c["build_cmd"]] + list(c["build_args"]),
-                      "fallback_v1": bool(args.allow_v1)}
+                      "fallback_v1": bool(args.allow_v1), "current": (state.get("corpus") or {}).get("version"),
+                      "v3_missing": [m for m in (c.get("v3") or {}).values() if not (root / m).exists()]}
+    plan["promotion"] = {"automatic": not any(m.get("require_approval") for m in cfg["rsi"]["models"].values()),
+                         "arbiter": cfg["champions"]["families"] if cfg["champions"]["enabled"] else [],
+                         "rebase": cfg["rebase"]["families"] if cfg["rebase"]["enabled"] else [],
+                         "rebase_lams": cfg["rebase"]["lams"], "anchor_tol": cfg["rsi"].get("anchor_tol")}
     stores = {}
     for k, m in (c["v1"] if missing and args.allow_v1 else c["v2"]).items():
         meta = read_json(root / m)
@@ -1558,6 +2064,14 @@ def dry_run(root: Path, cfg: dict, args) -> int:
               + (" (fallback v1 allowed)" if args.allow_v1 else " (hard stop if that fails; --allow-v1 to fall back)"))
     else:
         print("  corpus       v2 present: " + ", ".join(f"{k} {v.get('tokens', 0) / 1e6:,.1f} M tok" for k, v in stores.items()))
+    v3m = plan["corpus"]["v3_missing"]
+    print(f"  corpus v3    {'missing ' + ', '.join(v3m) if v3m else 'present'}; adopted only between cycles once all three"
+          f" stores exist and validate (in use: {plan['corpus']['current'] or '-'})")
+    pr = plan["promotion"]
+    print(f"  promotion    {'automatic when the gates pass' if pr['automatic'] else 'needs approval for some models'};"
+          f" champion arbiter per cycle for {', '.join(pr['arbiter']) or 'nobody'}; rebased inits for"
+          f" {', '.join(pr['rebase']) or 'nobody'} (lam {', '.join(f'{x:g}' for x in pr['rebase_lams'])});"
+          f" RSI anchor tol {pr['anchor_tol']}")
     pre = plan["prerequisites"]
     if pre["missing_paths"] or pre["running"]:
         print(f"  waits for    missing {pre['missing_paths']} running {pre['running']}")
@@ -1571,6 +2085,7 @@ def dry_run(root: Path, cfg: dict, args) -> int:
                 k = f"{fam}_rsi"
                 print(f"    {'':<14} rsi   {ph[k]['hours']:>6.2f} h wall budget")
         print(f"    {ph['darus']['run']:<14} merge search + rsi {ph['darus']['hours']:.2f} h")
+        print(f"    {'champions':<14} {ph['champions']['hours']:.2f} h (arbiter)")
         print(f"    {'report':<14} {ph['report']['hours']:.2f} h")
     print(f"  totals       base {t['tokens']['base'] / 1e6:,.1f} M tok, quasnir {t['tokens']['quasnir'] / 1e6:,.1f} M, "
           f"rouge {t['tokens']['rouge'] / 1e6:,.1f} M; {t['hours']:.1f} h wall")
@@ -1603,7 +2118,7 @@ def print_status(root: Path) -> int:
                 extra = st.get("decision") or st.get("reason") or ""
                 print(f"  {name:<13} {st.get('status'):<8} {st.get('wall_seconds', 0) / 3600:6.2f} h {extra}")
     for fam, c in (s.get("current") or {}).items():
-        print(f"current {fam:<8} {c.get('run')} {c.get('dir')}")
+        print(f"current {fam:<8} {c.get('run')} {c.get('dir')}" + (f" (base {c['base']})" if c.get("base") else ""))
     return EX_OK
 
 
