@@ -172,13 +172,13 @@ class Settings:
     samples: int = 4
     steps_per_round: int = 40
     max_steps_per_round: int = 200
-    lr: float = 1e-4
+    lr: float = 2e-5  # the champions' final lr; 1e-4 with batch 8 regressed val loss by 3-13 %
     min_lr_ratio: float = 0.1
     warmup_steps: int = 5
     weight_decay: float = 0.01
     batch: int = 8
     seq: int = 256
-    grad_accum: int = 1
+    grad_accum: int = 4  # same effective batch (32 x 256) as the champions' training
     require_approval: bool = False
     warmstart: str = "auto"
     max_wall_hours: float = 24.0
@@ -197,7 +197,7 @@ class Settings:
     max_new_code: int = 160
     max_new_text: int = 24
     replay_ratio: float = 0.5
-    new_repeats: int = 1
+    new_repeats: int = 8
     threads: int = 0
     gate_batches: int = 8
     gate_batch: int = 8

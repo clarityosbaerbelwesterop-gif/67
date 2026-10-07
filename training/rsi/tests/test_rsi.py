@@ -220,6 +220,13 @@ def test_store_tops_train_up_to_token_budget(scratch):
     assert m["val_tokens"] == plain["val_tokens"]
     assert m["documents"]["train"] == plain["documents"]["train"] and m["replay_token_fraction"] > 0.8
     assert m["decontamination"]["remaining_overlaps"] == 0
+    # new_repeats raises the new documents' share of the budget; provenance lists each once.
+    r = St.build_store(scratch / "rep", docs, name="budget", replay_meta=CODE_META, replay_ratio=0.5, seed=1, min_split_tokens=200,
+                       min_train_tokens=20_000, new_repeats=4)
+    new = lambda x: x["token_mix"]["supervised-reference"]
+    assert r["documents"] == m["documents"] and 20_000 <= r["tokens"] < 20_000 + 2 * 256
+    assert new(r) == 4 * new(m) == 4 * new(plain)
+    assert len((scratch / "rep/samples.jsonl").read_text().splitlines()) == len((scratch / "budget/samples.jsonl").read_text().splitlines())
     # Without a replay store the budget is ignored: own documents are never repeated to fill it.
     none = St.build_store(scratch / "none", docs, name="budget", replay_meta=None, replay_ratio=0.0, seed=1, min_split_tokens=200,
                           min_train_tokens=20_000)

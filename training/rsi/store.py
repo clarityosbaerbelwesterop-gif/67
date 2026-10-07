@@ -248,9 +248,11 @@ def build_store(out_dir: Path, docs: list[dict], *, name: str, replay_meta: Path
             "mix_fractions": {k: v / max(1, sum(mix.values())) for k, v in mix.items()}}
     (out_dir / "train.meta.json").write_text(json.dumps(meta, indent=2))
     with open(out_dir / "samples.jsonl", "w") as f:
+        written = set()  # repeated copies (new_repeats) are listed once
         for split in ("train", "val"):
             for src, u, d in units[split]:
-                if d is not None:
+                if d is not None and id(d) not in written:
+                    written.add(id(d))
                     f.write(json.dumps({"split": split, "source": src, "tokens": len(u),
                                         **{k: v for k, v in d.items() if k != "source"}}) + "\n")
     replay_manifest = None
@@ -259,7 +261,7 @@ def build_store(out_dir: Path, docs: list[dict], *, name: str, replay_meta: Path
         replay_manifest = {"store": rm.get("store"), "sha256": rm.get("sha256"), "pipeline": rm.get("pipeline")}
     manifest = {
         "store": name, "created": time.time(), "pipeline": "training/rsi/store.py (forge tokenize --jsonl + eos 8190, SCP CorpusStore layout)",
-        "documents": {"train": sum(1 for s, _, _ in units["train"] if s != "replay"), "val": sum(1 for s, _, _ in units["val"] if s != "replay")},
+        "documents": {sp: len({id(d) for s, _, d in units[sp] if s != "replay"}) for sp in ("train", "val")},
         **meta, "token_mix": token_mix,
         "replay_token_fraction": token_mix.get("replay", 0) / max(1, counts["train"]),
         "sha256": {"train.bin": sha256_file(files["train"]), "train.val.bin": sha256_file(files["val"]),
