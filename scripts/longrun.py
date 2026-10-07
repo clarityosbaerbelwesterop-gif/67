@@ -126,7 +126,11 @@ DEFAULTS: dict = {
         "rounds": 8,
         "tasks": 128,
         "samples": 8,
-        "steps_per_round": 60,
+        # 120 steps x grad_accum 4 with each new document 16 times (rest replay): on
+        # quasnir-g2 one round took held-out 0/64 -> 43/64 at +0.91 % / +0.64 %
+        # val loss (gate 1 %); 60 steps failed the gate or learned nothing.
+        "steps_per_round": 120,
+        "new_repeats": 16,
         "min_wall_hours": 0.1,
         # Every promotion needs a human approval. The wait ends within the RSI
         # phase (min(approval_timeout_hours, half of its remaining wall time)); no
@@ -1235,6 +1239,8 @@ class LongRun:
             cmd += ["--replay", replay]
         cmd += ["--rounds", str(remaining), "--tasks", str(rc_cfg["tasks"]), "--samples", str(rc_cfg["samples"]),
                 "--steps-per-round", str(rc_cfg["steps_per_round"]), "--max-wall-hours", f"{left:.4f}", "--out", out_rel]
+        if rc_cfg.get("new_repeats"):
+            cmd += ["--new-repeats", str(int(rc_cfg["new_repeats"]))]
         if mc.get("require_approval"):
             cap = float(rc_cfg.get("approval_timeout_hours", 6))
             cmd += ["--require-approval", "--approval-timeout-hours", f"{max(0.1, min(cap, left * 0.5)):.3f}"]
