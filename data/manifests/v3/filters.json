@@ -1,0 +1,61 @@
+{
+  "filters": {
+    "duplicate_v2": 3420,
+    "duplicate": 5379,
+    "quality": 7699,
+    "generated": 17077,
+    "short": 0,
+    "contaminated": 504
+  },
+  "registries": {
+    "maven": {
+      "chars": 382141079,
+      "code-train": 59671,
+      "code-val": 599,
+      "general-train": 183,
+      "general-val": 1
+    },
+    "rubygems": {
+      "chars": 78296051,
+      "code-train": 17437,
+      "code-val": 187,
+      "general-train": 2186,
+      "general-val": 26
+    },
+    "pypi": {
+      "chars": 348944029,
+      "code-train": 36943,
+      "general-train": 4797,
+      "code-val": 385,
+      "general-val": 51
+    },
+    "npm": {
+      "chars": 59073759,
+      "code-train": 13330,
+      "general-train": 916,
+      "code-val": 113,
+      "general-val": 11
+    },
+    "go": {
+      "chars": 130380613,
+      "general-train": 1119,
+      "code-train": 18434,
+      "code-val": 169,
+      "general-val": 11
+    },
+    "crates": {
+      "chars": 138718955,
+      "general-train": 1344,
+      "code-train": 12206,
+      "code-val": 112,
+      "general-val": 21
+    },
+    "hackage": {
+      "chars": 182477286,
+      "general-train": 864,
+      "code-train": 24216,
+      "code-val": 292,
+      "general-val": 12
+    }
+  }
+}

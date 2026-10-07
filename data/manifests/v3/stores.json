@@ -1,0 +1,227 @@
+{
+  "stores": {
+    "code-v3": {
+      "store": "code-v3",
+      "tokens": 760188871,
+      "val_tokens": 7666675,
+      "dtype": "uint16",
+      "vocab_size": 8192,
+      "bin": "train.bin",
+      "val_bin": "train.val.bin",
+      "mix": {
+        "code-v2": 145996,
+        "crates": 12206,
+        "go": 18434,
+        "hackage": 24216,
+        "maven": 59671,
+        "npm": 13330,
+        "pypi": 36943,
+        "rubygems": 17437
+      },
+      "mix_fractions": {
+        "code-v2": 0.44479378977738376,
+        "crates": 0.037186998260382104,
+        "go": 0.056161324425027345,
+        "hackage": 0.07377685973074005,
+        "maven": 0.18179463978332466,
+        "npm": 0.04061139495419412,
+        "pypi": 0.1125511450707272,
+        "rubygems": 0.05312384799822078
+      },
+      "sha256": {
+        "train.bin": "5fdb921de34f1b426ef346e22ecd25c70a9f2d5c1d50eeec83a29ede58521360",
+        "train.val.bin": "1804988999124d7d9b7844f3af16f09170a1b0aaa531b749f8872104e128a461",
+        "tokenizer.json": "fe1ee90ae9275c55bb8583c1c5dc231d1197e8c2ca8eea32ac57912518018012"
+      },
+      "pipeline": "data/build_corpus_v3.py: v2 + Maven/RubyGems/Hackage + more PyPI/npm/crates/Go packages (+ FineWeb-Edu when reachable); licence allow-list, SCP quality filters, exact dedup across v2+v3, 13-gram decontamination (HumanEval, MBPP, GSM8K), hash-based ~1% val split, forge tokenize (= scp_model.bpe), eos per document",
+      "new": {
+        "tokens": 396711102,
+        "val_tokens": 4042206,
+        "docs": 184094
+      }
+    },
+    "general-v3": {
+      "store": "general-v3",
+      "tokens": 59955628,
+      "val_tokens": 516798,
+      "dtype": "uint16",
+      "vocab_size": 8192,
+      "bin": "train.bin",
+      "val_bin": "train.val.bin",
+      "mix": {
+        "general-v2": 16454,
+        "crates": 1344,
+        "go": 1119,
+        "hackage": 864,
+        "maven": 183,
+        "npm": 916,
+        "pypi": 4797,
+        "rubygems": 2186
+      },
+      "mix_fractions": {
+        "general-v2": 0.5905322470660015,
+        "crates": 0.04823601191544342,
+        "go": 0.04016078670638481,
+        "hackage": 0.031008864802785054,
+        "maven": 0.006567849836701002,
+        "npm": 0.03287513907332305,
+        "pypi": 0.17216380145712953,
+        "rubygems": 0.07845529914223164
+      },
+      "sha256": {
+        "train.bin": "ac0160e31472220586a915e65c1a3f43c0df32ec4995f1a57885cb03340c5abe",
+        "train.val.bin": "b10e2717d1c3e7cab8cf35604b06b02ccfb15d9eda1567d9090d03c47680f2c6",
+        "tokenizer.json": "fe1ee90ae9275c55bb8583c1c5dc231d1197e8c2ca8eea32ac57912518018012"
+      },
+      "pipeline": "data/build_corpus_v3.py: v2 + Maven/RubyGems/Hackage + more PyPI/npm/crates/Go packages (+ FineWeb-Edu when reachable); licence allow-list, SCP quality filters, exact dedup across v2+v3, 13-gram decontamination (HumanEval, MBPP, GSM8K), hash-based ~1% val split, forge tokenize (= scp_model.bpe), eos per document",
+      "new": {
+        "tokens": 20884181,
+        "val_tokens": 179406,
+        "docs": 11542
+      }
+    },
+    "base-v3": {
+      "store": "base-v3",
+      "tokens": 820144499,
+      "val_tokens": 8183473,
+      "dtype": "uint16",
+      "vocab_size": 8192,
+      "bin": "train.bin",
+      "val_bin": "train.val.bin",
+      "mix": {
+        "code": 328233,
+        "general": 27863
+      },
+      "mix_fractions": {
+        "code": 0.9217542460460101,
+        "general": 0.07824575395398993
+      },
+      "sha256": {
+        "train.bin": "3358ad090945fef2c3f9c1d0e59b43786104a9a2727a2eedbbed69baf2b3c051",
+        "train.val.bin": "a41d9afe9638b0e602e4cfc1079188deddf38f8a5900c7fcda1bb1bf5c9bcb8d",
+        "tokenizer.json": "fe1ee90ae9275c55bb8583c1c5dc231d1197e8c2ca8eea32ac57912518018012"
+      },
+      "pipeline": "data/build_corpus_v3.py: v2 + Maven/RubyGems/Hackage + more PyPI/npm/crates/Go packages (+ FineWeb-Edu when reachable); licence allow-list, SCP quality filters, exact dedup across v2+v3, 13-gram decontamination (HumanEval, MBPP, GSM8K), hash-based ~1% val split, forge tokenize (= scp_model.bpe), eos per document",
+      "new": {
+        "tokens": 417595283,
+        "val_tokens": 4221612,
+        "docs": 195636
+      }
+    }
+  },
+  "packages": {
+    "maven": {
+      "ok": 282,
+      "no-sources": 1,
+      "rejected-licence": 3
+    },
+    "rubygems": {
+      "ok": 671,
+      "rejected-licence": 79,
+      "unavailable": 2
+    },
+    "hackage": {
+      "rejected-licence": 106,
+      "ok": 645
+    },
+    "pypi": {
+      "ok": 653,
+      "rejected-licence": 75,
+      "no-sdist": 23
+    },
+    "npm": {
+      "ok": 659,
+      "rejected-licence": 92
+    },
+    "go": {
+      "ok": 252,
+      "unavailable": 1,
+      "rejected-licence": 2
+    },
+    "crates": {
+      "ok": 722,
+      "rejected-licence": 29
+    }
+  },
+  "registries": {
+    "maven": {
+      "chars": 382141079,
+      "code-train": 59671,
+      "code-val": 599,
+      "general-train": 183,
+      "general-val": 1
+    },
+    "rubygems": {
+      "chars": 78296051,
+      "code-train": 17437,
+      "code-val": 187,
+      "general-train": 2186,
+      "general-val": 26
+    },
+    "pypi": {
+      "chars": 348944029,
+      "code-train": 36943,
+      "general-train": 4797,
+      "code-val": 385,
+      "general-val": 51
+    },
+    "npm": {
+      "chars": 59073759,
+      "code-train": 13330,
+      "general-train": 916,
+      "code-val": 113,
+      "general-val": 11
+    },
+    "go": {
+      "chars": 130380613,
+      "general-train": 1119,
+      "code-train": 18434,
+      "code-val": 169,
+      "general-val": 11
+    },
+    "crates": {
+      "chars": 138718955,
+      "general-train": 1344,
+      "code-train": 12206,
+      "code-val": 112,
+      "general-val": 21
+    },
+    "hackage": {
+      "chars": 182477286,
+      "general-train": 864,
+      "code-train": 24216,
+      "code-val": 292,
+      "general-val": 12
+    }
+  },
+  "filters": {
+    "duplicate_v2": 3420,
+    "duplicate": 5379,
+    "quality": 7699,
+    "generated": 17077,
+    "short": 0,
+    "contaminated": 504
+  },
+  "stopped": "target reached",
+  "fineweb_edu": {
+    "status": "skipped: huggingface.co unreachable",
+    "dataset": "HuggingFaceFW/fineweb-edu",
+    "licence": "ODC-By-1.0",
+    "attribution": "FineWeb-Edu by Hugging Face (Lozhkov, Ben Allal, von Werra, Wolf; 2024), https://huggingface.co/datasets/HuggingFaceFW/fineweb-edu, licensed under ODC-By 1.0"
+  },
+  "licence_policy": {
+    "allow": "\\b(MIT|BSD|Apache|PSF|Python Software Foundation|ISC|Unlicense|CC0|Public Domain|0BSD|Zlib)\\b",
+    "deny": "\\b(GPL|LGPL|AGPL|MPL|EUPL|SSPL|CC-BY-SA|Commons Clause|proprietary)\\b",
+    "deny_also": "\\b(?:A|L)?GPL-?v?\\d|General Public License|Mozilla Public|Eclipse Public|\\bEPL\\b|\\bEPL-|\\bCDDL|Common Development and Distribution|European Union Public|Server Side Public|Share-?Alike|\\bMPL-?v?\\d"
+  },
+  "dedup": {
+    "method": "sha1 of whitespace-normalised text",
+    "v2_documents": 164103,
+    "v3_documents": 195636
+  },
+  "evals_decontaminated_against": [
+    "gsm8k",
+    "humaneval",
+    "mbpp"
+  ]
+}
