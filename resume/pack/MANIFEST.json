@@ -1,0 +1,35 @@
+{
+  "created": "2026-10-08T06:23:36Z",
+  "files": 126,
+  "plain_bytes": 311719360,
+  "cipher": "openssl enc -aes-256-cbc -pbkdf2 -iter 200000 -salt (key: $FORGE_PACK_KEY)",
+  "parts": [
+    {
+      "file": "part-000",
+      "bytes": 94371840,
+      "sha256": "fcabb27dd093ed1b84f5a0a4f85970214f29cc6cb5b4ae703d6ba816b9995a06"
+    },
+    {
+      "file": "part-001",
+      "bytes": 94371840,
+      "sha256": "6f7bf8150a3f6d72c684964aafc8f1808c5e322b168df637fa761591dc388113"
+    },
+    {
+      "file": "part-002",
+      "bytes": 94371840,
+      "sha256": "8196802dd6075e77a944bdfda594df1cde43d5f1e9f37ad78e4ebd218d9cd68d"
+    },
+    {
+      "file": "part-003",
+      "bytes": 28702752,
+      "sha256": "90f8ca9422dce5228fef6a8ceecce012c7339e23c8c1e5e8fdbefc08dcc0778d"
+    }
+  ],
+  "sha256": "89bb26cf888453d5cc122de00e4c05962bd539ed61029df05b089cadcff82899",
+  "current": {
+    "base": "runs/base-g3/FINAL",
+    "quasnir": "runs/quasnir-g2/step-002214",
+    "rouge": "runs/rsi/rouge-g2/rounds/rsi-rouge-g2-r2/step-000060",
+    "darus": "runs/darus-g2/FINAL"
+  }
+}
