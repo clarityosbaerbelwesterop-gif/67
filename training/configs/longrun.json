@@ -82,6 +82,11 @@
       "code": "data/out/code-v3/train.meta.json",
       "general": "data/out/general-v3/train.meta.json"
     },
+    "v4": {
+      "base": "data/out/base-v4/train.meta.json",
+      "code": "data/out/code-v4/train.meta.json",
+      "general": "data/out/general-v4/train.meta.json"
+    },
     "v1": {
       "base": "data/stores/base/train.meta.json",
       "code": "data/stores/code/train.meta.json",

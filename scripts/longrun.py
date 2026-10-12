@@ -135,6 +135,9 @@ DEFAULTS: dict = {
                "general": "data/out/general-v2/train.meta.json"},
         "v3": {"base": "data/out/base-v3/train.meta.json", "code": "data/out/code-v3/train.meta.json",
                "general": "data/out/general-v3/train.meta.json"},
+        # v3, high-quality only (data/build_corpus_v4.py: content filter + near-dedup; val splits = v3's)
+        "v4": {"base": "data/out/base-v4/train.meta.json", "code": "data/out/code-v4/train.meta.json",
+               "general": "data/out/general-v4/train.meta.json"},
         "v1": {"base": "data/stores/base/train.meta.json", "code": "data/stores/code/train.meta.json",
                "general": "data/stores/general/train.meta.json"},
         "build_cmd": ["{python}", "data/build_corpus_v2.py"],
@@ -868,11 +871,12 @@ class LongRun:
                 build = {"cmd": cmd, "rc": rc, "log": self.rel(logp)}
             missing = [m for m in c["v2"].values() if not self.p(m).exists()]
         stores, version = None, None
-        if c.get("v3") and all(self.p(m).exists() for m in c["v3"].values()):
-            try:
-                stores, version = {k: self.validate_store(v) for k, v in c["v3"].items()}, "v3"
-            except Fatal as e:
-                self.log("WARNING: corpus v3 is present but does not validate; staying on v2", error=str(e))
+        for ver in ("v4", "v3"):  # the newest complete, valid version wins
+            if stores is None and c.get(ver) and all(self.p(m).exists() for m in c[ver].values()):
+                try:
+                    stores, version = {k: self.validate_store(v) for k, v in c[ver].items()}, ver
+                except Fatal as e:
+                    self.log(f"WARNING: corpus {ver} is present but does not validate; trying an older one", error=str(e))
         if stores is None and not missing:
             stores, version = {k: self.validate_store(v) for k, v in c["v2"].items()}, "v2"
         elif stores is None and allow_v1:

@@ -692,3 +692,16 @@ def test_a_code_change_reloads_between_steps(tmp_path, monkeypatch):
     with pytest.raises(lr.Reload):
         o.run_cycle(3)
     assert cyc["steps"]["report"]["status"] == "pending", "nothing started"
+
+
+def test_corpus_v4_wins_between_cycles_only(tmp_path):
+    root, b = world(tmp_path, v3=True)
+    tok = root / "data/stores/base/tokenizer.json"
+    for k in ("base", "code", "general"):
+        store(root, f"data/out/{k}-v4", tok)
+    o = orchestrator(root)
+    o.init_state()
+    o.ensure_corpus(adopt=False)
+    assert o.state["corpus"]["version"] == "v2", "mid-cycle: the pinned corpus stays"
+    o.ensure_corpus(adopt=True)
+    assert o.state["corpus"]["version"] == "v4" and o.store_meta("base") == "data/out/base-v4/train.meta.json"
