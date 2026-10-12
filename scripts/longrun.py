@@ -197,6 +197,10 @@ DEFAULTS: dict = {
     "releases": {"enabled": True, "families": ["base", "quasnir", "rouge", "darus"], "registry": "runs/releases.json",
                  "base_stores": ["base", "code", "general"],
                  "gate": {"mcnemar_alpha": 0.05, "val_tol": 0.02, "base_tol": 0.01}},
+    # VGPU (headcenter/backend/vgpu.py): the swarm as one virtual accelerator with
+    # proof-of-compute capacity. The run moves base training onto it once the pool's
+    # verified capacity holds >= min_b300 B300 equivalents for sustain_hours.
+    "vgpu": {"pool": "runs/vgpu/pool.json", "min_b300": 2.0, "sustain_hours": 6, "max_age_hours": 6},
     # Cross-cycle accumulation: a specialist starts from new base + lam * (current
     # champion - the base it derives from) (scripts/rebase.py) instead of the plain
     # new base when that measures better on its gate.stores (val loss; held-out too
@@ -1001,6 +1005,7 @@ class LongRun:
             if left < self.cfg["min_cycle_fraction"] * cyc_sec:
                 return self.finish(f"wall budget of {s['days']} days used (left {left / 3600:.2f} h)")
             sec = min(cyc_sec, left)
+        self.vgpu_capacity()
         tps, src = self.choose_tps(g)
         plan = plan_cycle(self.cfg, g, sec, tps, src, self.tok_step)
         s["cycles"][str(g)] = {"status": "running", "started_at": now(), "plan": plan, "steps": {}}
@@ -1009,6 +1014,28 @@ class LongRun:
         self.log(f"cycle g{g} planned", hours=round(plan["hours"], 3), tokens_per_s=round(tps, 1), source=src,
                  steps={f: plan["phases"][f]["steps"] for f in TRAIN_FAMILIES})
         return g
+
+    def vgpu_capacity(self) -> dict:
+        """Verified pool capacity (median of each node's fresh proofs), tracked over time:
+        `ready` once it has held >= vgpu.min_b300 B300 for vgpu.sustain_hours."""
+        v = self.cfg.get("vgpu") or {}
+        pool = read_json(self.p(v.get("pool", "runs/vgpu/pool.json"))) or {}
+        t, age = now(), float(v.get("max_age_hours", 6)) * 3600
+        tflops = 0.0
+        for node in (pool.get("nodes") or {}).values():
+            fresh = sorted(x["tflops"] for x in node.get("proofs", []) if t - x.get("ts", 0) < age)
+            if fresh:
+                m = len(fresh) // 2
+                tflops += fresh[m] if len(fresh) % 2 else (fresh[m - 1] + fresh[m]) / 2
+        b300 = tflops / 2500.0
+        st = self.state.setdefault("vgpu", {})
+        enough = b300 >= float(v.get("min_b300", 2.0))
+        st.update(verified_tflops=tflops, b300=b300, checked_at=t, since=(st.get("since") or t) if enough else None)
+        ready = enough and t - st["since"] >= float(v.get("sustain_hours", 6)) * 3600
+        if ready and not st.get("ready"):
+            self.log(f"VGPU ready: {b300:.2f} B300 verified for {v.get('sustain_hours')} h; base training moves to the pool")
+        st["ready"] = ready
+        return st
 
     def plateau(self) -> str | None:
         """A reason to stop when the last plateau_cycles finished cycles changed nothing:
@@ -2359,6 +2386,10 @@ def print_status(root: Path) -> int:
         print(f"current {fam:<8} {c.get('run')} {c.get('dir')}" + (f" (base {c['base']})" if c.get("base") else ""))
     for fam, v in (s.get("releases") or {}).items():
         print(f"release {fam:<8} v{v}")
+    vg = s.get("vgpu")
+    if vg:
+        print(f"vgpu     {vg.get('verified_tflops', 0):.3f} TFLOP/s verified = {vg.get('b300', 0):.6f} B300"
+              + (" (ready)" if vg.get("ready") else ""))
     return EX_OK
 
 

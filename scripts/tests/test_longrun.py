@@ -705,3 +705,20 @@ def test_corpus_v4_wins_between_cycles_only(tmp_path):
     assert o.state["corpus"]["version"] == "v2", "mid-cycle: the pinned corpus stays"
     o.ensure_corpus(adopt=True)
     assert o.state["corpus"]["version"] == "v4" and o.store_meta("base") == "data/out/base-v4/train.meta.json"
+
+
+def test_vgpu_gate_needs_sustained_verified_capacity(tmp_path):
+    root, b = world(tmp_path)
+    o = orchestrator(root)
+    o.init_state()
+    t = time.time()
+    proofs = lambda tf, age: [{"ts": t - age, "tflops": tf}]
+    write(root / "runs/vgpu/pool.json", {"nodes": {"a": {"proofs": proofs(3000.0, 60)}, "b": {"proofs": proofs(2500.0, 60)},
+                                                   "old": {"proofs": proofs(9999.0, 7 * 3600)}}})
+    st = o.vgpu_capacity()
+    assert st["verified_tflops"] == 5500.0 and st["b300"] == 2.2 and not st["ready"], "stale proofs do not count"
+    o.state["vgpu"]["since"] = t - 7 * 3600
+    assert o.vgpu_capacity()["ready"]
+    write(root / "runs/vgpu/pool.json", {"nodes": {"a": {"proofs": proofs(100.0, 60)}}})
+    st = o.vgpu_capacity()
+    assert not st["ready"] and st["since"] is None

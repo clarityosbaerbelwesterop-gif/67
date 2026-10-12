@@ -49,11 +49,13 @@ from .access import Access
 from .control import RUN_RE, CommandError, Controller, NotLive
 from .rsi import RSI, RSIError, load_json, read_longrun
 from .swarm import Swarm, SwarmError
+from .vgpu import Pool, VGPUError
 from .telemetry import RunState, Tail, load_max_steps, parse
 
 ROOT = Path(__file__).resolve().parents[2]
 FRONTEND = ROOT / "headcenter" / "frontend" / "index.html"
-WEBGPU = {"": ("index.html", "text/html"), "forge-webgpu.mjs": ("forge-webgpu.mjs", "text/javascript")}
+WEBGPU = {"": ("index.html", "text/html"), "forge-webgpu.mjs": ("forge-webgpu.mjs", "text/javascript"),
+          "vgpu": ("vgpu.html", "text/html"), "vgpu-node.mjs": ("vgpu-node.mjs", "text/javascript")}
 CHECKPOINT_FILES = ("model.safetensors", "state.json")
 
 
@@ -276,6 +278,7 @@ def create_app(
     access = Access(Path(acl) if acl else ROOT / "headcenter" / "acl.json", runs_path / "headcenter" / "access.jsonl")
     rsi = RSI(runs_path)
     swarm = Swarm(runs_path, [ROOT / "training" / "configs", runs_path], ROOT)
+    vgpu = Pool(runs_path)
     tokenizer = Path(tokenizer) if tokenizer else ROOT / "data" / "stores" / "base" / "tokenizer.json"
 
     @contextlib.asynccontextmanager
@@ -355,7 +358,7 @@ def create_app(
     def call(fn, *args):
         try:
             return fn(*args)
-        except (RSIError, SwarmError) as e:
+        except (RSIError, SwarmError, VGPUError) as e:
             raise HTTPException(getattr(e, "status", 400), str(e)) from None
 
     @app.get("/api/rsi")
@@ -377,6 +380,26 @@ def create_app(
     def longrun(request: Request) -> dict:
         check(request)
         return {**read_longrun(hub.runs_dir), "champions": load_json(hub.runs_dir / "champions.json")}
+
+    @app.get("/api/vgpu")
+    def vgpu_overview(request: Request) -> dict:
+        check(request)
+        return vgpu.overview()
+
+    @app.post("/api/vgpu/register")
+    def vgpu_register(request: Request, body: dict = Body(...)) -> dict:
+        check(request)
+        return call(vgpu.register, body)
+
+    @app.get("/api/vgpu/challenge")
+    def vgpu_challenge(node_id: str, request: Request) -> dict:
+        check(request)
+        return call(vgpu.challenge, node_id)
+
+    @app.post("/api/vgpu/proof")
+    def vgpu_proof(request: Request, body: dict = Body(...)) -> dict:
+        check(request)
+        return call(vgpu.proof, body)
 
     @app.get("/api/swarm")
     def swarm_overview(request: Request) -> dict:

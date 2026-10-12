@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>forge VGPU</title>
+<style>
+  :root { --bg: #fff; --fg: #111; --muted: #666; --line: #ddd; --accent: #0a6; }
+  @media (prefers-color-scheme: dark) { :root { --bg: #111; --fg: #eee; --muted: #999; --line: #333; --accent: #3c9; } }
+  body { margin: 0; padding: 16px; background: var(--bg); color: var(--fg); font: 16px/1.5 system-ui, sans-serif; max-width: 640px; }
+  input, button { font: inherit; padding: 8px 10px; width: 100%; box-sizing: border-box; margin: 4px 0 12px; border: 1px solid var(--line); border-radius: 8px; background: var(--bg); color: var(--fg); }
+  button { background: var(--accent); color: #fff; border: 0; }
+  pre { white-space: pre-wrap; color: var(--muted); font-size: 13px; }
+</style>
+</head>
+<body>
+<h1>forge VGPU</h1>
+<p>Dieses Gerät stellt seine GPU dem forge-Pool zur Verfügung. Der Koordinator prüft jede Rechnung nach und misst die Zeit selbst; gezählt wird nur verifizierte Leistung.</p>
+<label>Name dieses Geräts<input id="label" value="iPad"></label>
+<label>Token<input id="token" type="password" autocomplete="off"></label>
+<button id="go">Beitreten</button>
+<pre id="log"></pre>
+<script type="module">
+import { serve } from "./vgpu-node.mjs";
+const log = (x) => { document.getElementById("log").textContent += JSON.stringify(x) + "\n"; };
+document.getElementById("go").onclick = async () => {
+  if (!navigator.gpu) return log({ error: "WebGPU ist in diesem Browser nicht verfügbar" });
+  const adapter = await navigator.gpu.requestAdapter();
+  const device = await adapter.requestDevice({ requiredLimits: { maxStorageBufferBindingSize: adapter.limits.maxStorageBufferBindingSize, maxBufferSize: adapter.limits.maxBufferSize } });
+  try { await navigator.wakeLock?.request("screen"); } catch {}
+  serve(device, { headcenter: location.origin, token: document.getElementById("token").value,
+                  label: document.getElementById("label").value, log }).catch((e) => log({ error: String(e) }));
+};
+</script>
+</body>
+</html>

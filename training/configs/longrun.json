@@ -196,6 +196,12 @@
       "base_tol": 0.01
     }
   },
+  "vgpu": {
+    "pool": "runs/vgpu/pool.json",
+    "min_b300": 2.0,
+    "sustain_hours": 6,
+    "max_age_hours": 6
+  },
   "rebase": {
     "enabled": true,
     "families": [
