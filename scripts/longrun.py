@@ -734,6 +734,7 @@ class LongRun:
             self.write_champions()
             if getattr(self.args, "rearbitrate", None) is not None:
                 return self.rearbitrate(int(self.args.rearbitrate))
+            self.auto_rearbitrate()
             while True:
                 self.reload_config()
                 g = self.next_cycle()
@@ -1963,6 +1964,26 @@ class LongRun:
             return {"status": "skipped", "reason": "darus merge did not succeed"}
         return self.family_gate("darus", g, cyc)
 
+    def auto_rearbitrate(self) -> None:
+        """At startup: when champions.tol differs from the tolerance the last finished
+        arbiter used (recorded in its step; before 2026-10-12 it was gate.tolerance),
+        decide that cycle again once, so a settings fix reaches the current champions
+        without anyone stopping the run."""
+        tol = float(self.cfg["champions"].get("tol", self.cfg["gate"]["tolerance"]))
+        done = [int(k) for k, c in self.state.get("cycles", {}).items()
+                if (c.get("steps", {}).get("champions") or {}).get("status") == "done"]
+        if not done:
+            return
+        g = max(done)
+        st = self.state["cycles"][str(g)]["steps"]["champions"]
+        used = float(st.get("tol", self.cfg["gate"]["tolerance"]))
+        if abs(used - tol) < 1e-12:
+            return
+        self.log(f"champions.tol {used} -> {tol}: deciding cycle g{g} again")
+        if self.rearbitrate(g) == EX_OK:
+            st["tol"] = tol
+            self.save()
+
     def rearbitrate(self, g: int) -> int:
         """--rearbitrate G: run the champion arbiter of finished cycle G again with the
         current settings (e.g. after a tolerance fix); the new decisions replace the old."""
@@ -2063,6 +2084,7 @@ class LongRun:
         ph = cyc["plan"]["phases"].get("champions") or {}  # absent in plans written before this step existed
         hours = ph.get("hours", self.cfg["shares"]["champions"] * cyc["plan"]["seconds"] / 3600)
         return {"families": fams, "champions": self.rel(self.p(self.cfg["champions"]["out"])), "budget_hours": hours,
+                "tol": float(self.cfg["champions"].get("tol", self.cfg["gate"]["tolerance"])),
                 "decision": ", ".join(f"{f} {r.get('decision')}" for f, r in fams.items())}
 
     def generation_models(self, g, cyc) -> dict:

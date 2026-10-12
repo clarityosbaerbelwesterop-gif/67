@@ -665,3 +665,15 @@ def test_plateau_finishes_instead_of_burning_compute(tmp_path):
     assert o.plateau() is None, "a 3 % base gain keeps it going"
     del o.state["cycles"]["5"]
     assert o.plateau() is None, "fewer than plateau_cycles finished cycles"
+
+
+def test_a_tolerance_change_re_decides_the_last_cycle_once_at_startup(tmp_path, monkeypatch):
+    o, cyc, rsi, calls = arbiter_world(tmp_path, monkeypatch)
+    monkeypatch.setattr(o, "arbiter_on", lambda fam: fam == "quasnir")
+    cyc["steps"]["champions"] = {"status": "done", "families": {}}  # decided by old code: no "tol" recorded
+    redo = []
+    monkeypatch.setattr(o, "rearbitrate", lambda g: redo.append(g) or lr.EX_OK)
+    o.auto_rearbitrate()
+    assert redo == [3] and cyc["steps"]["champions"]["tol"] == 0.02
+    o.auto_rearbitrate()
+    assert redo == [3], "only once"
