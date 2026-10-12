@@ -279,6 +279,12 @@ def save_checkpoint(d, step: int, params: dict, m: dict, v: dict, state: dict) -
     return sha
 
 
+def join(*parts) -> str:
+    """A path spelled the way Rust's Path::join spells it (no normalisation: "./runs" stays "./runs"),
+    which is what forge writes into latest.json and the checkpoint/trunk lines."""
+    return os.path.join(*[str(p) for p in parts])
+
+
 def write_latest(run_dir, ckpt_dir: str, step: int, sha: str) -> None:
     """<out_dir>/<run>/latest.json, compact sorted JSON; `dir` as forge's Path::join spells it."""
     Path(run_dir, "latest.json").write_text(dumps({"dir": ckpt_dir, "step": step, "model_sha256": sha}))
@@ -313,7 +319,9 @@ class Store:
         self.period = None
         path = Path(spec)
         m = json.loads(path.read_text())
-        dt = m.get("dtype", "uint16")
+        dt = m.get("dtype")
+        if not isinstance(dt, str):
+            dt = "uint16"  # data.rs: m["dtype"].as_str().unwrap_or("uint16")
         if dt not in ("uint16", "uint32"):
             raise ValueError(f"{spec}: unsupported dtype {dt}")
         if not isinstance(m.get("vocab_size"), int):

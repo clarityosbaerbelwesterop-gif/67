@@ -1,0 +1,27 @@
+#!/usr/bin/env bash
+# forge-accel: a drop-in for the forge binary that runs train / eval / logits on JAX devices
+# (TPU, GPU, CPU) through accel/, and hands every other subcommand to the real forge binary.
+#
+#   FORGE=accel/bin/forge-accel python3 cluster/fabric.py work ...        # cluster workers on accelerators
+#   python3 scripts/longrun.py --forge accel/bin/forge-accel ...          # the long run (see docs/ACCEL.md)
+#
+# Environment:
+#   ACCEL_PYTHON     Python with jax installed (default: python3)
+#   FORGE_REAL       the real forge binary for the other subcommands (default: target/release/forge)
+#   ACCEL_PRECISION  f32 (default) or bf16 -- bf16 GEMM inputs, f32 accumulation (TPU MXU / tensor cores)
+#   ACCEL_DEVICES    use only the first N devices (default: all)
+#   ACCEL_REMAT      1 = recompute layers in the backward pass (less memory)
+#   ACCEL_DISTRIBUTED 1 = jax.distributed.initialize() (multi-host TPU slices)
+set -euo pipefail
+here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+root="$(dirname "$(dirname "$here")")"
+py="${ACCEL_PYTHON:-python3}"
+real="${FORGE_REAL:-$root/target/release/forge}"
+case "${1:-}" in
+  train|eval|logits)
+    cmd="$1"; shift
+    export PYTHONPATH="$root${PYTHONPATH:+:$PYTHONPATH}"
+    exec "$py" -m "accel.$cmd" "$@" ;;
+  *)
+    exec "$real" "$@" ;;
+esac

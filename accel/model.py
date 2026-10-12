@@ -141,24 +141,57 @@ def forward(params: dict, cfg: ModelConfig, ids, precision: str = "f32", remat: 
     return ein("btd,vd->btv", xf, emb, precision)
 
 
-def row_losses(params: dict, cfg: ModelConfig, ids, targets, precision: str = "f32", remat: bool = False):
+XENT_MODES = ("fast", "forge")
+
+
+def sequential_row_sum(e, unroll: int = 16):
+    """sum over the last axis, strictly left to right in f32 (forge's `sum += v` loop in Xent)."""
+    et = jnp.moveaxis(e, -1, 0)
+    s, _ = jax.lax.scan(lambda acc, col: (acc + col, None), jnp.zeros(et.shape[1:], jnp.float32), et, unroll=unroll)
+    return s
+
+
+def row_losses(params: dict, cfg: ModelConfig, ids, targets, precision: str = "f32", remat: bool = False,
+               xent: str = "fast"):
     """Per-row cross entropy f32(ln(sum exp(l - max)) + max - l[target]) and next-token hit
-    (argmax = first index of the max), as machine.rs Xent computes them."""
+    (argmax = first index of the max), as machine.rs Xent computes them.
+
+    xent="forge" sums exp(l - max) over the vocabulary strictly in order, like forge; over 8192
+    logits that sequential f32 sum runs ~4e-6 low, which is the whole measured gap between accel's
+    and forge's eval loss (1.1e-5 on base-g3; bit-identical with "forge"). It is a V-step scan, so
+    "fast" (a tree reduction) is the default for training steps; the gradient is the same either way."""
+    if xent not in XENT_MODES:
+        raise ValueError(f"xent must be one of {XENT_MODES}")
     lg = forward(params, cfg, ids, precision, remat)
     mx = jax.lax.stop_gradient(jnp.max(lg, axis=-1))  # d/dlogits = softmax - onehot, as forge's Xent
-    lse = jnp.log(jnp.sum(jnp.exp(lg - mx[..., None]), axis=-1))
+    e = jnp.exp(lg - mx[..., None])
+    lse = jnp.log(jnp.sum(e, axis=-1))
+    if xent == "forge":  # forge's value, the tree sum's gradient (a + (b - a) == b exactly for b ~ a)
+        lse = lse + jax.lax.stop_gradient(jnp.log(sequential_row_sum(jax.lax.stop_gradient(e))) - lse)
     tl = jnp.take_along_axis(lg, targets[..., None], axis=-1)[..., 0]
     ce = (lse + mx) - tl
     hit = jnp.argmax(lg, axis=-1) == targets
     return ce, hit
 
 
-def loss(params: dict, cfg: ModelConfig, batch, precision: str = "f32", remat: bool = False):
+def pairwise_sum(x, width: int = 128):
+    """f32 sum by levels of `width`-element partial sums. forge sums these reductions (SumSq over
+    the gradients, a micro-batch's row losses) in f64; f64 is slow or absent on TPUs, and a flat f32
+    reduction over millions of elements can be off by ~1e-5 relative on CPU. Levels of 128 keep
+    the f32 error near 1e-7."""
+    x = jnp.ravel(x).astype(jnp.float32)
+    while x.size > width:
+        n = -(-x.size // width) * width
+        x = jnp.pad(x, (0, n - x.size)).reshape(-1, width).sum(axis=1)
+    return jnp.sum(x)
+
+
+def loss(params: dict, cfg: ModelConfig, batch, precision: str = "f32", remat: bool = False, xent: str = "forge"):
     """Mean next-token cross entropy over every token of batch = (ids, targets), like forge's
     LOSS / LOSS_COUNT (no ignore index, no padding mask, no z-loss, no label smoothing)."""
     ids, targets = batch
-    ce, _ = row_losses(params, cfg, ids, targets, precision, remat)
-    return jnp.sum(ce) / f32(ce.size)
+    ce, _ = row_losses(params, cfg, ids, targets, precision, remat, xent)
+    return pairwise_sum(ce) / f32(ce.size)
 
 
 # ---------------------------------------------------------------------------------------------- init
