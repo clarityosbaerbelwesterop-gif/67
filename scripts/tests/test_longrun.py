@@ -678,3 +678,17 @@ def test_a_tolerance_change_re_decides_the_last_cycle_once_at_startup(tmp_path, 
     assert redo == [3] and cyc["steps"]["champions"]["tol"] == 0.02
     o.auto_rearbitrate()
     assert redo == [3], "only once"
+
+
+def test_a_code_change_reloads_between_steps(tmp_path, monkeypatch):
+    root, b = world(tmp_path)
+    o = orchestrator(root)
+    o.init_state()
+    cyc = o.state["cycles"]["3"]
+    for name in lr.CYCLE_STEPS:
+        cyc["steps"][name] = {"status": "done"}
+    cyc["steps"]["report"] = {"status": "pending"}
+    o.code_sha = "old"
+    with pytest.raises(lr.Reload):
+        o.run_cycle(3)
+    assert cyc["steps"]["report"]["status"] == "pending", "nothing started"

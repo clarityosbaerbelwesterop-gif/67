@@ -80,6 +80,8 @@ from pathlib import Path
 
 REPO = Path(__file__).resolve().parent.parent
 EX_OK, EX_FAIL, EX_FATAL, EX_LOCKED, EX_STOPPED = 0, 1, 3, 4, 75
+EX_RELOAD = 76  # the orchestrator's code changed: scripts/supervise.sh restarts it at once
+CODE_FILES = ("scripts/longrun.py", "scripts/champions.py", "scripts/releases.py", "scripts/rebase.py")
 EOS = 8190
 EOS_BYTES = EOS.to_bytes(2, "little")
 STEP_RE = re.compile(r"^step-(\d{6,})$")
@@ -222,6 +224,10 @@ class Fatal(Exception):
 
 class Stopped(Exception):
     """STOP file or signal: graceful exit, resumable."""
+
+
+class Reload(Exception):
+    """The orchestrator's own code changed: exit between steps so the new code runs."""
 
 
 class StepFailed(Exception):
@@ -537,6 +543,7 @@ class LongRun:
         self.finished_file = self.dir / "FINISHED"
         self.signal_stop = False
         self.redo = False  # --rearbitrate: decide a finished cycle again
+        self.code_sha = self.code_digest()
         self.state: dict = read_json(self.state_path) or {}
         self.base_cfg = read_json(root / cfg["base_config"])
         if not isinstance(self.base_cfg, dict):
@@ -753,6 +760,12 @@ class LongRun:
                 if self.between_cycles():
                     self.ensure_corpus(adopt=True)  # adopt a newer corpus (e.g. v3) only between cycles, never mid-cycle
                 self.run_cycle(g)
+        except Reload as e:
+            self.state["status"] = "reloading"
+            self.state["message"] = str(e)
+            self.save()
+            self.log("reload", reason=str(e))
+            return EX_RELOAD
         except Stopped as e:
             self.state["status"] = "stopped"
             self.state["message"] = str(e)
@@ -1021,6 +1034,13 @@ class LongRun:
         self.log("finished: " + reason)
         return None
 
+    def code_digest(self) -> str:
+        h = hashlib.sha256()
+        for f in CODE_FILES:
+            p = REPO / f
+            h.update(p.read_bytes() if p.exists() else b"-")
+        return h.hexdigest()
+
     def run_cycle(self, g: int) -> None:
         cyc = self.state["cycles"][str(g)]
         for name in CYCLE_STEPS:
@@ -1032,6 +1052,8 @@ class LongRun:
                 continue
             if self.stop_requested():
                 raise Stopped("STOP requested between steps")
+            if self.code_digest() != self.code_sha:  # nothing runs between steps: no work is lost
+                raise Reload(f"orchestrator code changed; restarting before g{g} {name}")
             self.reload_config()  # phase boundary: config edits apply from the next step on
             st["status"] = "running"
             st.setdefault("started_at", now())
