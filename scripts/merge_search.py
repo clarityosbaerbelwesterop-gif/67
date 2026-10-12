@@ -38,13 +38,32 @@ def evaluate(ckpt: str, data: str, seed: int, batches: int, seq: int = 256) -> f
     return json.loads(out.strip().splitlines()[-1])["loss"]
 
 
-def merge(spec: dict, base: str, children: list, out: str) -> None:
+def merge(spec: dict, base: str, children: list, out: str, via: list = ()) -> None:
     cmd = [FORGE, "merge", "--base", base, "--method", spec["method"], "--lambda", f"{spec['lambda']:.4f}", "--out", out]
     for c in children:
         cmd += ["--child", c]
+    for v in via:  # rebased inits a child was trained from (they derive from base)
+        cmd += ["--via", v]
     if spec["method"] == "ties":
         cmd += ["--density", f"{spec['density']:.4f}"]
     subprocess.run(cmd, check=True, capture_output=True, text=True)
+
+
+def find_via(base: str, children: list) -> list:
+    """Rebased inits (runs/<run>/rebased-init-*) the children were trained from:
+    a child whose parent is not the base, but a checkpoint next to it that is.
+    forge merge re-checks every hash."""
+    sha = lambda d: (json.loads((Path(d) / "state.json").read_text()) or {})
+    base_sha, via = sha(base).get("model_sha256"), []
+    for c in children:
+        parent = sha(c).get("parent_sha256")
+        if parent == base_sha:
+            continue
+        for d in sorted(Path(c).parent.glob("rebased-init-*")):
+            st = sha(d) if (d / "state.json").is_file() else {}
+            if st.get("model_sha256") == parent and st.get("parent_sha256") == base_sha:
+                via.append(str(d))
+    return via
 
 
 def key(spec: dict) -> tuple:
@@ -74,6 +93,7 @@ def main() -> int:
     budget = a.budget or search.get("budget", 24)
     seed, batches, seq = search.get("select_seed", 777), search.get("select_batches", 16), search.get("seq", 256)
     base, children, final = cfg["base"], cfg["children"], Path(cfg["out"])
+    via = list(dict.fromkeys(cfg.get("via", []) + find_via(base, children)))
     work = final.parent / "search"
     work.mkdir(parents=True, exist_ok=True)
 
@@ -83,7 +103,7 @@ def main() -> int:
 
     def score(spec: dict, idx: int) -> dict:
         out = str(work / f"cand-{idx:03d}")
-        merge(spec, base, children, out)
+        merge(spec, base, children, out, via)
         losses = {s: evaluate(out, d, seed, batches, seq) for s, d in suites.items()}
         shutil.rmtree(out)
         reg = {s: losses[s] / best_parent[s] - 1 for s in suites}
@@ -119,7 +139,7 @@ def main() -> int:
     tmp = final.parent / "FINAL.search"
     if tmp.exists():
         shutil.rmtree(tmp)
-    merge(best, base, children, str(tmp))
+    merge(best, base, children, str(tmp), via)
     default = final.parent / "FINAL-default"
     if final.exists() and not default.exists():
         final.rename(default)

@@ -1182,8 +1182,13 @@ class LongRun:
             for k in ("dir", "base"):
                 if isinstance(e, dict) and e.get(k):
                     keep.add(self.p(e[k]).resolve())
-        for info in self.state.get("runs", {}).values():
-            if not info.get("finished") and info.get("config"):
+        cycles = self.state.get("cycles", {})
+        last = max(cycles, key=int) if cycles else None
+        for run, info in self.state.get("runs", {}).items():
+            m = re.search(r"-g(\d+)$", run)
+            merge_open = bool(m) and m.group(1) == last and cycles[last].get("steps", {}).get("darus_merge", {}).get("status") != "done"
+            if (not info.get("finished") or merge_open) and info.get("config"):
+                # an unfinished run's init, or a rebased init the cycle's darus merge still needs (--via)
                 init = (read_json(self.p(info["config"])) or {}).get("init_from")
                 if init:
                     keep.add(self.p(init).resolve())
@@ -1827,7 +1832,9 @@ class LongRun:
         base = cyc.get("parent_base") or self.state["current"]["base"]["dir"]
         out = f"runs/{run}/FINAL"
         m = self.cfg["merge"]
-        mcfg = {"name": run, "base": base, "children": children, "method": m["method"], "density": m["density"],
+        # A specialist trained from a rebased init descends from the base through it.
+        via = [i for f in ("rouge", "quasnir") if REBASED_PREFIX in (i := self.state.get("runs", {}).get(self.name(f, g), {}).get("init_from") or "")]
+        mcfg = {"name": run, "base": base, "children": children, "via": via, "method": m["method"], "density": m["density"],
                 "lambda": m["lambda"], "out": out, "suites": {"general": self.store_meta("general"), "code": self.store_meta("code")},
                 "acceptance": {**m["acceptance"], "suites": ["general", "code"]}, "search": m["search"]}
         path = self.dir / "configs" / f"{run}.merge.json"

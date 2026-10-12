@@ -546,3 +546,25 @@ def test_hygiene_never_deletes_champions_their_bases_or_rebased_inits_in_use(tmp
     assert not (root / f"runs/quasnir-g3/{lr.REBASED_PREFIX}abc-lam1").exists(), "rebased init of a finished run"
     assert (root / f"runs/rouge-g4/{lr.REBASED_PREFIX}def-lam1/model.safetensors").exists(), "rebased init still in use"
     assert (root / "runs/rsi/rouge-g2/rounds/rsi-rouge-g2-r2/step-000060").exists(), "the current rouge champion"
+
+
+def test_darus_merge_passes_rebased_inits_as_via_and_keeps_them_until_the_merge(tmp_path):
+    root, b = world(tmp_path)
+    o = orchestrator(root)
+    o.init_state()
+    init = f"runs/rouge-g4/{lr.REBASED_PREFIX}def-lam0.5"
+    ckpt(root, init, [1, 1, 1, 1])
+    write(root / "runs/longrun/configs/rouge-g4.json", {"init_from": init})
+    o.state["runs"].update({"rouge-g4": {"finished": True, "family": "rouge", "init_from": init,
+                                         "config": "runs/longrun/configs/rouge-g4.json"},
+                            "quasnir-g4": {"finished": True, "family": "quasnir", "init_from": "runs/base-g4/FINAL"}})
+    cyc = {"steps": {"darus_merge": {"status": "running"}}}
+    o.state["cycles"] = {"4": cyc}
+    o.cfg["merge"]["cmd"] = ["true"]  # no merge output: the step reports an error but has written its config
+    assert o.step_darus_merge(4, cyc, {})["status"] == "error"
+    assert json.loads((root / "runs/longrun/configs/darus-g4.merge.json").read_text())["via"] == [init]
+    o.prune_rebased()
+    assert (root / init / "model.safetensors").exists(), "the cycle's darus merge still needs it (--via)"
+    cyc["steps"]["darus_merge"]["status"] = "done"
+    o.prune_rebased()
+    assert not (root / init).exists(), "merged: an ordinary finished-run rebased init"

@@ -4,7 +4,7 @@
 //!   forge train    --config run.json
 //!   forge diloco   --config run.json --rank R --world W --peers h0:p,h1:p,.. [--listen ADDR]
 //!                  [--inner-steps H] [--outer-lr 0.7] [--momentum 0.9] [--compression none|bf16|int8[:B]]
-//!   forge merge    --base DIR --child DIR --child DIR [--method ties|linear] [--density D] [--lambda L] --out DIR
+//!   forge merge    --base DIR --child DIR --child DIR [--via DIR]... [--method ties|linear] [--density D] [--lambda L] --out DIR
 //!   forge eval     --ckpt DIR --data META [--split val|train] [--batch B] [--seq T] [--batches K] [--quant FORMAT]
 //!   forge generate --ckpt DIR --prompt-ids 1,2,3 | --prompts-file F [--max-new N] [--temperature T] [--top-k K]
 //!                  [--seed S] [--stop-id ID] [--decoder kv|window] [--batch N (prompts file, kv; default 16)]
@@ -232,6 +232,26 @@ fn merge_cmd(a: &Args) -> Result<(), String> {
     if children.len() < 2 {
         return Err("merge needs at least two --child".into());
     }
+    // A child may also descend from the base through a --via checkpoint: an init
+    // derived from the base (e.g. a rebased init, parent_sha256 = base) whose own
+    // hash is the child's parent. Its file must hash to its recorded model_sha256.
+    let mut parents = vec![base_sha.clone()];
+    let mut vias = Vec::new();
+    for v in a.all("--via") {
+        let st: serde_json::Value = serde_json::from_str(
+            &std::fs::read_to_string(Path::new(&v).join("state.json")).map_err(|e| format!("{v}/state.json: {e}"))?,
+        )
+        .map_err(|e| e.to_string())?;
+        let sha = ckpt::sha256_file(&Path::new(&v).join("model.safetensors")).map_err(|e| e.to_string())?;
+        if st["model_sha256"].as_str() != Some(sha.as_str()) {
+            return Err(format!("{v}: model.safetensors does not match its state.json model_sha256"));
+        }
+        if st["parent_sha256"].as_str() != Some(base_sha.as_str()) {
+            return Err(format!("{v} was not derived from this base (parent {} != {base_sha})", st["parent_sha256"]));
+        }
+        parents.push(sha.clone());
+        vias.push(json!({"dir": v, "sha256": sha}));
+    }
     let mut cw = Vec::new();
     let mut lineage = Vec::new();
     for c in &children {
@@ -243,9 +263,9 @@ fn merge_cmd(a: &Args) -> Result<(), String> {
             &std::fs::read_to_string(Path::new(c).join("state.json")).map_err(|e| e.to_string())?,
         )
         .map_err(|e| e.to_string())?;
-        if parent["parent_sha256"].as_str() != Some(base_sha.as_str()) {
+        if !parents.iter().any(|p| parent["parent_sha256"].as_str() == Some(p.as_str())) {
             return Err(format!(
-                "{c} was not trained from this base (parent {} != {base_sha})",
+                "{c} was not trained from this base (parent {} != {base_sha}, no --via matches)",
                 parent["parent_sha256"]
             ));
         }
@@ -268,7 +288,7 @@ fn merge_cmd(a: &Args) -> Result<(), String> {
     let sha = ckpt::save_safetensors(&out.join("model.safetensors"), &merged, &meta)
         .map_err(|e| e.to_string())?;
     let state = json!({"step": 0, "config": {"model": bcfg}, "model_sha256": sha, "parent_sha256": base_sha,
-                       "merge": {"method": format!("{method:?}"), "lambda": lambda, "children": lineage}});
+                       "merge": {"method": format!("{method:?}"), "lambda": lambda, "children": lineage, "via": vias}});
     std::fs::write(
         out.join("state.json"),
         serde_json::to_string_pretty(&state).unwrap(),
