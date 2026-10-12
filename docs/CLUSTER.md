@@ -80,3 +80,17 @@ holds 2 B300 for 6 hours, the long run moves base training onto it.
 | Run | Workers | Steps | tok/s per worker | Val loss |
 | --- | --- | --- | --- | --- |
 | Local smoke from scratch (cloud Xeon, shared with training) | 2 | 8 | ~850 | 9.01 → 7.93 after one round |
+| GitHub run 38264700716, `ubuntu-latest`, from scratch (2026-10-12) | 4 | 100 (8,192 tok/step) | ~1,800 | 9.01 → 5.49 after one round (3.28 M tokens) |
+
+In that run, the whole round took 10 minutes:
+
+| Phase | Time |
+| --- | --- |
+| Build | 35 s (cached) |
+| Data shard per worker | about 45 s |
+| Training | about 7.5 min |
+| Aggregate and eval | 30 s |
+
+One hosted runner is about as fast as the cloud container (~2,000 tok/s). Four
+runners give about 7,400 tok/s raw, or about 3,000 tok/s training-effective after
+the DiLoCo factor 2.5.
