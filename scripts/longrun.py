@@ -1979,6 +1979,13 @@ class LongRun:
                 self.log(f"g{g} champions (re-arbitrated): {fam} {fams[fam].get('decision')}")
         self.write_champions()
         self.redo = False
+        if (self.cfg.get("releases") or {}).get("enabled", True):
+            st = cyc["steps"].setdefault("release", {"status": "pending"})
+            st["families"] = {}  # the champions changed: check every family again
+            st.update(self.step_release(g, cyc, st))
+            st["status"] = "done"
+            self.save()
+            self.log(f"g{g} release (after re-arbitration): {st.get('decision')}")
         return EX_OK
 
     def step_release(self, g, cyc, st):
