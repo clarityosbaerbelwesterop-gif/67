@@ -284,6 +284,28 @@ def test_anchor_gate_bounds_drift_from_initial_champion():
     assert g["passed"] and g["anchor"] is None
 
 
+def test_forgetting_gate_blocks_significant_losses_on_lower_levels():
+    assert L.mcnemar_loss_p(0, 0) == 1.0 and L.mcnemar_loss_p(35, 1) < 1e-8 and L.mcnemar_loss_p(1, 35) > 0.99
+    assert _gates()["forgetting"] is None and _gates()["forgetting_ok"]  # callers without the check: unchanged
+    keep = {0: {"paired": 64, "lost": 2, "gained": 1, "p_loss": L.mcnemar_loss_p(2, 1), "ok": True}}
+    assert _gates(forgetting=keep)["passed"]
+    # quasnir-g3 r3 -> r8 on the 64 level-0 tasks: 35 lost, 1 gained
+    lost = {0: {"paired": 64, "lost": 35, "gained": 1, "p_loss": L.mcnemar_loss_p(35, 1), "ok": False}}
+    g = _gates(forgetting=lost)
+    assert not g["passed"] and L.decide(g, False) == "reject" and not g["forgetting_ok"]
+    assert g["reasons"][0].startswith("forgot level 0: 35 tasks lost, 1 gained")
+
+
+def test_training_exclusion_covers_the_arbiters_heldout_tasks():
+    s = L.Settings(model="m", champion="", family="code", gates={}, replay=None, rounds=0)
+    assert s.exclude_heldout == 128 and s.heldout == 64 and s.forget_alpha == 0.05
+    a = L.parse_args(["--model", "m", "--champion", "c", "--family", "code", "--gate", "code=x", "--rounds", "1"])
+    assert a.exclude_heldout == 128 and a.forget_alpha == 0.05
+    b = L.parse_args(["--model", "m", "--champion", "c", "--family", "code", "--gate", "code=x", "--rounds", "1",
+                      "--exclude-heldout", "256", "--forget-alpha", "0"])
+    assert b.exclude_heldout == 256 and b.forget_alpha == 0.0
+
+
 def test_approval_file_and_stop(scratch):
     d = scratch / "approval"
     d.mkdir()

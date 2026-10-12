@@ -34,7 +34,7 @@ ROOT = Path(__file__).resolve().parent.parent
 PACK = ROOT / "resume" / "pack"
 PART = 90 * 1024 * 1024
 META_GLOBS = ["runs/longrun/*.json", "runs/longrun/*.jsonl", "runs/longrun/*.out", "runs/longrun/configs/*",
-              "runs/champions.json", "runs/report.json", "runs/benchmarks.jsonl", "runs/*.jsonl", "runs/rsi/*/*.json", "runs/rsi/*/*.jsonl", "runs/rsi/*/heldout/**/*",
+              "runs/champions.json", "runs/releases.json", "runs/report.json", "runs/benchmarks.jsonl", "runs/*.jsonl", "runs/rsi/*/*.json", "runs/rsi/*/*.jsonl", "runs/rsi/*/heldout/**/*",
               "runs/rsi/*/configs/*"]
 TRAIN_STEPS = {"base", "quasnir", "rouge"}
 
@@ -82,6 +82,14 @@ def collect() -> list[Path]:
         cfg = ROOT / "runs/longrun/configs" / f"{(cur or {}).get('run')}.json"
         if cfg.is_file():
             refs.append(json.loads(cfg.read_text()).get("init_from") or "")
+    base_run = ((state.get("current") or {}).get("base") or {}).get("run")
+    if base_run and (ROOT / "runs" / base_run / "TRUNK" / "model.safetensors").is_file():
+        add_ckpt(ROOT / "runs" / base_run / "TRUNK", full=True)  # the next base generation continues it
+    for rel_dir in json.loads((ROOT / "runs/releases.json").read_text()).get("families", {}).values() \
+            if (ROOT / "runs/releases.json").is_file() else []:
+        for r in rel_dir.get("releases", []):
+            if (ROOT / r["dir"] / "model.safetensors").is_file():
+                files.update(f for f in (ROOT / r["dir"]).iterdir() if f.is_file())
     for s in refs:
         d = ckpt_dir(s.rstrip("/"))
         if d and "rebased-init-" not in s:

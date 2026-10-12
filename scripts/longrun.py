@@ -87,7 +87,7 @@ TRAIN_FAMILIES = ("base", "quasnir", "rouge")
 FAMILIES = ("base", "quasnir", "rouge", "darus")
 ARBITER_FAMILIES = ("quasnir", "rouge", "darus")
 CYCLE_STEPS = ("base", "base_gate", "quasnir", "quasnir_rsi", "quasnir_gate", "rouge_mix", "rouge", "rouge_rsi",
-               "rouge_gate", "darus_merge", "darus_rsi", "darus_gate", "champions", "report", "hygiene")
+               "rouge_gate", "darus_merge", "darus_rsi", "darus_gate", "champions", "release", "report", "hygiene")
 REBASED_PREFIX = "rebased-init-"  # runs/<run>/rebased-init-<champion sha12>-lam<lam>: a specialist's rebased init
 CTL_STOP = b'{"cmd":"checkpoint"}\n{"cmd":"stop"}\n'
 
@@ -99,11 +99,16 @@ DEFAULTS: dict = {
     "cycle_hours": 24,
     "min_cycle_fraction": 0.25,
     "max_cycles": None,
+    # Stop instead of burning compute: finish when the last `plateau_cycles` finished
+    # cycles brought no promotion, no release and a base gain below plateau_base_gain.
+    "plateau_cycles": 4,
+    "plateau_base_gain": 0.01,
     "first_generation": 2,
     "base_config": "training/configs/base-s.json",
     "forge": "target/release/forge",
     "nice": 10,
     "max_retries": 2,
+    "step_attempts": 2,
     "retry_backoff_seconds": 60,
     "min_free_gb": 5,
     "min_steps": 20,
@@ -115,7 +120,11 @@ DEFAULTS: dict = {
                 "darus": "runs/darus-1/FINAL"},
     "train": {
         "defaults": {"ckpt_every": 100, "eval_every": 500, "eval_batches": 16, "log_every": 10, "threads": 0},
-        "base": {"lr": 0.0004, "min_lr": 0.00004, "warmup_steps": 200, "seed": 1000},
+        # base generations run warmup-stable-decay: the stable phase ends in a TRUNK
+        # checkpoint, the next generation continues that TRUNK (weights + AdamW
+        # moments, no re-warmup) and only the last decay_frac of steps decay to min_lr.
+        # With cosine, base-g3 needed 63 % of its steps to get back below base-g2.
+        "base": {"lr": 0.0004, "min_lr": 0.00004, "warmup_steps": 200, "seed": 1000, "schedule": "wsd", "decay_frac": 0.2},
         "quasnir": {"lr": 0.0002, "min_lr": 0.00002, "warmup_steps": 50, "seed": 2000},
         "rouge": {"lr": 0.0002, "min_lr": 0.00002, "warmup_steps": 50, "seed": 3000},
     },
@@ -169,10 +178,20 @@ DEFAULTS: dict = {
     # candidates are the current champion (incumbent), this cycle's FINAL (Darus: the
     # merge) and this cycle's RSI champion. Val loss on rsi.models.<fam>.gates with
     # gate.eval's forge eval flags, greedy held-out pass rate on `levels` (n =
-    # heldout_tasks), selected with tol = gate.tolerance and `margin`.
-    "champions": {"enabled": True, "families": ["quasnir", "rouge", "darus"], "levels": [0, 1, 2],
+    # heldout_tasks), selected with `tol` and `margin`. tol matches rsi.anchor_tol:
+    # in g3 a 1 % tol discarded quasnir RSI r8 (held-out 101/384 vs 3/384) for
+    # +1.3 % val loss that the RSI loop's own 2 % anchor had accepted.
+    "champions": {"enabled": True, "families": ["quasnir", "rouge", "darus"], "levels": [0, 1, 2], "tol": 0.02,
                   "heldout_tasks": 128, "margin": 0.03, "threads": 0, "cache": "runs/longrun/champions-cache.json",
                   "log": "runs/longrun/champions.jsonl", "out": "runs/champions.json"},
+    # Release ladder (scripts/releases.py): after the arbiter, a family's champion becomes
+    # the next version (Quasnir 2, Rouge 1.5, ...) only when it is measured at least 2x
+    # (major) or sqrt(2)x (half step) as good as the last major release on the same
+    # stores and held-out tasks; version 1 = `initial`. Released checkpoints live in
+    # runs/releases/<fam>-v<version>/ and are never pruned.
+    "releases": {"enabled": True, "families": ["base", "quasnir", "rouge", "darus"], "registry": "runs/releases.json",
+                 "base_stores": ["base", "code", "general"],
+                 "gate": {"mcnemar_alpha": 0.05, "val_tol": 0.02, "base_tol": 0.01}},
     # Cross-cycle accumulation: a specialist starts from new base + lam * (current
     # champion - the base it derives from) (scripts/rebase.py) instead of the plain
     # new base when that measures better on its gate.stores (val loss; held-out too
@@ -515,6 +534,7 @@ class LongRun:
         self.stop_file = self.dir / "STOP"
         self.finished_file = self.dir / "FINISHED"
         self.signal_stop = False
+        self.redo = False  # --rearbitrate: decide a finished cycle again
         self.state: dict = read_json(self.state_path) or {}
         self.base_cfg = read_json(root / cfg["base_config"])
         if not isinstance(self.base_cfg, dict):
@@ -712,6 +732,8 @@ class LongRun:
             self.check_lineage()
             self.ensure_bench()
             self.write_champions()
+            if getattr(self.args, "rearbitrate", None) is not None:
+                return self.rearbitrate(int(self.args.rearbitrate))
             while True:
                 self.reload_config()
                 g = self.next_cycle()
@@ -921,10 +943,17 @@ class LongRun:
         tp = self.state.get("throughput", {})
         prev = self.state.get("cycles", {}).get(str(g - 1))
         if prev:
-            med, n = self.telemetry_tps(self.name("base", g - 1))
-            if med and n >= self.cfg["throughput"]["telemetry_min_samples"]:
-                tp.setdefault("telemetry", {})[self.name("base", g - 1)] = {"median_tokens_per_s": med, "samples": n}
-                return med, f"median telemetry of {self.name('base', g - 1)} ({n} samples)"
+            # The most recently written run of the previous cycle: same model size, and
+            # it ran on the host we are on now (hosts differ: with and without AMX the
+            # speed differed 1.7x, and g4 was planned from base-g3's AMX samples).
+            runs = [self.name(f, g - 1) for f in ("base", "quasnir", "rouge")]
+            runs.sort(key=lambda r: (self.root / "runs" / f"{r}.jsonl").stat().st_mtime
+                      if (self.root / "runs" / f"{r}.jsonl").exists() else 0, reverse=True)
+            for run in runs:
+                med, n = self.telemetry_tps(run)
+                if med and n >= self.cfg["throughput"]["telemetry_min_samples"]:
+                    tp.setdefault("telemetry", {})[run] = {"median_tokens_per_s": med, "samples": n}
+                    return med, f"median telemetry of {run} ({n} samples)"
         if tp.get("bench"):
             return float(tp["bench"]["tokens_per_s"]), f"forge bench {iso(tp['bench']['measured_at'])}"
         return float(self.cfg["throughput"]["assumed_tokens_per_s"]), "assumed (longrun.json throughput.assumed_tokens_per_s)"
@@ -939,6 +968,9 @@ class LongRun:
         done = sum(1 for c in s["cycles"].values() if c.get("status") == "done")
         if s.get("max_cycles") is not None and done >= s["max_cycles"]:
             return self.finish(f"max_cycles {s['max_cycles']} reached")
+        why = self.plateau()
+        if why:
+            return self.finish(why)
         if s.get("budget_started_at") is None:
             s["budget_started_at"] = now()
         cyc_sec = float(s["cycle_hours"]) * 3600
@@ -958,6 +990,25 @@ class LongRun:
                  steps={f: plan["phases"][f]["steps"] for f in TRAIN_FAMILIES})
         return g
 
+    def plateau(self) -> str | None:
+        """A reason to stop when the last plateau_cycles finished cycles changed nothing:
+        no champion promoted, nothing released, base val gain < plateau_base_gain."""
+        k = int(self.cfg.get("plateau_cycles") or 0)
+        done = [c for _, c in sorted(self.state.get("cycles", {}).items(), key=lambda kv: int(kv[0]))
+                if c.get("status") == "done"][-k:] if k else []
+        if not k or len(done) < k:
+            return None
+        for c in done:
+            st = c.get("steps", {})
+            if any(r.get("decision") in ("promote", "release") for r in
+                   list((st.get("champions") or {}).get("families", {}).values())
+                   + list((st.get("release") or {}).get("families", {}).values())):
+                return None
+            bg = st.get("base_gate") or {}
+            if bg.get("decision") == "accept" and -(bg.get("worst_relative_change") or 0) >= float(self.cfg["plateau_base_gain"]):
+                return None
+        return f"plateau: {k} cycles without a promotion, a release or a base gain >= {self.cfg['plateau_base_gain']:.0%}"
+
     def finish(self, reason: str) -> None:
         self.state["status"] = "finished"
         self.state["message"] = reason
@@ -971,6 +1022,9 @@ class LongRun:
         cyc = self.state["cycles"][str(g)]
         for name in CYCLE_STEPS:
             st = cyc["steps"].setdefault(name, {"status": "pending"})
+            if st["status"] == "error" and st.get("attempts", 1) < int(self.cfg.get("step_attempts", 2)):
+                st["attempts"] = st.get("attempts", 1) + 1  # e.g. after a fix: one more try, not forever
+                st["status"] = "pending"
             if st["status"] in ("done", "skipped", "error"):
                 continue
             if self.stop_requested():
@@ -1002,12 +1056,16 @@ class LongRun:
         path = self.dir / "configs" / f"{run}.json"
         if path.exists():
             return self.rel(path)
+        trunk = None
         if fam == "base":
             cur = self.state["current"].get("base")
             init_from = cur["dir"] if cur and self.p(cur["dir"]).exists() else None
             if cur and init_from is None:
                 raise Fatal(f"current base {cur['dir']} does not exist")
             data = self.store_meta("base")
+            t_dir = self.root / "runs" / str((cur or {}).get("run")) / "TRUNK"
+            if cur and self.cfg["train"]["base"].get("schedule") == "wsd" and (t_dir / "state.json").exists():
+                trunk = init_from = self.rel(t_dir)  # the champion's own stable-phase end
         steps = cyc["plan"]["phases"][fam]["steps"]
         b = self.base_cfg
         t = self.cfg["train"]
@@ -1024,6 +1082,13 @@ class LongRun:
                "ckpt_every": d["ckpt_every"], "threads": d["threads"]}
         if init_from:
             cfg["init_from"] = init_from
+        if ph.get("schedule", "cosine") != "cosine":
+            cfg["lr_schedule"] = ph["schedule"]
+            if ph["schedule"] == "wsd":
+                cfg["decay_steps"] = max(1, round(float(ph.get("decay_frac", 0.2)) * steps))
+        if trunk:
+            cfg["init_optim"] = True
+            cfg["warmup_steps"] = 1
         for k in ("hbvm_mib", "autotune"):
             if k in b:
                 cfg[k] = b[k]
@@ -1431,7 +1496,7 @@ class LongRun:
         measured stays."""
         ch = self.cfg["champions"]
         done = self.state["current"].get(fam) or {}
-        if (done.get("decided") or {}).get("by") == "arbiter" and done["decided"].get("cycle") == g:
+        if (done.get("decided") or {}).get("by") == "arbiter" and done["decided"].get("cycle") == g and not self.redo:
             return {"decision": "promote" if done["decided"].get("changed") else "keep", "reason": "decided before a restart",
                     "chosen": {k: done.get(k) for k in ("run", "dir", "source", "sha256")}}
         try:
@@ -1467,7 +1532,7 @@ class LongRun:
             dec = {"type": "champion-decision", "chosen": None, "changed": False, "reasons": [reason]}
             chosen = inc
         else:
-            dec = C.select(rows, tol=float(self.cfg["gate"]["tolerance"]), margin=float(ch["margin"]))
+            dec = C.select(rows, tol=float(ch.get("tol", self.cfg["gate"]["tolerance"])), margin=float(ch["margin"]))
             chosen = next(c for c in cands if c["name"] == dec["chosen"]["name"])
             if not self.has_model(chosen["dir"]):  # deleted while measuring: never crown a missing checkpoint
                 dec["reasons"].append(f"{chosen['name']} vanished after measuring; the incumbent stays")
@@ -1532,7 +1597,7 @@ class LongRun:
         atomic_write_json(self.p(self.cfg["champions"]["out"]), {
             "type": "champions", "updated_at": now(), "updated_at_iso": iso(), "cycle": self.state.get("cycle"),
             "rule": "automatic promotion; one rule per cycle by the champion arbiter (docs/LONGRUN.md)",
-            "eval": {"val": self.cfg["gate"]["eval"], "tol": self.cfg["gate"]["tolerance"],
+            "eval": {"val": self.cfg["gate"]["eval"], "tol": self.cfg["champions"].get("tol", self.cfg["gate"]["tolerance"]),
                      "levels": self.cfg["champions"]["levels"], "heldout_tasks": self.cfg["champions"]["heldout_tasks"],
                      "margin": self.cfg["champions"]["margin"]},
             "champions": fams})
@@ -1826,14 +1891,49 @@ class LongRun:
     def step_rouge_gate(self, g, cyc, st):
         return self.family_gate("rouge", g, cyc)
 
+    def merge_parent(self, fam: str, g: int, base: str) -> tuple[str, list]:
+        """Darus' parent from `fam` in cycle g: the cycle's RSI champion when its
+        lineage (state.json parent_sha256) leads back to `base` through the RSI
+        rounds, the FINAL and a rebased init, else the FINAL. Returns the child and
+        the checkpoints in between (forge merge --via, which re-checks every hash)."""
+        final = f"runs/{self.name(fam, g)}/FINAL"
+        st = lambda d: read_json(self.p(d) / "state.json") or {}
+        base_sha = st(base).get("model_sha256")
+        cands = [final]
+        init = self.state.get("runs", {}).get(self.name(fam, g), {}).get("init_from") or ""
+        if REBASED_PREFIX in init:
+            cands.append(init)
+        champ = read_json(self.root / "runs" / "rsi" / self.name(fam, g) / "champion.json") or {}
+        cands += [h["dir"] for h in [champ] + list(champ.get("history") or []) if h.get("dir")]
+        by_sha = {st(d).get("model_sha256"): d for d in dict.fromkeys(cands) if (self.p(d) / "state.json").exists()}
+
+        def chain(child: str) -> list | None:
+            out, cur, seen = [], st(child).get("parent_sha256"), set()
+            while cur != base_sha:
+                if cur not in by_sha or cur in seen:
+                    return None
+                seen.add(cur)
+                out.append(by_sha[cur])
+                cur = st(by_sha[cur]).get("parent_sha256")
+            return out
+
+        top = champ.get("dir")
+        if top and top != final and (self.p(top) / "model.safetensors").exists():
+            c = chain(top)
+            if c is not None:
+                return top, c
+        return final, chain(final) or []
+
     def step_darus_merge(self, g, cyc, st):
         run = self.name("darus", g)
-        children = [f"runs/{self.name('rouge', g)}/FINAL", f"runs/{self.name('quasnir', g)}/FINAL"]
         base = cyc.get("parent_base") or self.state["current"]["base"]["dir"]
         out = f"runs/{run}/FINAL"
         m = self.cfg["merge"]
-        # A specialist trained from a rebased init descends from the base through it.
-        via = [i for f in ("rouge", "quasnir") if REBASED_PREFIX in (i := self.state.get("runs", {}).get(self.name(f, g), {}).get("init_from") or "")]
+        children, via = [], []
+        for fam in ("rouge", "quasnir"):
+            child, chain = self.merge_parent(fam, g, base)
+            children.append(child)
+            via += [d for d in chain if d not in via]
         mcfg = {"name": run, "base": base, "children": children, "via": via, "method": m["method"], "density": m["density"],
                 "lambda": m["lambda"], "out": out, "suites": {"general": self.store_meta("general"), "code": self.store_meta("code")},
                 "acceptance": {**m["acceptance"], "suites": ["general", "code"]}, "search": m["search"]}
@@ -1862,6 +1962,80 @@ class LongRun:
         if cyc["steps"].get("darus_merge", {}).get("status") != "done" and not self.arbiter_on("darus"):
             return {"status": "skipped", "reason": "darus merge did not succeed"}
         return self.family_gate("darus", g, cyc)
+
+    def rearbitrate(self, g: int) -> int:
+        """--rearbitrate G: run the champion arbiter of finished cycle G again with the
+        current settings (e.g. after a tolerance fix); the new decisions replace the old."""
+        cyc = self.state.get("cycles", {}).get(str(g))
+        if not cyc or cyc.get("steps", {}).get("champions", {}).get("status") != "done":
+            self.log(f"--rearbitrate {g}: cycle {g} has no finished champions step")
+            return EX_FATAL
+        self.redo = True
+        fams = cyc["steps"]["champions"].setdefault("families", {})
+        for fam in ARBITER_FAMILIES:
+            if self.arbiter_on(fam):
+                fams[fam] = {**self.arbitrate(fam, g, cyc), "redo": now()}
+                self.save()
+                self.log(f"g{g} champions (re-arbitrated): {fam} {fams[fam].get('decision')}")
+        self.write_champions()
+        self.redo = False
+        return EX_OK
+
+    def step_release(self, g, cyc, st):
+        rc = self.cfg.get("releases") or {}
+        if not rc.get("enabled", True):
+            return {"status": "skipped", "reason": "releases disabled"}
+        R = tool("releases")
+        regp = self.p(rc["registry"])
+        fams = st.setdefault("families", {})
+        for fam in rc.get("families", FAMILIES):
+            if fam in fams:
+                continue  # decided before a restart
+            if self.stop_requested():
+                raise Stopped("STOP during the release step")
+            try:
+                fams[fam] = self.release_family(R, regp, fam, g, rc)
+            except Exception as e:  # noqa: BLE001 - a failed measurement never releases anything
+                self.log(f"WARNING: release check for {fam} failed", error=repr(e)[-400:])
+                fams[fam] = {"decision": "none", "error": repr(e)[-400:]}
+            self.save()
+        reg = R.load_registry(regp)
+        self.state["releases"] = {f: v.get("current") for f, v in reg["families"].items()}
+        return {"families": fams, "registry": self.rel(regp),
+                "decision": ", ".join(f"{f} {r.get('name') or r.get('decision')}" for f, r in fams.items())}
+
+    def release_family(self, R, regp: Path, fam: str, g: int, rc: dict) -> dict:
+        cur = self.state["current"].get(fam)
+        if not cur or not (self.p(cur["dir"]) / "model.safetensors").exists():
+            return {"decision": "none", "reason": "no champion"}
+        if fam == "base":
+            stores, levels = list(rc.get("base_stores") or ["base"]), []
+        else:
+            stores, levels = list(self.cfg["rsi"]["models"][fam]["gates"]), list(self.cfg["champions"]["levels"])
+        restricted = fam in self.cfg["restricted_models"]
+        reg = R.load_registry(regp)
+        if not (reg["families"].get(fam) or {}).get("releases"):
+            v1 = self.cfg["initial"][fam]
+            m1 = self.measure(v1, fam, stores, levels)
+            R.record_release(self.root, regp, fam, 1, v1, m1["sha256"], m1, {"decision": "bootstrap"}, None, restricted)
+            reg = R.load_registry(regp)
+        famreg = reg["families"][fam]
+        if any(r["sha256"] == cur.get("sha256") for r in famreg["releases"]):
+            return {"decision": "none", "reason": "champion already released"}
+        lm = R.last_major(famreg)
+        if levels:
+            levels = R.choose_levels(lm["metrics"], levels, max_level=int(self.cfg.get("max_level", 5)))
+        ref = self.measure(lm["dir"], fam, stores, levels)
+        cand = self.measure(cur["dir"], fam, stores, levels)
+        res = R.gate(fam, ref, cand, self.root, rc.get("gate"))
+        ver = R.next_version(famreg, res["decision"])
+        out = {"decision": res["decision"], "vs": R.display_name(fam, lm["version"]), "reasons": res["reasons"],
+               "evidence": {k: v for k, v in res["evidence"].items() if k != "levels"}}
+        if ver is None:
+            return out
+        rec = R.record_release(self.root, regp, fam, ver, cur["dir"], cand["sha256"], cand, res, g, restricted)
+        self.log(f"RELEASE {rec['name']} ({cur['dir']})", reasons=res["reasons"])
+        return {**out, "decision": "release", "version": ver, "name": rec["name"], "dir": rec["dir"]}
 
     def step_champions(self, g, cyc, st):
         fams = st.setdefault("families", {})
@@ -2126,6 +2300,8 @@ def print_status(root: Path) -> int:
                 print(f"  {name:<13} {st.get('status'):<8} {st.get('wall_seconds', 0) / 3600:6.2f} h {extra}")
     for fam, c in (s.get("current") or {}).items():
         print(f"current {fam:<8} {c.get('run')} {c.get('dir')}" + (f" (base {c['base']})" if c.get("base") else ""))
+    for fam, v in (s.get("releases") or {}).items():
+        print(f"release {fam:<8} v{v}")
     return EX_OK
 
 
@@ -2145,6 +2321,8 @@ def main(argv=None) -> int:
     ap.add_argument("--prepare", action="store_true", help="plan the next cycle and write its base config, then exit")
     ap.add_argument("--no-wait", action="store_true", help="do not wait for wait_for prerequisites")
     ap.add_argument("--forge", default=None, help="forge binary (default: config 'forge' or $FORGE)")
+    ap.add_argument("--rearbitrate", type=int, default=None, metavar="G",
+                    help="re-run the champion arbiter of finished cycle G with the current settings, then exit")
     args = ap.parse_args(argv)
     root = Path(args.root).resolve()
     cfg_path = Path(args.config)

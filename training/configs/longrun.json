@@ -4,11 +4,14 @@
   "cycle_hours": 24,
   "min_cycle_fraction": 0.25,
   "max_cycles": null,
+  "plateau_cycles": 4,
+  "plateau_base_gain": 0.01,
   "first_generation": 2,
   "base_config": "training/configs/base-s.json",
   "forge": "target/release/forge",
   "nice": 10,
   "max_retries": 2,
+  "step_attempts": 2,
   "retry_backoff_seconds": 60,
   "min_free_gb": 5,
   "min_steps": 20,
@@ -51,7 +54,9 @@
       "lr": 0.0004,
       "min_lr": 4e-05,
       "warmup_steps": 200,
-      "seed": 1000
+      "seed": 1000,
+      "schedule": "wsd",
+      "decay_frac": 0.2
     },
     "quasnir": {
       "lr": 0.0002,
@@ -158,12 +163,33 @@
       1,
       2
     ],
+    "tol": 0.02,
     "heldout_tasks": 128,
     "margin": 0.03,
     "threads": 0,
     "cache": "runs/longrun/champions-cache.json",
     "log": "runs/longrun/champions.jsonl",
     "out": "runs/champions.json"
+  },
+  "releases": {
+    "enabled": true,
+    "families": [
+      "base",
+      "quasnir",
+      "rouge",
+      "darus"
+    ],
+    "registry": "runs/releases.json",
+    "base_stores": [
+      "base",
+      "code",
+      "general"
+    ],
+    "gate": {
+      "mcnemar_alpha": 0.05,
+      "val_tol": 0.02,
+      "base_tol": 0.01
+    }
   },
   "rebase": {
     "enabled": true,

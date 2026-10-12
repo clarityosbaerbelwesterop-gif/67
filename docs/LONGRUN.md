@@ -14,11 +14,62 @@ continues from `runs/longrun/state.json`.
 | rouge-g | Rouge 1, the restricted model: fine-tune on a general/base mix from the best init, then controlled RSI on exact-answer tasks | 13 % + 6 % |
 | darus-g | Flagship: evolutionary merge search over Rouge and Quasnir (TIES or linear), then controlled RSI on mixed tasks | 8 % |
 | champions | Champion arbiter for Quasnir, Rouge and Darus (`scripts/champions.py`) | 3 % |
+| release | Release ladder: Quasnir 2, Rouge 1.5, ... only at >= 2x (see below) | (in champions) |
 | report | Validation losses of all models; HumanEval and MBPP pass@1 for Darus and Quasnir | 3 % |
 
 Rouge checkpoints are served only to companies listed in `headcenter/acl.json`
 (see `headcenter/README.md`). Every new directory that holds Rouge weights
 (run, RSI and rebased-init directories) is created with mode 0700.
+
+## Open-ended operation (2026-10-12)
+
+- **Horizon.** `scripts/resume_all.sh` starts the run with `--days 100` (override
+  with `LONGRUN_DAYS`). The run finishes earlier on a **plateau**: when the last
+  `plateau_cycles` (4) finished cycles brought no promotion, no release and a base
+  gain below `plateau_base_gain` (1 %), it stops instead of burning compute.
+- **Base generations run warmup-stable-decay** (`train.base.schedule: "wsd"`).
+  `forge train` writes `runs/base-g<n>/TRUNK` (weights and AdamW moments) after the
+  last stable step; base-g<n+1> continues that TRUNK with `init_optim` and a 1-step
+  warmup, and only the last `decay_frac` (20 %) of its steps decay to `min_lr`.
+  With cosine and a fresh warmup per generation, base-g3 needed 63 % of its steps
+  to get back below base-g2.
+- **Champion tolerance.** The arbiter's val-loss feasibility uses `champions.tol`
+  (2 %, the RSI loop's anchor tolerance). In g3 the 1 % base-gate tolerance
+  discarded quasnir RSI r8 (held-out 101/384 vs 3/384 for the FINAL) for +1.3 %
+  val loss. `python3 scripts/longrun.py --rearbitrate G` decides a finished cycle
+  again with the current settings (run it while the long run is stopped).
+- **Darus** merges the cycle's RSI champions of Rouge and Quasnir when their
+  lineage leads back to the base (`forge merge --via` checks every hop: RSI rounds,
+  FINAL, rebased init), otherwise the FINALs.
+- **RSI** blocks a promotion that forgets a lower level (exact McNemar test on the
+  paired held-out tasks, `--forget-alpha 0.05`) and excludes the first 128
+  held-out tasks per level from training (`--exclude-heldout`), the set the
+  arbiter scores.
+- A step that ended in an error is retried once within its cycle (`step_attempts`).
+- The planning throughput comes from the most recent run of the previous cycle,
+  i.e. from the host the run is on now.
+
+## Releases: version N+1 must be 2x as good
+
+Step `release` (after the arbiter, `scripts/releases.py`) compares each family's
+champion with its last major release, both measured on the same stores and
+held-out tasks:
+
+| Family | Major release (Quasnir 2, Darus 2) | Half step (Rouge 1.5) | Blocked by |
+| --- | --- | --- | --- |
+| quasnir, rouge, darus | odds of solving a held-out task at least 2x (95 % lower bound of the odds ratio, pooled levels) | >= sqrt(2)x | a level with a significant loss (McNemar p < 0.05); val loss > +2 % |
+| base | perplexity halved on `base` (val loss -ln 2) | perplexity / sqrt(2) | other stores > +1 % |
+
+Version 1 is the initial model (`initial`). A major release always needs 2x over
+version k itself, so half steps never compound. Released checkpoints are hard
+links in `runs/releases/<family>-v<version>/` (registry `runs/releases.json`),
+outside checkpoint hygiene; Rouge releases are mode 0700. Out of 384 held-out
+tasks, a release needs at least:
+
+| Old version's passes | 0 | 3 | 11 | 36 | 101 |
+| --- | --- | --- | --- | --- | --- |
+| Major release | 11 | 18 | 38 | 88 | 185 |
+| Half step | 8 | 13 | 28 | 67 | 152 |
 
 ## Promotion: one rule
 

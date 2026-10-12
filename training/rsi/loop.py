@@ -85,12 +85,16 @@ def _abs(p: str | Path) -> Path:
 
 def evaluate_gates(*, heldout_before: float | None, heldout_after: float | None, val_before: dict, val_after: dict,
                    contamination: int, lineage_ok: bool, delta: float, tol: float, require_improvement: bool = True,
-                   anchor_val: dict | None = None, anchor_tol: float = 0.0) -> dict:
+                   anchor_val: dict | None = None, anchor_tol: float = 0.0, forgetting: dict | None = None) -> dict:
     """All promotion gates of one candidate against the champion.
 
     With `anchor_val` (gate-store val losses of the run's anchor) and anchor_tol > 0,
     every gate store must also satisfy val_after <= anchor * (1 + anchor_tol), so
-    promotions of up to `tol` each cannot compound into unbounded drift."""
+    promotions of up to `tol` each cannot compound into unbounded drift.
+
+    `forgetting` ({level: {lost, gained, p_loss, ok}}): the paired held-out outcomes of
+    champion and candidate on the levels below the current one; a level whose loss is
+    significant (exact McNemar) blocks the promotion."""
     val = {}
     for name, b in val_before.items():
         a = val_after.get(name)
@@ -114,6 +118,7 @@ def evaluate_gates(*, heldout_before: float | None, heldout_after: float | None,
         "anchor": anchor, "anchor_ok": anchor is None or all(v["ok"] for v in anchor.values()), "anchor_tol": anchor_tol,
         "contamination": contamination, "contamination_free": contamination == 0,
         "lineage_ok": lineage_ok, "require_improvement": require_improvement,
+        "forgetting": forgetting, "forgetting_ok": all(v["ok"] for v in (forgetting or {}).values()),
     }
     reasons = []
     if not no_drop:
@@ -131,9 +136,19 @@ def evaluate_gates(*, heldout_before: float | None, heldout_after: float | None,
         reasons.append(f"{contamination} contaminated training units")
     if not lineage_ok:
         reasons.append("candidate does not descend from the champion")
+    for lv, v in (forgetting or {}).items():
+        if not v["ok"]:
+            reasons.append(f"forgot level {lv}: {v['lost']} tasks lost, {v['gained']} gained (McNemar p={v['p_loss']:.2g})")
     gates["reasons"] = reasons
     gates["passed"] = not reasons
     return gates
+
+
+def mcnemar_loss_p(lost: int, gained: int) -> float:
+    """Exact one-sided p-value that the candidate is not worse, from the discordant
+    pairs (lost: champion passed, candidate failed; gained: the reverse)."""
+    n = lost + gained
+    return sum(math.comb(n, i) for i in range(lost, n + 1)) / 2 ** n if n else 1.0
 
 
 def decide(gates: dict, require_approval: bool) -> str:
@@ -206,6 +221,13 @@ class Settings:
     telemetry_dir: str | None = None
     level: int = 0
     heldout: int = 64
+    # Training tasks exclude the first exclude_heldout held-out tasks per level (the
+    # long run's champion arbiter scores 128), not only the `heldout` the gate uses.
+    exclude_heldout: int = 128
+    # A promotion at level L is blocked when any lower level loses significantly
+    # (exact one-sided McNemar on paired tasks, p < forget_alpha; 0 disables): on
+    # quasnir-g3 r8 passed 16 of the 64 level-0 tasks that r3 had passed 50 of.
+    forget_alpha: float = 0.05
     delta: float = 0.03
     tol: float = 0.01
     anchor_tol: float = 0.02  # bound on the drift vs the run's initial champion across all promotions; <= 0 disables
@@ -453,7 +475,8 @@ class RSILoop:
 
     def heldout_all(self) -> list[T.Task]:
         if self._heldout_all is None:
-            self._heldout_all = [t for lv in T.LEVELS for t in T.heldout_tasks(self.s.family, lv, self.s.heldout, self.decon)[0]]
+            n = max(self.s.heldout, self.s.exclude_heldout)
+            self._heldout_all = [t for lv in T.LEVELS for t in T.heldout_tasks(self.s.family, lv, n, self.decon)[0]]
         return self._heldout_all
 
     def decode(self, ids: list[int]) -> str:
@@ -523,6 +546,32 @@ class RSILoop:
                "decoding": "greedy", "ckpt": rel(ck.dir)}
         self._cache(ck.sha, "heldout", key, res)
         self.log("heldout", sha256=ck.sha[:16], **{k: res[k] for k in ("level", "passed", "n", "pass_rate")})
+        return res
+
+    def outcomes(self, ck: Ckpt, level: int) -> dict:
+        """{task_id: passed} of ck's greedy held-out run at `level` (empty if unknown)."""
+        p = self.out / "heldout" / f"{ck.sha[:16]}-L{level}" / "results.jsonl"
+        if not p.exists():
+            return {}
+        out = {}
+        for line in p.read_text().splitlines():
+            if line.strip():
+                r = json.loads(line)
+                out[r["task_id"]] = r["status"] == "pass"
+        return out
+
+    def forgetting(self, champ: Ckpt, cand: Ckpt, level: int) -> dict:
+        """Paired held-out comparison on every level below `level`."""
+        res = {}
+        for lv in [x for x in T.LEVELS if x < level]:
+            self.heldout_pass(champ, lv)
+            self.heldout_pass(cand, lv)
+            a, b = self.outcomes(champ, lv), self.outcomes(cand, lv)
+            ids = a.keys() & b.keys()
+            lost = sum(1 for t in ids if a[t] and not b[t])
+            gained = sum(1 for t in ids if b[t] and not a[t])
+            p = mcnemar_loss_p(lost, gained)
+            res[lv] = {"paired": len(ids), "lost": lost, "gained": gained, "p_loss": p, "ok": p >= self.s.forget_alpha}
         return res
 
     def val_losses(self, ck: Ckpt) -> dict:
@@ -700,10 +749,11 @@ class RSILoop:
             vb, va = self.val_losses(champ), self.val_losses(cand)
             van = self.val_losses(self.anchor) if s.anchor_tol > 0 else None  # cached per sha (== vb while the anchor is champion)
             rec.update(heldout_pass_after=ha["pass_rate"], val_loss_before=vb, val_loss_after=va, val_loss_anchor=van)
+            forgetting = self.forgetting(champ, cand, level) if s.forget_alpha > 0 else None
             gates = evaluate_gates(heldout_before=hb["pass_rate"], heldout_after=ha["pass_rate"], val_before=vb, val_after=va,
                                    contamination=manifest["decontamination"]["remaining_overlaps"], lineage_ok=cand.lineage_ok,
                                    delta=s.delta, tol=s.tol, require_improvement=s.require_improvement,
-                                   anchor_val=van, anchor_tol=s.anchor_tol)
+                                   anchor_val=van, anchor_tol=s.anchor_tol, forgetting=forgetting)
             rec["gates"] = gates
             rec["reasons"] += gates["reasons"]
             self.check("after gating")
@@ -879,6 +929,10 @@ def parse_args(argv=None) -> Settings:
     ap.add_argument("--heldout", type=int, default=d.heldout, help="held-out tasks per level")
     ap.add_argument("--delta", type=float, default=d.delta, help="held-out pass-rate rise that counts as improvement")
     ap.add_argument("--tol", type=float, default=d.tol, help="max relative val-loss regression per gate store")
+    ap.add_argument("--exclude-heldout", type=int, default=d.exclude_heldout,
+                    help="training tasks exclude this many held-out tasks per level (>= --heldout; the arbiter scores 128)")
+    ap.add_argument("--forget-alpha", type=float, default=d.forget_alpha,
+                    help="block a promotion when a lower level loses significantly (McNemar p below this); 0 disables")
     ap.add_argument("--anchor-tol", type=float, default=d.anchor_tol,
                     help="max relative val-loss regression per gate store vs the run's anchor (its initial champion, kept "
                          "across restarts; --reset-champion resets it), bounding drift over all promotions; <= 0 disables")

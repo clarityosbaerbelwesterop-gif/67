@@ -137,7 +137,8 @@ def world(tmp_path: Path, v3: bool = False) -> tuple[Path, dict]:
     write(root / "training/configs/longrun.json", {
         "base_config": "training/configs/base-s.json", "forge": "forge-stub", "min_free_gb": 0, "retry_backoff_seconds": 0,
         "wait_for": {"paths": [], "procs": []}, "report": {"benchmarks": {"darus": [], "quasnir": []}},
-        "rsi": {"module_file": None}, "champions": {"levels": [0]}, "control": {"poll_seconds": 0.01}})
+        "rsi": {"module_file": None}, "champions": {"levels": [0]}, "control": {"poll_seconds": 0.01},
+        "releases": {"enabled": False}})
     tok = root / "data/stores/base/tokenizer.json"
     write(tok, '{"tokenizer": "ref"}')
     metas = {k: store(root, f"data/out/{k}-v2", tok) for k in ("base", "code", "general")}
@@ -253,7 +254,7 @@ def world(tmp_path: Path, v3: bool = False) -> tuple[Path, dict]:
 def args(**kw) -> argparse.Namespace:
     a = dict(config="training/configs/longrun.json", root=None, days=None, forever=False, cycle_hours=None, max_cycles=None,
              allow_v1=False, dry_run=False, json=False, tok_per_s=1000.0, status=False, prepare=False, no_wait=True,
-             forge="forge-stub")
+             forge="forge-stub", rearbitrate=None)
     a.update(kw)
     return argparse.Namespace(**a)
 
@@ -356,7 +357,7 @@ def test_resume_old_state_runs_the_cycle_with_arbiter_and_rebase(tmp_path, monke
     c3 = s["cycles"]["3"]
     assert c3["status"] == "done" and c3["plan"] == old["cycles"]["3"]["plan"], "the cycle in progress resumes, not re-planned"
     assert list(c3["steps"]) == list(lr.CYCLE_STEPS)
-    assert {k: v["status"] for k, v in c3["steps"].items() if v["status"] != "done"} == {"rouge_rsi": "error"}
+    assert {k: v["status"] for k, v in c3["steps"].items() if v["status"] != "done"} == {"rouge_rsi": "error", "release": "skipped"}
     assert c3["steps"]["base"]["final"] == "runs/base-g3/FINAL" and (root / "runs/base-g3/step-000200").is_dir()
     assert c3["steps"]["base_gate"]["decision"] == "accept" and c3["parent_base"] == "runs/base-g3/FINAL"
     assert s["corpus"]["version"] == "v2", "corpus v3 is never adopted mid-cycle"
@@ -469,7 +470,7 @@ def test_arbiter_keeps_a_better_incumbent(tmp_path, monkeypatch):
         for f in p.iterdir():
             f.unlink()
         p.rmdir()
-        ckpt(o.root, d, [1.2, 1.0, 1.0, 1.0])
+        ckpt(o.root, d, [0.5, 1.0, 1.0, 1.0])  # code val +3.5 %: beyond the 2 % tol
     res = o.arbitrate("quasnir", 3, cyc)
     d = o.state["current"]["quasnir"]["decided"]
     assert res["decision"] == "keep" and d["by"] == "arbiter" and d["changed"] is False and d["cycle"] == 3
@@ -552,19 +553,115 @@ def test_darus_merge_passes_rebased_inits_as_via_and_keeps_them_until_the_merge(
     root, b = world(tmp_path)
     o = orchestrator(root)
     o.init_state()
+    base = o.state["current"]["base"]["dir"]
+    base_sha = json.loads((root / base / "state.json").read_text())["model_sha256"]
     init = f"runs/rouge-g4/{lr.REBASED_PREFIX}def-lam0.5"
-    ckpt(root, init, [1, 1, 1, 1])
+    i_sha = ckpt(root, init, [1, 1, 1, 1.05], parent=base_sha)
+    f_sha = ckpt(root, "runs/rouge-g4/step-000010", [1.1, 1, 1, 1], init, parent=i_sha)
+    final(root, "rouge-g4", "step-000010")
+    # rouge's RSI champion of the cycle (round 2 on top of round 1 on top of the FINAL)
+    r1 = "runs/rsi/rouge-g4/rounds/r1/step-000060"
+    r1_sha = ckpt(root, r1, [1.2, 1, 1, 1], parent=f_sha)
+    r2 = "runs/rsi/rouge-g4/rounds/r2/step-000060"
+    ckpt(root, r2, [1.3, 1, 1, 1], parent=r1_sha)
+    write(root / "runs/rsi/rouge-g4/champion.json", {"dir": r2, "history": [{"dir": "runs/rouge-g4/FINAL"}, {"dir": r1}]})
+    ckpt(root, "runs/quasnir-g4/step-000010", [1, 1.1, 1, 1], base, parent=base_sha)
+    final(root, "quasnir-g4", "step-000010")
     write(root / "runs/longrun/configs/rouge-g4.json", {"init_from": init})
     o.state["runs"].update({"rouge-g4": {"finished": True, "family": "rouge", "init_from": init,
                                          "config": "runs/longrun/configs/rouge-g4.json"},
-                            "quasnir-g4": {"finished": True, "family": "quasnir", "init_from": "runs/base-g4/FINAL"}})
+                            "quasnir-g4": {"finished": True, "family": "quasnir", "init_from": base}})
     cyc = {"steps": {"darus_merge": {"status": "running"}}}
     o.state["cycles"] = {"4": cyc}
     o.cfg["merge"]["cmd"] = ["true"]  # no merge output: the step reports an error but has written its config
     assert o.step_darus_merge(4, cyc, {})["status"] == "error"
-    assert json.loads((root / "runs/longrun/configs/darus-g4.merge.json").read_text())["via"] == [init]
+    mc = json.loads((root / "runs/longrun/configs/darus-g4.merge.json").read_text())
+    assert mc["children"] == [r2, "runs/quasnir-g4/FINAL"], "rouge's RSI champion is Darus' parent"
+    assert mc["via"] == [r1, "runs/rouge-g4/FINAL", init], "every hop back to the base"
     o.prune_rebased()
     assert (root / init / "model.safetensors").exists(), "the cycle's darus merge still needs it (--via)"
     cyc["steps"]["darus_merge"]["status"] = "done"
     o.prune_rebased()
     assert not (root / init).exists(), "merged: an ordinary finished-run rebased init"
+    # a champion whose lineage does not reach the base falls back to the FINAL
+    ckpt(root, "runs/rsi/rouge-g4/rounds/x/step-000060", [2, 1, 1, 1], parent="f" * 64)
+    write(root / "runs/rsi/rouge-g4/champion.json", {"dir": "runs/rsi/rouge-g4/rounds/x/step-000060", "history": []})
+    assert o.merge_parent("rouge", 4, base)[0] == "runs/rouge-g4/FINAL"
+
+
+def test_release_ladder_releases_quasnir_2_once(tmp_path, monkeypatch):
+    o, cyc, rsi, calls = arbiter_world(tmp_path, monkeypatch)
+    o.cfg["releases"].update(enabled=True, families=["quasnir"])
+    o.cfg["initial"]["quasnir"] = "runs/quasnir-g2/step-000050"  # version 1 (held-out 0)
+    o.arbitrate("quasnir", 3, cyc)  # the RSI champion (held-out 0.5) becomes current
+    res = o.step_release(3, cyc, {})
+    q = res["families"]["quasnir"]
+    assert q["decision"] == "release" and q["name"] == "Quasnir 2" and q["version"] == 2.0
+    reg = json.loads((o.root / "runs/releases.json").read_text())["families"]["quasnir"]
+    assert [r["version"] for r in reg["releases"]] == [1.0, 2.0] and reg["current"] == 2.0
+    assert (o.root / "runs/releases/quasnir-v2/model.safetensors").exists() and o.state["releases"]["quasnir"] == 2.0
+    again = o.step_release(3, cyc, {})["families"]["quasnir"]
+    assert again["decision"] == "none" and again["reason"] == "champion already released"
+
+
+def test_rearbitrate_decides_a_finished_cycle_again(tmp_path, monkeypatch):
+    o, cyc, rsi, calls = arbiter_world(tmp_path, monkeypatch)
+    o.cfg["champions"]["tol"] = 0.0  # the RSI champion's val drift makes it infeasible at tol 0
+    monkeypatch.setattr(o, "arbiter_on", lambda fam: fam == "quasnir")
+    assert o.arbitrate("quasnir", 3, cyc)["decision"] == "promote"
+    first = o.state["current"]["quasnir"]["dir"]
+    cyc["steps"]["champions"] = {"status": "done", "families": {}}
+    o.cfg["champions"]["tol"] = 0.02
+    assert o.rearbitrate(3) == lr.EX_OK
+    fam = cyc["steps"]["champions"]["families"]["quasnir"]
+    assert "redo" in fam and o.state["current"]["quasnir"]["dir"] == rsi and not o.redo
+    assert first != rsi or fam["decision"] in ("keep", "promote")
+    cyc["steps"]["champions"]["status"] = "running"
+    assert o.rearbitrate(3) == lr.EX_FATAL
+
+
+def test_base_continues_the_previous_trunk_with_wsd(tmp_path):
+    root, b = world(tmp_path)
+    o = orchestrator(root)
+    o.init_state()
+    cyc = o.state["cycles"]["3"]
+    cur = o.state["current"]["base"]
+    cfg = json.loads((root / o.write_train_config("base", 7, cyc)).read_text())
+    assert cfg["lr_schedule"] == "wsd" and cfg["decay_steps"] == max(1, round(0.2 * cfg["max_steps"]))
+    assert cfg["init_from"] == cur["dir"] and "init_optim" not in cfg, "no TRUNK yet: warm start from the FINAL"
+    ckpt(root, f"runs/{cur['run']}/TRUNK", [1, 1, 1, 1], trunk=True)
+    cfg = json.loads((root / o.write_train_config("base", 8, cyc)).read_text())
+    assert cfg["init_from"] == f"runs/{cur['run']}/TRUNK" and cfg["init_optim"] is True and cfg["warmup_steps"] == 1
+
+
+def test_an_error_step_gets_one_more_attempt(tmp_path, monkeypatch):
+    root, b = world(tmp_path)
+    o = orchestrator(root)
+    o.init_state()
+    cyc = o.state["cycles"]["3"]
+    for name in lr.CYCLE_STEPS:
+        cyc["steps"][name] = {"status": "done"}
+    cyc["steps"]["darus_merge"] = {"status": "error"}
+    runs = []
+    monkeypatch.setattr(o, "step_darus_merge", lambda g, c, st: runs.append(g) or {"status": "error"})
+    o.run_cycle(3)
+    o.run_cycle(3)
+    assert runs == [3] and cyc["steps"]["darus_merge"]["attempts"] == 2
+
+
+def test_plateau_finishes_instead_of_burning_compute(tmp_path):
+    root, b = world(tmp_path)
+    o = orchestrator(root)
+    o.init_state()
+    flat = {"status": "done", "steps": {"base_gate": {"decision": "accept", "worst_relative_change": -0.004},
+                                        "champions": {"families": {"quasnir": {"decision": "keep"}}},
+                                        "release": {"families": {"quasnir": {"decision": "none"}}}}}
+    o.state["cycles"] = {str(g): json.loads(json.dumps(flat)) for g in range(2, 6)}
+    assert o.plateau().startswith("plateau: 4 cycles")
+    o.state["cycles"]["4"]["steps"]["release"]["families"]["quasnir"]["decision"] = "release"
+    assert o.plateau() is None, "a release in the window keeps it going"
+    o.state["cycles"]["4"]["steps"]["release"]["families"]["quasnir"]["decision"] = "none"
+    o.state["cycles"]["5"]["steps"]["base_gate"]["worst_relative_change"] = -0.03
+    assert o.plateau() is None, "a 3 % base gain keeps it going"
+    del o.state["cycles"]["5"]
+    assert o.plateau() is None, "fewer than plateau_cycles finished cycles"
