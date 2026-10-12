@@ -37,3 +37,20 @@ def test_init_aggregate_nesterov_and_quorum(tmp_path):
     assert st["round"] == 1 and st["history"][0]["workers"] == 2
     parent = json.loads((s / "global" / "state.json").read_text())["parent_sha256"]
     assert parent == rnd["global_sha256"], "lineage: the new global descends from the old"
+
+
+def test_init_from_scratch_uses_forge_seeded_weights(tmp_path):
+    if not Path(F.FORGE).exists():
+        import pytest
+        pytest.skip("needs target/release/forge")
+    cfg = tmp_path / "m.json"
+    cfg.write_text(json.dumps({"model": {"vocab_size": 8192, "dim": 32, "n_layers": 1, "n_heads": 2, "n_kv_heads": 1,
+                                         "ffn_hidden": 64, "max_seq_len": 16}}))
+    shas = []
+    for seed, name in ((1, "a"), (1, "b"), (2, "c")):
+        assert F.main(["init", "--scratch", str(cfg), "--state", str(tmp_path / name), "--seed", str(seed)]) == 0
+        st = json.loads((tmp_path / name / "global" / "state.json").read_text())
+        assert st["parent_sha256"] is None and st["cluster"]["from"] == f"scratch seed {seed}"
+        assert not (tmp_path / f".{name}-scratch").exists()
+        shas.append(st["model_sha256"])
+    assert shas[0] == shas[1] != shas[2], "same seed, same model; another seed, another model"

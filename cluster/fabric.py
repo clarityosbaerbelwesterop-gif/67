@@ -13,6 +13,7 @@ and VGPU nodes all qualify.
   state dir   global/ (a forge checkpoint: model.safetensors + state.json),
               momentum.safetensors, round.json
   init        python3 cluster/fabric.py init --from runs/base-g3/FINAL --state S
+              python3 cluster/fabric.py init --scratch training/configs/base-s.json --state S   (from scratch)
   work        python3 cluster/fabric.py work --state S --worker 3 --steps 300 --data META --out D
   aggregate   python3 cluster/fabric.py aggregate --state S --deltas D1 D2 ... [--quorum 0.5]
   eval        python3 cluster/fabric.py eval --state S --data META
@@ -70,15 +71,46 @@ def read_state(s: Path) -> tuple[dict, dict, dict, dict]:
     return g, m, st, json.loads((s / "round.json").read_text())
 
 
+def scratch_ckpt(model_cfg: dict, d: Path, seed: int) -> Path:
+    """forge's own seeded initialisation: one step at lr 1e-12 on a synthetic store (the update is ~1e-12 per
+    weight, i.e. none); the data never matters, so no corpus is needed to start a cluster from scratch."""
+    shutil.rmtree(d, ignore_errors=True)
+    store = d / "store"
+    store.mkdir(parents=True)
+    rng = np.random.default_rng(seed)
+    for name in ("train.bin", "train.val.bin"):
+        rng.integers(0, model_cfg["vocab_size"] - 2, 1 << 16, dtype=np.uint16).tofile(store / name)
+    (store / "tokenizer.json").write_bytes((ROOT / "data" / "tokenizer.json").read_bytes())
+    (store / "train.meta.json").write_text(json.dumps({"tokens": 1 << 16, "val_tokens": 1 << 16, "dtype": "uint16",
+                                                       "vocab_size": model_cfg["vocab_size"], "bin": "train.bin", "val_bin": "train.val.bin",
+                                                       "mix": {"synthetic": 1}, "mix_fractions": {"synthetic": 1.0}}))
+    cfg = {"run": "scratch", "model": model_cfg, "data": str(store / "train.meta.json"), "batch": 1, "seq_len": 16, "grad_accum": 1,
+           "max_steps": 1, "lr": 1e-12, "min_lr": 1e-12, "warmup_steps": 1, "lr_schedule": "constant", "weight_decay": 0.0,
+           "grad_clip": 1.0, "seed": seed, "out_dir": str(d), "log_every": 1, "eval_every": 0, "eval_batches": 1, "ckpt_every": 0, "threads": 0}
+    (d / "config.json").write_text(json.dumps(cfg))
+    r = subprocess.run([FORGE, "train", "--config", str(d / "config.json")], capture_output=True, text=True)
+    if r.returncode:
+        raise SystemExit(r.stdout[-1000:] + r.stderr[-1000:])
+    return Path(json.loads((d / "scratch" / "latest.json").read_text())["dir"])
+
+
 def cmd_init(a) -> int:
-    src = Path(a.src)
+    s = Path(a.state)
+    if a.scratch:
+        model_cfg = json.loads(Path(a.scratch).read_text())
+        src = scratch_ckpt(model_cfg.get("model", model_cfg), s.parent / f".{s.name}-scratch", a.seed)
+    else:
+        src = Path(a.src)
     w, _ = load(src / "model.safetensors")
     st = json.loads((src / "state.json").read_text())
-    s = Path(a.state)
     s.mkdir(parents=True, exist_ok=True)
-    sha = write_ckpt(s / "global", w, st["config"]["model"], st.get("model_sha256"), {"cluster": {"round": 0, "from": str(src)}})
+    origin = f"scratch seed {a.seed}" if a.scratch else str(src)
+    parent = None if a.scratch else st.get("model_sha256")
+    sha = write_ckpt(s / "global", w, st["config"]["model"], parent, {"cluster": {"round": 0, "from": origin}})
     save(s / "momentum.safetensors", {n: np.zeros_like(x) for n, x in w.items()})
-    (s / "round.json").write_text(json.dumps({"round": 0, "global_sha256": sha, "from": str(src), "history": []}, indent=2))
+    (s / "round.json").write_text(json.dumps({"round": 0, "global_sha256": sha, "from": origin, "history": []}, indent=2))
+    if a.scratch:
+        shutil.rmtree(s.parent / f".{s.name}-scratch", ignore_errors=True)
     print(json.dumps({"init": str(s), "global_sha256": sha}))
     return 0
 
@@ -184,7 +216,10 @@ def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     sub = ap.add_subparsers(dest="cmd", required=True)
     p = sub.add_parser("init")
-    p.add_argument("--from", dest="src", required=True)
+    g = p.add_mutually_exclusive_group(required=True)
+    g.add_argument("--from", dest="src", help="a forge checkpoint dir")
+    g.add_argument("--scratch", help="a forge run config (or model config) JSON: fresh seeded weights")
+    p.add_argument("--seed", type=int, default=1)
     p.add_argument("--state", required=True)
     p = sub.add_parser("work")
     p.add_argument("--state", required=True)
