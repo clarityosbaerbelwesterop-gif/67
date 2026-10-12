@@ -120,6 +120,20 @@ pub struct TrainConfig {
     /// Run the JIT autotuner before the first step.
     #[serde(default = "yes")]
     pub autotune: bool,
+    /// Learning-rate schedule after the linear warmup: "cosine" (SCP, decay to
+    /// min_lr over the whole run), "wsd" (stable at lr, cosine-shaped decay to
+    /// min_lr over the last `decay_steps`) or "constant" (lr). The defaults of
+    /// the three schedule fields are omitted from state.json.
+    #[serde(default = "cosine", skip_serializing_if = "is_cosine")]
+    pub lr_schedule: String,
+    /// Length of the "wsd" decay; 0 = round(0.2 · max_steps).
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub decay_steps: usize,
+    /// With `init_from`: also load its AdamW moments (`optim.safetensors`), e.g.
+    /// to continue a previous generation's TRUNK without re-warming. Steps and
+    /// schedule start at 0; bias correction counts the moments' own steps.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub init_optim: bool,
 }
 
 fn one() -> usize {
@@ -137,12 +151,48 @@ fn yes() -> bool {
 fn default_wd() -> f32 {
     0.1
 }
+fn cosine() -> String {
+    "cosine".into()
+}
+fn is_cosine(s: &str) -> bool {
+    s == "cosine"
+}
+fn is_zero(n: &usize) -> bool {
+    *n == 0
+}
+fn is_false(b: &bool) -> bool {
+    !*b
+}
 
 impl TrainConfig {
-    /// SCP `cosine_lr`: linear warmup, cosine decay to min_lr. `step` counts from 0.
+    /// Learning rate of update `step` (counts from 0). Every schedule starts
+    /// with SCP's linear warmup. "cosine" is SCP `cosine_lr`: cosine decay to
+    /// min_lr at max_steps. "constant" stays at lr. "wsd" stays at lr until
+    /// `trunk_step` and then decays over the last D = `wsd_decay_steps` updates:
+    /// update i of the decay (i = 1..=D) uses min_lr + (lr - min_lr)(1 + cos(πi/D))/2,
+    /// so every decayed update is below lr and the last one runs at min_lr.
     pub fn lr_at(&self, step: usize) -> f32 {
         if step < self.warmup_steps {
             return self.lr * (step + 1) as f32 / self.warmup_steps.max(1) as f32;
+        }
+        match self.lr_schedule.as_str() {
+            "constant" => return self.lr,
+            "wsd" => {
+                let d = self.wsd_decay_steps();
+                if step >= self.max_steps {
+                    return self.min_lr;
+                }
+                if step + d < self.max_steps {
+                    return self.lr;
+                }
+                // i = step + 1 - (max_steps - D), in 1..=D (D >= 1 here).
+                let progress = (step + 1 + d - self.max_steps) as f32 / d as f32;
+                return self.min_lr
+                    + 0.5
+                        * (self.lr - self.min_lr)
+                        * (1.0 + (std::f32::consts::PI * progress).cos());
+            }
+            _ => {}
         }
         if step >= self.max_steps {
             return self.min_lr;
@@ -151,6 +201,22 @@ impl TrainConfig {
             (step - self.warmup_steps) as f32 / (self.max_steps - self.warmup_steps).max(1) as f32;
         self.min_lr
             + 0.5 * (self.lr - self.min_lr) * (1.0 + (std::f32::consts::PI * progress).cos())
+    }
+
+    /// D of the "wsd" schedule: `decay_steps`, or round(0.2 · max_steps) when 0.
+    pub fn wsd_decay_steps(&self) -> usize {
+        if self.decay_steps > 0 {
+            self.decay_steps
+        } else {
+            (0.2 * self.max_steps as f64).round() as usize
+        }
+    }
+
+    /// "wsd" only: the step count after the last stable update (max_steps - D),
+    /// where the trainer saves the run's TRUNK.
+    pub fn trunk_step(&self) -> Option<usize> {
+        (self.lr_schedule == "wsd")
+            .then(|| self.max_steps.saturating_sub(self.wsd_decay_steps()))
     }
 
     pub fn validate(&self) -> Result<(), String> {
@@ -167,6 +233,15 @@ impl TrainConfig {
             .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
         {
             return Err("run name must be [A-Za-z0-9_-]".into());
+        }
+        if !["cosine", "wsd", "constant"].contains(&self.lr_schedule.as_str()) {
+            return Err(format!(
+                "lr_schedule must be cosine|wsd|constant, not {:?}",
+                self.lr_schedule
+            ));
+        }
+        if self.init_optim && self.init_from.is_none() {
+            return Err("init_optim needs init_from".into());
         }
         Ok(())
     }

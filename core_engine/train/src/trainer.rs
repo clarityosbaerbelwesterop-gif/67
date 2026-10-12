@@ -47,6 +47,9 @@ pub struct Trainer {
     stop: bool,
     sink: Sink,
     parent_sha: Option<String>,
+    /// AdamW steps already taken by moments loaded with `init_optim`: bias
+    /// correction runs at `optim_offset + step` while the schedule restarts.
+    optim_offset: usize,
     last_stats: HashMap<Opcode, OpStats>,
     last_log: Instant,
     /// `tokens_seen` at the last telemetry line (throughput is measured, not assumed).
@@ -127,6 +130,7 @@ impl Trainer {
             stop: false,
             sink,
             parent_sha: None,
+            optim_offset: 0,
             last_stats: HashMap::new(),
             last_log: Instant::now(),
             log_tokens: 0,
@@ -137,6 +141,18 @@ impl Trainer {
         tr.init_params()?;
         if let Some(dir) = tr.cfg.resume_from.clone() {
             tr.resume(&dir)?;
+        }
+        if tr.cfg.lr_schedule == "wsd" && tr.cfg.warmup_steps + tr.cfg.wsd_decay_steps() > tr.cfg.max_steps {
+            (tr.sink)(event(
+                "warn",
+                format!(
+                    "wsd: warmup {} + decay {} exceed max_steps {}; the decay starts before warmup ends",
+                    tr.cfg.warmup_steps,
+                    tr.cfg.wsd_decay_steps(),
+                    tr.cfg.max_steps
+                ),
+                tr.step,
+            ));
         }
         let report = json!({
             "type": "event", "level": "info", "step": 0, "ts": now(),
@@ -153,7 +169,7 @@ impl Trainer {
     }
 
     /// SCP initialisation (normal 0.02; wo/w2 scaled by 1/sqrt(2L); norms = 1),
-    /// or the weights of `init_from`.
+    /// or the weights of `init_from` (and its AdamW moments with `init_optim`).
     fn init_params(&mut self) -> Result<(), String> {
         let ps = model::params(&self.cfg.model);
         if let Some(dir) = self.cfg.init_from.clone() {
@@ -189,6 +205,10 @@ impl Trainer {
                 ),
                 0,
             ));
+            // A resumed run restores its own moments instead.
+            if self.cfg.init_optim && self.cfg.resume_from.is_none() {
+                self.init_moments(Path::new(&dir))?;
+            }
             return Ok(());
         }
         let mut rng = Rng::new(self.cfg.seed ^ 0x5EED_1417);
@@ -209,6 +229,53 @@ impl Trainer {
                 buf.iter_mut().for_each(|x| *x = rng.normal() * std);
             }
         }
+        Ok(())
+    }
+
+    /// `init_optim`: AdamW moments of the `init_from` checkpoint; the step
+    /// counter stays 0, `optim_offset` takes the steps behind the moments.
+    fn init_moments(&mut self, dir: &Path) -> Result<(), String> {
+        let path = dir.join("optim.safetensors");
+        let (opt, _) = ckpt::load_safetensors(&path)
+            .map_err(|e| format!("init_optim: {}: {e}", path.display()))?;
+        for p in model::params(&self.cfg.model) {
+            for (buf, key) in [
+                (model::adam_m(&p.name), p.name.clone()),
+                (model::adam_v(&p.name), format!("v.{}", p.name)),
+            ] {
+                let t = opt
+                    .get(&key)
+                    .ok_or(format!("{}: missing {key}", path.display()))?;
+                if t.shape != p.shape {
+                    return Err(format!(
+                        "{}: {key} has shape {:?}, model wants {:?}",
+                        path.display(),
+                        t.shape,
+                        p.shape
+                    ));
+                }
+                self.machine
+                    .persistent_mut(&buf)
+                    .ok_or("moment not bound")?
+                    .copy_from_slice(&t.data);
+            }
+        }
+        let state: Value = serde_json::from_str(
+            &std::fs::read_to_string(dir.join("state.json"))
+                .map_err(|e| format!("init_optim: {}/state.json: {e}", dir.display()))?,
+        )
+        .map_err(|e| e.to_string())?;
+        self.optim_offset = (state["step"].as_u64().unwrap_or(0)
+            + state["optim_offset"].as_u64().unwrap_or(0)) as usize;
+        (self.sink)(event(
+            "info",
+            format!(
+                "AdamW moments from {} ({} steps behind them)",
+                path.display(),
+                self.optim_offset
+            ),
+            0,
+        ));
         Ok(())
     }
 
@@ -248,6 +315,7 @@ impl Trainer {
             serde_json::from_value(state["rng_state"].clone()).map_err(|e| e.to_string())?;
         self.rng = Rng::from_state([rs[0], rs[1], rs[2], rs[3]]);
         self.parent_sha = state["parent_sha256"].as_str().map(str::to_string);
+        self.optim_offset = state["optim_offset"].as_u64().unwrap_or(0) as usize;
         (self.sink)(event(
             "info",
             format!("resumed from {dir} at step {}", self.step),
@@ -332,7 +400,7 @@ impl Trainer {
             self.machine.regs[regs::LOSS as usize] / self.machine.regs[regs::LOSS_COUNT as usize];
         self.step += 1;
         self.machine.regs[regs::LR as usize] = lr;
-        self.machine.regs[regs::STEP as usize] = self.step as f32;
+        self.machine.regs[regs::STEP as usize] = (self.optim_offset + self.step) as f32;
         self.machine
             .run(&mut self.update_lp)
             .map_err(|e| e.to_string())?;
@@ -406,7 +474,43 @@ impl Trainer {
         let dir = Path::new(&self.cfg.out_dir)
             .join(&self.cfg.run)
             .join(format!("step-{:06}", self.step));
-        std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+        let model_sha = self.save(&dir, false)?;
+        let latest = Path::new(&self.cfg.out_dir)
+            .join(&self.cfg.run)
+            .join("latest.json");
+        std::fs::write(
+            &latest,
+            json!({"dir": dir, "step": self.step, "model_sha256": model_sha}).to_string(),
+        )
+        .map_err(|e| e.to_string())?;
+        (self.sink)(
+            json!({"type": "checkpoint", "path": dir, "sha256": model_sha, "step": self.step, "ts": now()}),
+        );
+        Ok(dir)
+    }
+
+    /// "wsd": the full checkpoint after the last stable update, <out_dir>/<run>/TRUNK,
+    /// written once (temp dir, then rename). The next generation continues from it
+    /// with `init_optim` instead of re-warming from the decayed FINAL.
+    fn save_trunk(&mut self) -> Result<(), String> {
+        let run_dir = Path::new(&self.cfg.out_dir).join(&self.cfg.run);
+        let trunk = run_dir.join("TRUNK");
+        if trunk.exists() {
+            return Ok(());
+        }
+        let tmp = run_dir.join("TRUNK.tmp");
+        if tmp.exists() {
+            std::fs::remove_dir_all(&tmp).map_err(|e| e.to_string())?;
+        }
+        self.save(&tmp, true)?;
+        std::fs::rename(&tmp, &trunk).map_err(|e| e.to_string())?;
+        (self.sink)(json!({"type": "trunk", "path": trunk, "step": self.step, "ts": now()}));
+        Ok(())
+    }
+
+    /// Weights, AdamW moments and state.json of the current step into `dir`.
+    fn save(&mut self, dir: &Path, trunk: bool) -> Result<String, String> {
+        std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
         let ps = model::params(&self.cfg.model);
         let collect = |m: &Machine, f: &dyn Fn(&str) -> String| -> BTreeMap<String, Tensor> {
             ps.iter()
@@ -438,27 +542,22 @@ impl Trainer {
         );
         ckpt::save_safetensors(&dir.join("optim.safetensors"), &opt, &meta)
             .map_err(|e| e.to_string())?;
-        let state = json!({
+        let mut state = json!({
             "step": self.step, "config": self.cfg, "rng_state": self.rng.state(), "model_sha256": model_sha,
             "parent_sha256": self.parent_sha, "loss": self.last_loss, "val_loss": self.last_val, "tokens": self.tokens_seen,
         });
+        if self.optim_offset > 0 {
+            state["optim_offset"] = json!(self.optim_offset);
+        }
+        if trunk {
+            state["trunk"] = json!(true);
+        }
         std::fs::write(
             dir.join("state.json"),
             serde_json::to_string_pretty(&state).unwrap(),
         )
         .map_err(|e| e.to_string())?;
-        let latest = Path::new(&self.cfg.out_dir)
-            .join(&self.cfg.run)
-            .join("latest.json");
-        std::fs::write(
-            &latest,
-            json!({"dir": dir, "step": self.step, "model_sha256": model_sha}).to_string(),
-        )
-        .map_err(|e| e.to_string())?;
-        (self.sink)(
-            json!({"type": "checkpoint", "path": dir, "sha256": model_sha, "step": self.step, "ts": now()}),
-        );
-        Ok(dir)
+        Ok(model_sha)
     }
 
     fn handle(&mut self, line: &str) {
@@ -535,6 +634,9 @@ impl Trainer {
             let t0 = Instant::now();
             let loss = self.train_step()?;
             let step_ms = t0.elapsed().as_secs_f64() * 1e3;
+            if self.cfg.trunk_step().is_some_and(|t| t > 0 && self.step == t) {
+                self.save_trunk()?;
+            }
             if !loss.is_finite() {
                 (self.sink)(event(
                     "error",

@@ -64,6 +64,12 @@ fn xcr0() -> u64 {
     ((hi as u64) << 32) | lo as u64
 }
 
+#[cfg(not(target_os = "linux"))]
+fn request_permission() -> bool {
+    false // the tile-data permission request is a Linux syscall; elsewhere AMX stays off
+}
+
+#[cfg(target_os = "linux")]
 fn request_permission() -> bool {
     const ARCH_REQ_XCOMP_PERM: libc::c_long = 0x1023;
     const XFEATURE_XTILEDATA: libc::c_long = 18;

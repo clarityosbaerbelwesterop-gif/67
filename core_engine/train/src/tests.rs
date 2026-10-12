@@ -139,7 +139,102 @@ fn cfg(run: &str, out: &str, steps: usize) -> TrainConfig {
         threads: 2,
         hbvm_mib: 0,
         autotune: false,
+        lr_schedule: "cosine".into(),
+        decay_steps: 0,
+        init_optim: false,
     }
+}
+
+#[test]
+fn lr_schedules_cosine_unchanged_wsd_and_constant_shapes() {
+    let mut c = cfg("lr", "/tmp", 100);
+    c.lr = 1.0;
+    c.min_lr = 0.1;
+    c.warmup_steps = 10;
+    // "cosine" is SCP's formula, bit for bit.
+    for step in [0usize, 5, 9, 10, 37, 99, 100, 150] {
+        let want = if step < 10 {
+            (step + 1) as f32 / 10.0
+        } else if step >= 100 {
+            0.1
+        } else {
+            let p = (step - 10) as f32 / 90.0;
+            0.1 + 0.5 * 0.9 * (1.0 + (std::f32::consts::PI * p).cos())
+        };
+        assert_eq!(c.lr_at(step).to_bits(), want.to_bits(), "cosine step {step}");
+    }
+    c.lr_schedule = "constant".into();
+    assert_eq!(c.lr_at(3), 0.4);
+    assert_eq!(c.lr_at(99), 1.0);
+    c.lr_schedule = "wsd".into();
+    assert_eq!(c.wsd_decay_steps(), 20);
+    assert_eq!(c.trunk_step(), Some(80));
+    assert_eq!(c.lr_at(79), 1.0, "last stable update");
+    assert!(c.lr_at(80) < 1.0 && c.lr_at(80) > 0.99, "first decayed update");
+    assert!((c.lr_at(89) - 0.55).abs() < 1e-6, "half-way through the decay");
+    assert!((c.lr_at(99) - 0.1).abs() < 1e-6, "last update at min_lr");
+    c.decay_steps = 50;
+    assert_eq!(c.trunk_step(), Some(50));
+    c.lr_schedule = "linear".into();
+    assert!(c.validate().is_err());
+}
+
+#[test]
+fn wsd_writes_the_trunk_once_and_init_optim_continues_it() {
+    let out = std::env::temp_dir().join(format!("forge-trunk-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&out);
+    let mut c = cfg("gen1", out.to_str().unwrap(), 40);
+    c.lr_schedule = "wsd".into();
+    c.decay_steps = 10;
+    let (sink, log) = collect();
+    let mut tr = Trainer::new(c, sink).unwrap();
+    tr.run(None).unwrap();
+    let trunk = out.join("gen1/TRUNK");
+    let st: Value =
+        serde_json::from_str(&std::fs::read_to_string(trunk.join("state.json")).unwrap()).unwrap();
+    assert_eq!(st["step"], 30);
+    assert_eq!(st["trunk"], true);
+    assert!(trunk.join("optim.safetensors").exists());
+    assert_eq!(
+        log.lock().unwrap().iter().filter(|v| v["type"] == "trunk").count(),
+        1
+    );
+    assert!(!out.join("gen1/TRUNK.tmp").exists());
+
+    // The next generation starts from the trunk's weights and moments.
+    let mut c2 = cfg("gen2", out.to_str().unwrap(), 4);
+    c2.init_from = Some(trunk.to_str().unwrap().into());
+    c2.init_optim = true;
+    c2.warmup_steps = 0;
+    c2.lr_schedule = "wsd".into();
+    let (sink2, log2) = collect();
+    let mut tr2 = Trainer::new(c2, sink2).unwrap();
+    let (opt, _) = ckpt::load_safetensors(&trunk.join("optim.safetensors")).unwrap();
+    let m = &opt["tok_emb.weight"].data;
+    assert_eq!(
+        tr2.param(&model::adam_m("tok_emb.weight")).unwrap(),
+        &m[..],
+        "first moments loaded"
+    );
+    assert!(log2.lock().unwrap().iter().any(|v| v["msg"]
+        .as_str()
+        .is_some_and(|m| m.contains("30 steps behind them"))));
+    let first = tr2.train_step().unwrap();
+    assert!(first.is_finite());
+    let dir = tr2.checkpoint().unwrap();
+    let st2: Value =
+        serde_json::from_str(&std::fs::read_to_string(dir.join("state.json")).unwrap()).unwrap();
+    assert_eq!(st2["optim_offset"], 30);
+    assert_eq!(st2["parent_sha256"], st["model_sha256"]);
+
+    // Without moments in the init checkpoint, init_optim is an error.
+    std::fs::remove_file(trunk.join("optim.safetensors")).unwrap();
+    let mut c3 = cfg("gen3", out.to_str().unwrap(), 4);
+    c3.init_from = Some(trunk.to_str().unwrap().into());
+    c3.init_optim = true;
+    let (sink3, _) = collect();
+    assert!(Trainer::new(c3, sink3).is_err());
+    let _ = std::fs::remove_dir_all(&out);
 }
 
 #[test]

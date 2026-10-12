@@ -232,11 +232,13 @@ fn merge_cmd(a: &Args) -> Result<(), String> {
     if children.len() < 2 {
         return Err("merge needs at least two --child".into());
     }
-    // A child may also descend from the base through a --via checkpoint: an init
-    // derived from the base (e.g. a rebased init, parent_sha256 = base) whose own
-    // hash is the child's parent. Its file must hash to its recorded model_sha256.
+    // A child may also descend from the base through --via checkpoints: inits
+    // derived from the base (a rebased init) or from another accepted --via (a
+    // FINAL whose RSI rounds produced the child), in any order. Each must hash
+    // to its recorded model_sha256.
     let mut parents = vec![base_sha.clone()];
     let mut vias = Vec::new();
+    let mut pending = Vec::new();
     for v in a.all("--via") {
         let st: serde_json::Value = serde_json::from_str(
             &std::fs::read_to_string(Path::new(&v).join("state.json")).map_err(|e| format!("{v}/state.json: {e}"))?,
@@ -246,11 +248,25 @@ fn merge_cmd(a: &Args) -> Result<(), String> {
         if st["model_sha256"].as_str() != Some(sha.as_str()) {
             return Err(format!("{v}: model.safetensors does not match its state.json model_sha256"));
         }
-        if st["parent_sha256"].as_str() != Some(base_sha.as_str()) {
-            return Err(format!("{v} was not derived from this base (parent {} != {base_sha})", st["parent_sha256"]));
+        pending.push((v, sha, st["parent_sha256"].as_str().unwrap_or_default().to_string()));
+    }
+    while !pending.is_empty() {
+        let before = pending.len();
+        pending.retain(|(v, sha, parent)| {
+            if parents.contains(parent) {
+                parents.push(sha.clone());
+                vias.push(json!({"dir": v, "sha256": sha}));
+                false
+            } else {
+                true
+            }
+        });
+        if pending.len() == before {
+            let (v, _, parent) = &pending[0];
+            return Err(format!(
+                "{v} was not derived from this base or an accepted --via (parent {parent:?}, base {base_sha})"
+            ));
         }
-        parents.push(sha.clone());
-        vias.push(json!({"dir": v, "sha256": sha}));
     }
     let mut cw = Vec::new();
     let mut lineage = Vec::new();
