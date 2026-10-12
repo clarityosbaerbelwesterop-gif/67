@@ -722,3 +722,18 @@ def test_vgpu_gate_needs_sustained_verified_capacity(tmp_path):
     write(root / "runs/vgpu/pool.json", {"nodes": {"a": {"proofs": proofs(100.0, 60)}}})
     st = o.vgpu_capacity()
     assert not st["ready"] and st["since"] is None
+
+
+def test_tiers_step_alerts_and_holds_rsi_of_a_dangerous_champion(tmp_path):
+    root, b = world(tmp_path)
+    o = orchestrator(root)
+    o.init_state()
+    cyc = o.state["cycles"]["3"]
+    top = {"pass@1": 1.0, "pass@2": 1.0}
+    cyc["steps"]["report"] = {"benchmarks": {"quasnir/humaneval": top, "quasnir/mbpp": top, "quasnir/arc-agi-2": top,
+                                             "rouge/arc-agi-2": {"pass@2": 0.0}}}
+    o.state["current"]["quasnir"]["metrics"] = {"heldout": {"0": {"pass_rate": 1.0}}}
+    res = o.step_tiers(3, cyc, {})
+    assert res["families"]["quasnir"]["tier"] == "dangerous" and res["families"]["rouge"]["tier"] == "champion"
+    assert o.state["holds"]["quasnir"]["vip_only"] and (root / "runs/longrun/ALERTS.jsonl").exists()
+    assert o.rsi("quasnir", 4, "x", 1.0, {})["status"] == "skipped"

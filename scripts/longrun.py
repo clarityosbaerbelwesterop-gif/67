@@ -81,7 +81,7 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parent.parent
 EX_OK, EX_FAIL, EX_FATAL, EX_LOCKED, EX_STOPPED = 0, 1, 3, 4, 75
 EX_RELOAD = 76  # the orchestrator's code changed: scripts/supervise.sh restarts it at once
-CODE_FILES = ("scripts/longrun.py", "scripts/champions.py", "scripts/releases.py", "scripts/rebase.py")
+CODE_FILES = ("scripts/longrun.py", "scripts/champions.py", "scripts/releases.py", "scripts/rebase.py", "scripts/tiers.py")
 EOS = 8190
 EOS_BYTES = EOS.to_bytes(2, "little")
 STEP_RE = re.compile(r"^step-(\d{6,})$")
@@ -89,7 +89,7 @@ TRAIN_FAMILIES = ("base", "quasnir", "rouge")
 FAMILIES = ("base", "quasnir", "rouge", "darus")
 ARBITER_FAMILIES = ("quasnir", "rouge", "darus")
 CYCLE_STEPS = ("base", "base_gate", "quasnir", "quasnir_rsi", "quasnir_gate", "rouge_mix", "rouge", "rouge_rsi",
-               "rouge_gate", "darus_merge", "darus_rsi", "darus_gate", "champions", "release", "report", "hygiene")
+               "rouge_gate", "darus_merge", "darus_rsi", "darus_gate", "champions", "release", "report", "tiers", "hygiene")
 REBASED_PREFIX = "rebased-init-"  # runs/<run>/rebased-init-<champion sha12>-lam<lam>: a specialist's rebased init
 CTL_STOP = b'{"cmd":"checkpoint"}\n{"cmd":"stop"}\n'
 
@@ -1700,6 +1700,9 @@ class LongRun:
                 "audit": self.rel(out / "audit.jsonl")}
 
     def rsi(self, fam: str, g: int, champion: str, hours: float, st: dict) -> dict:
+        hold = (self.state.get("holds") or {}).get(fam)
+        if hold:  # a dangerous-tier champion: no autonomous self-improvement until the owner decides
+            return {"status": "skipped", "reason": f"held since cycle {hold.get('cycle')}: {hold.get('reason')}"}
         rc_cfg = self.cfg["rsi"]
         mc = rc_cfg["models"][fam]
         model = self.name(fam, g)
@@ -2234,6 +2237,33 @@ class LongRun:
                 f.write(json.dumps(line) + "\n")
         return {"report": self.rel(path), "errors": errors}
 
+    def step_tiers(self, g, cyc, st):
+        """Capability tier of every champion (scripts/tiers.py) on the cycle's benchmarks:
+        frontier -> tell the owner; dangerous -> tell the owner, keep the model, VIP only,
+        hold its RSI until the owner releases the hold (state.holds)."""
+        T = tool("tiers")
+        bench = (cyc["steps"].get("report") or {}).get("benchmarks") or {}
+        out = {}
+        for fam in FAMILIES:
+            cur = self.state["current"].get(fam)
+            if not cur:
+                continue
+            suites = {k.split("/", 1)[1]: v for k, v in bench.items() if k.startswith(fam + "/")}
+            res = T.classify(suites, (cur.get("metrics") or {}).get("heldout"), fam)
+            res.update(dir=cur.get("dir"), sha256=cur.get("sha256"), cycle=g)
+            out[fam] = res
+            if res["tier"] != "champion":
+                alert = {"ts": now(), "cycle": g, "family": fam, "tier": res["tier"], "dir": cur.get("dir"), "reasons": res["reasons"]}
+                with open(self.dir / "ALERTS.jsonl", "a") as f:
+                    f.write(json.dumps(alert) + "\n")
+                self.log(f"ALERT {fam}: tier {res['tier']}; the owner is told", **alert)
+            if res["tier"] == "dangerous":
+                self.state.setdefault("holds", {})[fam] = {"cycle": g, "dir": cur.get("dir"), "vip_only": True,
+                                                           "reason": "dangerous tier: kept, VIP companies only, RSI held for the owner"}
+        self.state["tiers"] = {f: {k: r[k] for k in ("tier", "reasons", "cycle")} for f, r in out.items()}
+        self.save()
+        return {"families": out, "decision": ", ".join(f"{f} {r['tier']}" for f, r in out.items())}
+
     def step_hygiene(self, g, cyc, st):
         removed = self.hygiene_all() + self.prune_rebased()
         for fam in ("quasnir", "rouge", "darus"):
@@ -2386,6 +2416,8 @@ def print_status(root: Path) -> int:
         print(f"current {fam:<8} {c.get('run')} {c.get('dir')}" + (f" (base {c['base']})" if c.get("base") else ""))
     for fam, v in (s.get("releases") or {}).items():
         print(f"release {fam:<8} v{v}")
+    for fam, t in (s.get("tiers") or {}).items():
+        print(f"tier     {fam:<8} {t.get('tier')}" + (" (HELD: owner review)" if fam in (s.get("holds") or {}) else ""))
     vg = s.get("vgpu")
     if vg:
         print(f"vgpu     {vg.get('verified_tflops', 0):.3f} TFLOP/s verified = {vg.get('b300', 0):.6f} B300"
