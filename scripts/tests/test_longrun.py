@@ -737,3 +737,48 @@ def test_tiers_step_alerts_and_holds_rsi_of_a_dangerous_champion(tmp_path):
     assert res["families"]["quasnir"]["tier"] == "dangerous" and res["families"]["rouge"]["tier"] == "champion"
     assert o.state["holds"]["quasnir"]["vip_only"] and (root / "runs/longrun/ALERTS.jsonl").exists()
     assert o.rsi("quasnir", 4, "x", 1.0, {})["status"] == "skipped"
+
+
+def test_redeciding_a_cycle_compares_against_the_champion_from_before_it(tmp_path, monkeypatch):
+    o, cyc, rsi, calls = arbiter_world(tmp_path, monkeypatch)
+    assert o.arbitrate("quasnir", 3, cyc)["decision"] == "promote" and o.state["current"]["quasnir"]["dir"] == rsi
+    pre = "runs/quasnir-g2/step-000050"
+    inc = lambda: [c["entry"]["dir"] for c in o.champion_candidates("quasnir", 3, cyc)[0] if c["incumbent"]]  # noqa: E731
+    assert inc() == [pre], "the cycle's own winner is no incumbent of its re-decision"
+    del o.state["current"]["quasnir"]["incumbent_before"]  # an entry written before the field existed: the log knows
+    assert inc() == [pre]
+    monkeypatch.setattr(o, "arbiter_on", lambda fam: fam == "quasnir")
+    cyc["steps"]["champions"] = {"status": "done", "families": {}, "tol": 0.02}
+    o.cfg["champions"]["tol"] = 0.02
+    o.auto_rearbitrate()  # same tol, older arbiter: decided once more, with the right incumbent
+    rec = json.loads((o.root / "runs/longrun/champions.jsonl").read_text().splitlines()[-1])
+    assert rec["incumbent"]["dir"] == pre and cyc["steps"]["champions"]["arbiter_version"] == lr.ARBITER_VERSION
+    n = len(calls)
+    o.auto_rearbitrate()
+    assert len(calls) == n, "decided again only once"
+
+
+def test_a_darus_merge_beyond_the_acceptance_rule_is_no_candidate(tmp_path, monkeypatch):
+    root, b = world(tmp_path)
+    o = orchestrator(root)
+    o.init_state()
+    champ = "runs/darus-g3/FINAL"
+    ckpt(root, champ, [1, 1, 1, 1])
+    o.state["current"]["darus"] = {"run": "darus-g3", "dir": champ, "gen": 3}
+    out = root / "runs/darus-g4"
+    script = (f"import json,os; os.makedirs('{out}/FINAL', exist_ok=True); open('{out}/FINAL/state.json','w').write('{{}}');"
+              f"json.dump({{'best': {{'objective': 0.05, 'lambda': 1.0}}}}, open('{out}/search.json','w'))")
+    o.cfg["merge"]["cmd"] = ["python3", "-c", script]
+    monkeypatch.setattr(o, "merge_parent", lambda fam, g, base: (f"runs/{fam}-g4/FINAL", []))
+    cyc = {"steps": {}, "plan": {"phases": {"darus": {"hours": 1.0}}}, "parent_base": o.state["current"]["base"]["dir"]}
+    res = o.step_darus_merge(4, cyc, {})
+    assert res["accepted"] is False and res["acceptance"]["objective"] == 0.05
+    cyc["steps"]["darus_merge"] = {"status": "done", **res}
+    assert not [c for c in o.champion_candidates("darus", 4, cyc)[0] if c["name"].startswith("final:")]
+    started = []
+    monkeypatch.setattr(o, "rsi", lambda fam, g, start, hours, st: started.append(start) or {"status": "done"})
+    o.step_darus_rsi(4, cyc, {})
+    assert started == [champ], "a rejected merge never seeds RSI; the champion is improved instead"
+    cyc["steps"]["darus_merge"]["accepted"] = True
+    o.step_darus_rsi(4, cyc, {})
+    assert started[-1] == "runs/darus-g4/FINAL"

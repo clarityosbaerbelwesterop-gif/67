@@ -88,6 +88,9 @@ STEP_RE = re.compile(r"^step-(\d{6,})$")
 TRAIN_FAMILIES = ("base", "quasnir", "rouge")
 FAMILIES = ("base", "quasnir", "rouge", "darus")
 ARBITER_FAMILIES = ("quasnir", "rouge", "darus")
+# 2: a re-decided cycle compares against the champion from BEFORE that cycle (it used the
+# cycle's own winner as incumbent); a Darus merge beyond the acceptance rule is no candidate.
+ARBITER_VERSION = 2
 CYCLE_STEPS = ("base", "base_gate", "quasnir", "quasnir_rsi", "quasnir_gate", "rouge_mix", "rouge", "rouge_rsi",
                "rouge_gate", "darus_merge", "darus_rsi", "darus_gate", "champions", "release", "report", "tiers", "hygiene")
 REBASED_PREFIX = "rebased-init-"  # runs/<run>/rebased-init-<champion sha12>-lam<lam>: a specialist's rebased init
@@ -1514,13 +1517,16 @@ class LongRun:
         cycle), this cycle's FINAL (Darus: the merge) and this cycle's RSI champion.
         Only checkpoints whose files exist, one per model sha256 (the first wins)."""
         cur = self.state["current"].get(fam)
+        if cur and (cur.get("decided") or {}).get("by") == "arbiter" and cur["decided"].get("cycle") == g:
+            cur = cur["incumbent_before"] if "incumbent_before" in cur else self.logged_incumbent(fam, g)
         gate = cyc["steps"].get(f"{fam}_gate", {})
         if cur and cur.get("gen") == g and gate.get("decision") == "accept" and gate.get("previous"):
             cur = gate["previous"]  # promoted by an older version's per-family gate: the arbiter decides again
         run = self.name(fam, g)
         base = cyc.get("parent_base") or (self.state["current"].get("base") or {}).get("dir")
         merge = cyc["steps"].get("darus_merge", {})
-        final = (merge.get("final") if merge.get("status") == "done" else None) if fam == "darus" else f"runs/{run}/FINAL"
+        final = ((merge.get("final") if merge.get("status") == "done" and merge.get("accepted", True) else None)
+                 if fam == "darus" else f"runs/{run}/FINAL")
         rsi = cyc["steps"].get(f"{fam}_rsi", {}).get("model_dir")
         raw = []
         if cur and cur.get("dir"):
@@ -1613,6 +1619,8 @@ class LongRun:
                                                                  for lv, r in m["heldout"].items()},
                                     "heldout_mean": m["heldout_mean"], "stores": stores, "levels": levels}
             entry["decided"] = {"cycle": g, "by": "arbiter", "changed": promoted, "ts": now()}
+            entry["incumbent_before"] = ({k: v for k, v in inc["entry"].items() if k not in ("incumbent_before", "decided")}
+                                         if inc else None)
             self.state["current"][fam] = entry
             atomic_write_json(self.dir / "current.json", {"ts": now(), "current": self.state["current"]})
         self.save()
@@ -1622,6 +1630,20 @@ class LongRun:
                "candidates": len(cands), "errors": errors}
         self.log(f"g{g} champion {fam}: {res['decision']} {chosen['dir'] if chosen else None}", reason=res["reason"])
         return res
+
+    def logged_incumbent(self, fam: str, g: int) -> dict | None:
+        """The incumbent of the first arbiter decision of (cycle g, family) in the decision log:
+        the champion from before that cycle, for entries written before incumbent_before existed."""
+        path = self.p(self.cfg["champions"]["log"])
+        for line in (path.read_text().splitlines() if path.exists() else []):
+            try:
+                r = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if r.get("cycle") == g and r.get("family") == fam:
+                inc = r.get("incumbent")
+                return {k: v for k, v in inc.items() if k not in ("incumbent_before", "decided")} if inc else None
+        return None
 
     def append_decision(self, rec: dict) -> None:
         """runs/longrun/champions.jsonl, at most once per (cycle, family, chosen)."""
@@ -2007,7 +2029,14 @@ class LongRun:
                 return {"status": "error", "rc": rc, "error": tail(logp, 8), "config": self.rel(path)}
         s = read_json(search) or {}
         best = s.get("best") or {}
-        return {"final": out, "config": self.rel(path), "search": self.rel(search),
+        limit = float(m["acceptance"]["max_regression_vs_parents"])
+        obj = best.get("objective")
+        accepted = isinstance(obj, (int, float)) and obj <= limit
+        if not accepted:
+            self.log(f"g{g} darus merge rejected: worst regression vs the best parent {obj} > {limit}; "
+                     "Darus continues from its champion")
+        return {"final": out, "config": self.rel(path), "search": self.rel(search), "accepted": accepted,
+                "acceptance": {"max_regression_vs_parents": limit, "objective": obj},
                 "best": {k: best.get(k) for k in ("method", "density", "lambda", "objective", "losses")}}
 
     def step_darus_rsi(self, g, cyc, st):
@@ -2015,11 +2044,18 @@ class LongRun:
         if merge.get("status") != "done":
             return {"status": "skipped", "reason": "darus merge did not succeed"}
         hours = cyc["plan"]["phases"]["darus"]["hours"] - merge.get("wall_seconds", 0.0) / 3600
-        return self.rsi("darus", g, merge["final"], hours, st)
+        start = merge["final"]
+        if not merge.get("accepted", True):  # a rejected merge never seeds RSI: improve the champion instead
+            cur = self.state["current"].get("darus") or {}
+            if not cur.get("dir") or not self.has_model(cur["dir"]):
+                return {"status": "skipped", "reason": "darus merge rejected and no champion to continue"}
+            start = cur["dir"]
+        return self.rsi("darus", g, start, hours, st)
 
     def step_darus_gate(self, g, cyc, st):
-        if cyc["steps"].get("darus_merge", {}).get("status") != "done" and not self.arbiter_on("darus"):
-            return {"status": "skipped", "reason": "darus merge did not succeed"}
+        merge = cyc["steps"].get("darus_merge", {})
+        if (merge.get("status") != "done" or not merge.get("accepted", True)) and not self.arbiter_on("darus"):
+            return {"status": "skipped", "reason": "darus merge did not succeed or was rejected"}
         return self.family_gate("darus", g, cyc)
 
     def auto_rearbitrate(self) -> None:
@@ -2035,11 +2071,12 @@ class LongRun:
         g = max(done)
         st = self.state["cycles"][str(g)]["steps"]["champions"]
         used = float(st.get("tol", self.cfg["gate"]["tolerance"]))
-        if abs(used - tol) < 1e-12:
+        version = int(st.get("arbiter_version", 1))
+        if abs(used - tol) < 1e-12 and version >= ARBITER_VERSION:
             return
-        self.log(f"champions.tol {used} -> {tol}: deciding cycle g{g} again")
+        self.log(f"champions.tol {used} -> {tol}, arbiter v{version} -> v{ARBITER_VERSION}: deciding cycle g{g} again")
         if self.rearbitrate(g) == EX_OK:
-            st["tol"] = tol
+            st["tol"], st["arbiter_version"] = tol, ARBITER_VERSION
             self.save()
 
     def rearbitrate(self, g: int) -> int:
@@ -2142,7 +2179,7 @@ class LongRun:
         ph = cyc["plan"]["phases"].get("champions") or {}  # absent in plans written before this step existed
         hours = ph.get("hours", self.cfg["shares"]["champions"] * cyc["plan"]["seconds"] / 3600)
         return {"families": fams, "champions": self.rel(self.p(self.cfg["champions"]["out"])), "budget_hours": hours,
-                "tol": float(self.cfg["champions"].get("tol", self.cfg["gate"]["tolerance"])),
+                "tol": float(self.cfg["champions"].get("tol", self.cfg["gate"]["tolerance"])), "arbiter_version": ARBITER_VERSION,
                 "decision": ", ".join(f"{f} {r.get('decision')}" for f, r in fams.items())}
 
     def generation_models(self, g, cyc) -> dict:
