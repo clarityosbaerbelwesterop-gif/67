@@ -241,6 +241,7 @@ def world(tmp_path: Path, v3: bool = False) -> tuple[Path, dict]:
                     "rouge": {"gen": 2, "run": "rouge-g2", "dir": rr, "sha256": b["rr"], "source": "rsi-champion"},
                     "darus": {"gen": 2, "run": "darus-g2", "dir": "runs/darus-g2/FINAL", "sha256": b["d2"], "source": "final"}},
         "config_path": "training/configs/longrun.json", "config_sha256": "5a82e99b", "days": 10.0, "forever": False,
+        "releases": {},
         "max_cycles": None, "cycle_hours": 24, "pid": 385, "updated_at": t0 + 4, "message": "STOP requested while waiting",
         "corpus": {"version": "v2", "stores": {k: {"meta": m, "tokens": 256, "val_tokens": 64, "meta_sha256": "x"}
                                                for k, m in metas.items()}, "checked_at": t0, "build": None},

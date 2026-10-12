@@ -254,11 +254,19 @@
     "benchmarks": {
       "darus": [
         "humaneval",
-        "mbpp"
+        "mbpp",
+        "arc-agi-2"
       ],
       "quasnir": [
         "humaneval",
-        "mbpp"
+        "mbpp",
+        "arc-agi-2"
+      ],
+      "rouge": [
+        "arc-agi-2"
+      ],
+      "base": [
+        "arc-agi-2"
       ]
     },
     "humaneval_cmd": [

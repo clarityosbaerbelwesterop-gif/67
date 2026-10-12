@@ -9,3 +9,4 @@ __pycache__/
 /data/stores
 .pytest_cache/
 headcenter/acl.json
+/data/benchmarks

@@ -203,7 +203,9 @@ DEFAULTS: dict = {
     "gate": {"tolerance": 0.01, "eval": {"batch": 8, "seq": 256, "batches": 32, "seed": 4242},
              "stores": {"base": ["base"], "quasnir": ["code"], "rouge": ["general"], "darus": ["general", "code"]}},
     "report": {"stores": ["general", "code", "base"],
-               "benchmarks": {"darus": ["humaneval", "mbpp"], "quasnir": ["humaneval", "mbpp"]},
+               # the owner's standard (2026-10-12): the hardest tests that can run here, see docs/FRONTIER.md
+               "benchmarks": {"darus": ["humaneval", "mbpp", "arc-agi-2"], "quasnir": ["humaneval", "mbpp", "arc-agi-2"],
+                              "rouge": ["arc-agi-2"], "base": ["arc-agi-2"]},
                "humaneval_cmd": ["{python}", "scripts/humaneval.py"], "humaneval_args": []},
     "hygiene": {"keep_last": 2, "keep_last_during_run": 3, "keep_last_superseded": 0, "prune_rsi_rounds": True},
     "control": {"poll_seconds": 2.0},
