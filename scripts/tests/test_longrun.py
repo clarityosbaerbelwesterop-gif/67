@@ -303,7 +303,7 @@ def test_fixture_is_shaped_like_the_live_state(tmp_path):
     f = json.loads((root / "runs/longrun/state.json").read_text())
     assert set(s) - {"config_reloaded_at"} <= set(f)
     assert {k for e in s["current"].values() for k in e} <= {k for e in f["current"].values() for k in e} | {
-        "base", "metrics", "decided"}
+        "base", "metrics", "decided", "incumbent_before"}
     assert set(s["cycles"]["2"]["steps"]) <= set(lr.CYCLE_STEPS)
     assert set(f["cycles"]["2"]["steps"]) == set(s["cycles"]["2"]["steps"])
     for k, v in s["cycles"]["2"]["steps"].items():
