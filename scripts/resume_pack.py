@@ -101,11 +101,20 @@ def collect() -> list[Path]:
         d = ckpt_dir(s.rstrip("/"))
         if d and "rebased-init-" not in s:
             add_ckpt(d)
-    # A training step in progress resumes from its newest checkpoint, optimizer included.
-    for cyc in state.get("cycles", {}).values():
+    # A training run in progress resumes from its newest checkpoint, optimizer included: every
+    # unfinished run's latest.json, and the newest step of a running train step. The step's run
+    # is named <step>-g<cycle> when the state does not record it (never a glob over all runs).
+    for run, info in (state.get("runs") or {}).items():
+        lj = ROOT / "runs" / run / "latest.json"
+        if not (info or {}).get("finished") and lj.is_file():
+            d = ckpt_dir(str(json.loads(lj.read_text()).get("dir") or ""))
+            if d:
+                add_ckpt(d, full=True)
+    for g, cyc in cycles.items():
         for name, st in cyc.get("steps", {}).items():
             if name in TRAIN_STEPS and st.get("status") == "running":
-                steps = sorted((ROOT / "runs").glob(f"{st.get('run') or '*'}/step-*"))
+                run = st.get("run") or f"{name}-g{str(g).lstrip('g')}"
+                steps = sorted((ROOT / "runs").glob(f"{run}/step-*"))
                 if steps:
                     add_ckpt(steps[-1], full=True)
     for f in list(files):  # the latest.json pointer of every run whose weights are packed

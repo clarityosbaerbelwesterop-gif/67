@@ -1,35 +1,55 @@
 {
-  "created": "2026-10-08T06:23:36Z",
-  "files": 126,
-  "plain_bytes": 311719360,
-  "cipher": "openssl enc -aes-256-cbc -pbkdf2 -iter 200000 -salt (key: $FORGE_PACK_KEY)",
+  "created": "2026-10-13T12:25:58Z",
+  "files": 232,
+  "plain_bytes": 871331263,
+  "cipher": "age X25519 (recipient: age17f8gymjphpzklavte56njerdfgjxtl5hf66dgdymyqx4p39lt55qmzntqg)",
   "parts": [
     {
       "file": "part-000",
       "bytes": 94371840,
-      "sha256": "fcabb27dd093ed1b84f5a0a4f85970214f29cc6cb5b4ae703d6ba816b9995a06"
+      "sha256": "3bb311fbe9263d861d0f49e1cdef2967ba1022c0751e03f39174d08837989ce3"
     },
     {
       "file": "part-001",
       "bytes": 94371840,
-      "sha256": "6f7bf8150a3f6d72c684964aafc8f1808c5e322b168df637fa761591dc388113"
+      "sha256": "3179ccf2d97d7c4992464d08279cfee5d99261690495ce86f9053dac0e6a648a"
     },
     {
       "file": "part-002",
       "bytes": 94371840,
-      "sha256": "8196802dd6075e77a944bdfda594df1cde43d5f1e9f37ad78e4ebd218d9cd68d"
+      "sha256": "af5afff8773582a1740bcc7cb7f69c7f97598f368a6d6fe042da778309b21fbc"
     },
     {
       "file": "part-003",
-      "bytes": 28702752,
-      "sha256": "90f8ca9422dce5228fef6a8ceecce012c7339e23c8c1e5e8fdbefc08dcc0778d"
+      "bytes": 94371840,
+      "sha256": "a783720bd13ce1db50713c341fc6eece72d8bfd2c5e17c466bdd008342372bd8"
+    },
+    {
+      "file": "part-004",
+      "bytes": 94371840,
+      "sha256": "14e5b6ed8bd17e3d559bb386388834e593d8ae5487bc10ca74133f4d43a3c84b"
+    },
+    {
+      "file": "part-005",
+      "bytes": 94371840,
+      "sha256": "d437c05c397b7cf3985c710524db14870344e279dd25bcb1b3170320ccee13b3"
+    },
+    {
+      "file": "part-006",
+      "bytes": 94371840,
+      "sha256": "2c5868ccd169d36cbb680c8471ed6de587aafaa42ff3273e0e2c3945685f2dcb"
+    },
+    {
+      "file": "part-007",
+      "bytes": 60018648,
+      "sha256": "f9a91a35fb16475a630e85e22071d75c68313c7c43b395d7ad801ce0b2b41767"
     }
   ],
-  "sha256": "89bb26cf888453d5cc122de00e4c05962bd539ed61029df05b089cadcff82899",
+  "sha256": "e21c140a24c7156fe679a5d7e8cca5578d820e8b0f33c0b4739d4a738453c0ce",
   "current": {
     "base": "runs/base-g3/FINAL",
-    "quasnir": "runs/quasnir-g2/step-002214",
-    "rouge": "runs/rsi/rouge-g2/rounds/rsi-rouge-g2-r2/step-000060",
+    "quasnir": "runs/rsi/quasnir-g3/rounds/rsi-quasnir-g3-r8/step-000120",
+    "rouge": "runs/rsi/rouge-g3/rounds/rsi-rouge-g3-r2/step-000120",
     "darus": "runs/darus-g2/FINAL"
   }
 }

@@ -68,3 +68,20 @@ def test_the_shared_key_path_still_needs_its_key(tmp_path, monkeypatch):
     world(tmp_path, monkeypatch)
     with pytest.raises(SystemExit, match="FORGE_PACK_KEY"):
         RP.save(False)
+
+
+def test_the_running_base_step_packs_its_own_newest_checkpoint_with_optimizer(tmp_path, monkeypatch):
+    root = tmp_path / "repo"
+    monkeypatch.setattr(RP, "ROOT", root)
+    (root / "runs/longrun").mkdir(parents=True)
+    (root / "runs/longrun/state.json").write_text(json.dumps({
+        "current": {}, "runs": {"base-g4": {"family": "base", "finished": False}},
+        "cycles": {"4": {"steps": {"base": {"status": "running"}}}}}))  # no run name recorded, as in the live state
+    for d in ("runs/base-g4/step-000010", "runs/base-g4/step-000020", "runs/smoke/step-000060"):
+        (root / d).mkdir(parents=True)
+        for f in ("model.safetensors", "optim.safetensors", "state.json"):
+            (root / d / f).write_text("x")
+    (root / "runs/base-g4/latest.json").write_text(json.dumps({"dir": "runs/base-g4/step-000020"}))
+    got = {str(f.relative_to(root)) for f in RP.collect()}
+    assert "runs/base-g4/step-000020/optim.safetensors" in got and "runs/base-g4/step-000020/model.safetensors" in got
+    assert not any(g.startswith("runs/smoke/") for g in got), "never another run's newest checkpoint"
