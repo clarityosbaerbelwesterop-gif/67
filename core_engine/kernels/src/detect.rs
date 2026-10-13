@@ -23,11 +23,23 @@ fn detect() -> Vec<GemmVariant> {
         if crate::x86::avx512::supported() {
             v.push(GemmVariant::Avx512F32);
         }
-        if crate::x86::amx::supported() {
+        if amx_opt_in() && crate::x86::amx::supported() {
             v.push(GemmVariant::AmxBf16);
         }
     }
     v
+}
+
+/// AMX is opt-in (`FORGE_AMX=1`): on a Sapphire-Rapids-class box the AmxBf16
+/// kernel passed its self-test but failed the reference tests (wrong products up
+/// to sign flips), so the default is the verified AVX-512 path.
+#[cfg_attr(not(target_arch = "x86_64"), allow(dead_code))]
+fn amx_opt_in() -> bool {
+    amx_opt_in_from(std::env::var("FORGE_AMX").ok().as_deref())
+}
+
+fn amx_opt_in_from(v: Option<&str>) -> bool {
+    matches!(v, Some("1") | Some("true") | Some("on"))
 }
 
 /// Preference rank: Scalar < Avx2Fma < Avx512F32 < AmxBf16.
@@ -76,6 +88,17 @@ mod tests {
         // A gap in the list (AMX without AVX-512 is impossible, but resolve must
         // still never pick a variant above the request).
         assert_eq!(resolve_in(&[Scalar, AmxBf16], Avx512F32), Scalar);
+    }
+
+    #[test]
+    fn amx_is_opt_in() {
+        assert!(!amx_opt_in_from(None));
+        assert!(!amx_opt_in_from(Some("0")));
+        assert!(!amx_opt_in_from(Some("")));
+        assert!(amx_opt_in_from(Some("1")));
+        if std::env::var("FORGE_AMX").is_err() {
+            assert!(!available().contains(&AmxBf16));
+        }
     }
 
     #[test]
