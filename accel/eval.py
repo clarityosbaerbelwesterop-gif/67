@@ -13,11 +13,9 @@ import json
 import os
 import sys
 
-import numpy as np
-
 from . import forge_io as fio
 from .config import ConfigError, ModelConfig
-from .forge_io import Rng, Store, f32
+from .forge_io import Rng, Store
 from .runtime import Mesh, emit, init_distributed
 
 
@@ -44,7 +42,7 @@ def evaluate(ckpt: str, data: str, split: str = "val", batch: int = 8, seq: int 
     params = mesh.put_tree(w, mesh.repl)
     loss, acc = eval_windows(build_eval(mc, mesh, precision, xent), params, mesh, store, Rng(seed), split, batch, seq, batches)
     return {"type": "eval", "ckpt": ckpt, "sha256": sha, "data": data, "split": "Train" if split == "train" else "Val",
-            "tokens": batch * seq * batches, "loss": float(loss), "perplexity": float(np.exp(f32(loss), dtype=f32)),
+            "tokens": batch * seq * batches, "loss": float(loss), "perplexity": float(fio.expf(loss)),
             "next_token_acc": float(acc), "quant": "f32", "weight_bytes": 4.0 * mc.num_params(),
             "precision": precision}
 

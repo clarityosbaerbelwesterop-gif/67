@@ -12,10 +12,14 @@ algorithm (trainer.rs; spec in docs/ACCEL.md):
   * LR schedules cosine | wsd (with TRUNK) | constant with linear warmup, in f32;
   * in-train eval with Rng(seed ^ 0xE7A1) on the val split;
   * stdout: forge's JSON lines (event, telemetry, eval, checkpoint, trunk, done), sorted keys;
-  * files: <out_dir>/<run>/step-NNNNNN/{model,optim}.safetensors + state.json, latest.json,
-    TRUNK for wsd, and FINAL -> the last checkpoint (relative link, as scripts/longrun.py writes it);
+  * files: <out_dir>/<run>/step-NNNNNN/{model,optim}.safetensors + state.json, latest.json and
+    TRUNK for wsd -- the files forge writes. Like forge, no FINAL: scripts/longrun.py links FINAL
+    itself once latest.json reaches max_steps. --final links FINAL when the run reaches max_steps
+    (never for a stopped run);
   * stdin commands: pause, resume, stop, checkpoint, set_lr{value} (the CPU-only ones --
-    autotune, set_threads, swap_kernel -- are acknowledged and ignored).
+    autotune, set_threads, swap_kernel -- are acknowledged and ignored), with forge's events.
+    Multi-host (ACCEL_DISTRIBUTED=1): process 0 reads stdin and every process applies its
+    commands at the same update, one update after they arrive.
 
 Differences from forge, by design: the batch is split over all JAX devices (data parallel);
 `threads`, `hbvm_mib` and `autotune` have no meaning on XLA and are accepted silently; other
@@ -50,9 +54,17 @@ OMB1, OMB2 = f32(f32(1.0) - B1), f32(f32(1.0) - B2)  # 0.100000024, 0.050000012 
 def build_step(mc: ModelConfig, B: int, T: int, A: int, grad_clip, mesh: Mesh, precision: str, remat: bool,
                xent: str = "fast"):
     """The train step + update program as one jitted function:
-    (params, m, v, xs[A,B,T], ys[A,B,T], hyper[step_size, bc2s, decay]) -> (params, m, v, ce_sums[A], grad_norm)."""
+    (params, m, v, xs[A,B,T], ys[A,B,T], hyper[step_size, bc2s, decay, 0]) -> (params, m, v, ce_sums[A], grad_norm).
+
+    Data parallel: under shard_map every device runs the micro-batch loop on its rows of each
+    micro-batch and accumulates its own partial gradients; one psum over the mesh after the loop
+    gives the full gradient. So an update all-reduces the parameter size once, whatever grad_accum
+    is (an all-reduce per micro-batch otherwise), and tok_emb's two gradient parts (embedding
+    scatter and tied head) are added on the device before that one reduction."""
     import jax
     import jax.numpy as jnp
+    from jax.experimental.shard_map import shard_map
+    from jax.sharding import PartitionSpec as PS
     from . import model as M
 
     gs = f32(1.0) / f32(B * T * A)  # model.rs:397, f32 division
@@ -66,8 +78,9 @@ def build_step(mc: ModelConfig, B: int, T: int, A: int, grad_clip, mesh: Mesh, p
 
     vg = jax.value_and_grad(loss_fn, has_aux=True)
 
-    def step(params, m, v, xs, ys, hyper):
-        step_size, bc2s, decay = hyper[0], hyper[1], hyper[2]
+    def local_grads(params, xs, ys):
+        """One device: its rows of every micro-batch (xs [A, B/n, T]) -> summed gradients and per-micro-batch
+        CE sums, all-reduced once over the mesh."""
         if A == 1:
             (_, cs), grads = vg(params, xs[0], ys[0])
             ce_sums = cs[None]
@@ -76,6 +89,22 @@ def build_step(mc: ModelConfig, B: int, T: int, A: int, grad_clip, mesh: Mesh, p
                 (_, cs), g = vg(params, xy[0], xy[1])
                 return {k: gacc[k] + g[k] for k in gacc}, cs  # beta = 1 accumulation, in order
             grads, ce_sums = jax.lax.scan(micro, {k: jnp.zeros_like(p) for k, p in params.items()}, (xs, ys))
+        return jax.lax.psum((grads, ce_sums), "data")
+
+    all_grads = shard_map(local_grads, mesh=mesh.mesh, in_specs=(PS(), PS(None, "data"), PS(None, "data")),
+                          out_specs=(PS(), PS()))
+
+    def step(params, m, v, xs, ys, hyper):
+        step_size, bc2s, decay = hyper[0], hyper[1], hyper[2]
+        zero = jax.lax.bitcast_convert_type(hyper[3], jnp.int32)  # 0 at run time, unknown to the compiler
+
+        def rounded(x):
+            """x, rounded to f32 on its own: XLA's CPU and GPU backends contract a*b + c into one fma
+            (one rounding); forge's Rust loop rounds the product first. An integer xor with a run-time
+            zero is a no-op the compiler cannot see through, so no fma forms across it."""
+            return jax.lax.bitcast_convert_type(jax.lax.bitcast_convert_type(x, jnp.int32) ^ zero, jnp.float32)
+
+        grads, ce_sums = all_grads(params, xs, ys)
         sumsq = f32(0.0)
         for n in names:  # SumSq over every gradient, tok_emb included (machine.rs:983)
             sumsq = sumsq + M.pairwise_sum(grads[n] * grads[n])
@@ -83,12 +112,12 @@ def build_step(mc: ModelConfig, B: int, T: int, A: int, grad_clip, mesh: Mesh, p
         norm = jnp.sqrt(reg)
         clip = jnp.minimum(gc / (norm + f32(1e-6)), f32(1.0))  # ClipCoef
         P, Mo, V = {}, {}, {}
-        for n in names:  # AdamW, machine.rs:1000-1040, same operation order, no FMA intended
+        for n in names:  # AdamW, machine.rs:1000-1040: same operation order, every product rounded (no fma)
             gi = grads[n] * clip
-            mm = B1 * m[n] + OMB1 * gi
-            vv = B2 * v[n] + (OMB2 * gi) * gi
+            mm = rounded(B1 * m[n]) + rounded(OMB1 * gi)
+            vv = rounded(B2 * v[n]) + rounded((OMB2 * gi) * gi)
             dec = decay if decays[n] else f32(1.0)  # 1 - lr*0.0 == 1 exactly
-            P[n] = params[n] * dec - (step_size * mm) / (jnp.sqrt(vv) / bc2s + EPS)
+            P[n] = rounded(params[n] * dec) - (step_size * mm) / (jnp.sqrt(vv) / bc2s + EPS)
             Mo[n], V[n] = mm, vv
         return P, Mo, V, ce_sums, norm
 
@@ -125,7 +154,7 @@ def eval_windows(ev, params, mesh: Mesh, data: Store, rng: Rng, split: str, b: i
 # ---------------------------------------------------------------------------------------------- trainer
 class Trainer:
     def __init__(self, cfg: TrainConfig, precision: str = "f32", remat: bool = False, devices: int = 0,
-                 init: str = "auto", final_link: bool = True, xent: str = "fast", eval_xent: str = "forge"):
+                 init: str = "auto", final_link: bool = False, xent: str = "fast", eval_xent: str = "forge"):
         import jax
         self.cfg, self.precision, self.remat, self.final_link = cfg, precision, remat, final_link
         mc = cfg.model
@@ -143,6 +172,11 @@ class Trainer:
         self.lr_override: float | None = None
         self.paused = self.stop = False
         self._pending = None  # (step, ce_sums) of an update whose loss has not been fetched yet
+        # Multi-process: commands change the requested state on process 0; every process takes it from
+        # the control bus at the same loop iteration (see sync_control).
+        self._bus = ControlBus() if jax.process_count() > 1 else None
+        self._req = {"paused": False, "stop": False, "lr_override": None}
+        self._bus_pending = None
 
         params, m, v = self._init_params(init)
         if cfg.resume_from:
@@ -238,7 +272,7 @@ class Trainer:
         t = f32(self.optim_offset + self.step)
         bc1 = f32(f32(1.0) - powf(B1, t))
         bc2s = np.sqrt(f32(f32(1.0) - powf(B2, t)), dtype=f32)
-        hyper = np.array([f32(lr / bc1), bc2s, f32(f32(1.0) - lr * cfg.weight_decay)], f32)
+        hyper = np.array([f32(lr / bc1), bc2s, f32(f32(1.0) - lr * cfg.weight_decay), 0.0], f32)
         self.params, self.m, self.v, ce_sums, norm = self._step(
             self.params, self.m, self.v, self.mesh.put(xs, self.mesh.micro_rows), self.mesh.put(ys, self.mesh.micro_rows),
             self.mesh.put(hyper, self.mesh.repl))
@@ -311,27 +345,38 @@ class Trainer:
         emit({"type": "trunk", "path": trunk, "step": self.step, "ts": now()})
 
     # ------------------------------------------------------------------ control (trainer.rs:563-608)
+    def _request(self, key: str, value) -> None:
+        """A control change: applied now (one process), or handed to the control bus (multi-process)."""
+        if self._bus is None:
+            setattr(self, key, value)
+        else:
+            self._req[key] = value
+
     def handle(self, line: str) -> None:
+        """forge's handle(): the same events, including "applied <cmd>" after a rejected value."""
         try:
             v = json.loads(line)
         except json.JSONDecodeError as e:
             return emit(event("warn", f"unparseable command: {e}", self.step))
         cmd = v.get("cmd", "") if isinstance(v, dict) else ""
         cmd = cmd if isinstance(cmd, str) else ""
+        x = v.get("value") if isinstance(v, dict) else None
         if cmd == "pause":
-            self.paused = True
+            self._request("paused", True)
         elif cmd == "resume":
-            self.paused = False
+            self._request("paused", False)
         elif cmd == "stop":
-            self.stop = True
+            self._request("stop", True)
         elif cmd == "set_lr":
-            x = v.get("value")
-            if isinstance(x, (int, float)) and not isinstance(x, bool) and 0.0 < x < 1.0:
-                self.lr_override = float(f32(x))
+            if isinstance(x, (int, float)) and not isinstance(x, bool) and 0.0 < x < 1.0:  # as_f64()
+                self._request("lr_override", float(f32(x)))
             else:
-                return emit(event("warn", "set_lr needs 0 < value < 1", self.step))
-        elif cmd in ("autotune", "set_threads", "swap_kernel"):
-            return emit(event("info", f"{cmd} has no meaning on XLA devices; ignored", self.step))
+                emit(event("warn", "set_lr needs 0 < value < 1", self.step))
+        elif cmd == "set_threads":  # forge's validation and events; the thread count itself means nothing to XLA
+            if not (isinstance(x, int) and not isinstance(x, bool) and 1 <= x <= 1024):  # as_u64()
+                emit(event("warn", "set_threads needs 1..=1024", self.step))
+        elif cmd in ("autotune", "swap_kernel"):
+            emit(event("info", f"{cmd} has no meaning on XLA devices; ignored", self.step))
         elif cmd == "checkpoint":
             try:
                 self.checkpoint()
@@ -340,6 +385,18 @@ class Trainer:
         else:
             return emit(event("warn", f"unknown command {json.dumps(cmd)}", self.step))
         emit(event("info", f"applied {cmd}", self.step))
+
+    def sync_control(self) -> None:
+        """Multi-process only: send process 0's requested state (pause, stop, set_lr) through the control
+        bus and apply the state sent one iteration earlier. Every process calls this at the top of every
+        loop iteration, so all of them apply the same state at the same iteration and step: stop ends
+        every process's loop before the same update (the final eval is a collective), and set_lr changes
+        the replicated weights' update everywhere. The fetched record was queued behind the update
+        dispatched two iterations ago, so the host never waits for the update in flight."""
+        out = self._bus.launch(self._req if is_main() else None)
+        if self._bus_pending is not None:
+            self.paused, self.stop, self.lr_override = self._bus.fetch(self._bus_pending)
+        self._bus_pending = out
 
     # ------------------------------------------------------------------ loop (trainer.rs:621-671)
     def run(self, control: "queue.Queue[str] | None" = None) -> float:
@@ -355,6 +412,10 @@ class Trainer:
                 try:
                     self.handle(control.get_nowait())
                 except queue.Empty:
+                    break
+            if self._bus is not None:
+                self.sync_control()
+                if self.stop:
                     break
             if self.paused:
                 time.sleep(0.2)
@@ -397,7 +458,7 @@ class Trainer:
         self.last_val = vl
         emit({"type": "eval", "step": self.step, "val_loss": float(vl), "val_acc": float(acc), "ts": now()})
         d = self.checkpoint()
-        if self.final_link and is_main():
+        if self.final_link and is_main() and self.step >= cfg.max_steps:  # finished runs only, never a stop
             fio.set_final(self.run_dir(), d)
         emit({"type": "done", "step": self.step, "loss": float(self.last_loss), "val_loss": float(vl), "ts": now()})
         return float(self.last_loss)
@@ -406,6 +467,43 @@ class Trainer:
 def _rust_f32(x) -> str:
     x = float(x)
     return "NaN" if x != x else ("inf" if x > 0 else "-inf")
+
+
+class ControlBus:
+    """Process 0 -> every process, through the devices (multi-host runs). A record is int32
+    [paused, stop, has_lr, lr bits]; process 0 contributes it, the others zeros, and a sum over a
+    [processes, 4] array sharded by process hands every process the same record."""
+
+    def __init__(self):
+        import jax
+        import jax.numpy as jnp
+        from jax.sharding import Mesh as JMesh, NamedSharding, PartitionSpec as PS
+        devs = sorted(jax.devices(), key=lambda d: (d.process_index, d.id))
+        mesh = JMesh(np.array(devs).reshape(jax.process_count(), -1), ("proc", "local"))
+        self.shape = (jax.process_count(), 4)
+        self.index = jax.process_index()
+        self.sharding = NamedSharding(mesh, PS("proc"))
+        self._sum = jax.jit(lambda a: jnp.sum(a, axis=0), out_shardings=NamedSharding(mesh, PS()))
+
+    @staticmethod
+    def encode(req: dict | None) -> np.ndarray:
+        if req is None:
+            return np.zeros(4, np.int32)
+        lr = req["lr_override"]
+        bits = int(np.array(lr if lr is not None else 0.0, np.float32).view(np.int32))
+        return np.array([bool(req["paused"]), bool(req["stop"]), lr is not None, bits], np.int32)
+
+    def launch(self, req: dict | None):
+        import jax
+        full = np.zeros(self.shape, np.int32)
+        full[self.index] = self.encode(req)
+        return self._sum(jax.make_array_from_callback(self.shape, self.sharding, lambda idx: full[idx]))
+
+    @staticmethod
+    def fetch(out) -> tuple[bool, bool, float | None]:
+        r = np.asarray(out.addressable_data(0))
+        lr = float(np.array(r[3], np.int32).view(np.float32)) if r[2] else None
+        return bool(r[0]), bool(r[1]), lr
 
 
 def stdin_control() -> "queue.Queue[str]":
@@ -441,7 +539,10 @@ def main(argv=None) -> int:
                     help="train-step loss value: tree-summed softmax denominator (fast) or forge's sequential f32 sum "
                          "(forge; the reported loss then matches forge's to the logit noise). Same gradient either way; "
                          "evals always use forge's")
-    ap.add_argument("--no-final", action="store_true", help="do not point <run>/FINAL at the last checkpoint")
+    ap.add_argument("--final", action="store_true",
+                    help="point <run>/FINAL at the last checkpoint when the run reaches max_steps (never for a "
+                         "stopped run). Default off, like forge: scripts/longrun.py links FINAL itself")
+    ap.add_argument("--no-final", action="store_true", help="do not write FINAL (the default; overrides --final)")
     ap.add_argument("--threads", help=argparse.SUPPRESS)  # forge CLI flag, meaningless here
     a = ap.parse_args(argv)
     try:
@@ -450,8 +551,8 @@ def main(argv=None) -> int:
         cfg = TrainConfig.from_dict(raw)
         if a.resume:
             cfg.resume_from = a.resume
-        tr = Trainer(cfg, a.precision, a.remat, a.devices, a.init, final_link=not a.no_final, xent=a.xent)
-        tr.run(stdin_control())
+        tr = Trainer(cfg, a.precision, a.remat, a.devices, a.init, final_link=a.final and not a.no_final, xent=a.xent)
+        tr.run(stdin_control() if is_main() else None)  # multi-host: process 0 reads the commands
     except KeyboardInterrupt:
         return 130
     except (ConfigError, ValueError, OSError, KeyError, json.JSONDecodeError) as e:

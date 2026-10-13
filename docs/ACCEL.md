@@ -23,7 +23,7 @@ Checkpoints move freely in both directions:
 
 `accel/forge_io.py` covers:
 - safetensors files, read and written through `scripts/rebase.py`;
-- `state.json`, `latest.json`, `TRUNK` and `FINAL`, written byte for byte as forge writes them;
+- `state.json`, `latest.json` and `TRUNK`, written byte for byte as forge writes them. forge train writes no `FINAL` (`scripts/longrun.py` links it once a run reaches `max_steps`), and neither does accel unless `--final` is given;
 - forge's xoshiro256** RNG;
 - the store reader and the window sampler;
 - the `model_sha256` / `parent_sha256` lineage.
@@ -33,18 +33,18 @@ Checkpoints move freely in both directions:
 | Part | Match |
 | --- | --- |
 | **Initialisation** | Bit for bit. accel replays forge's generator: `Rng(seed ^ 0x5EED1417)`, Box-Muller, f32 std. |
-| **Data** | The same windows. accel uses forge's `Rng(seed)` and `below(N-T-1)` sampler. `rng_state` in `state.json` is equal after every step. |
+| **Data** | The same windows. accel uses forge's `Rng(seed)` and `below(N-T-1)` sampler. `rng_state` in `state.json` is equal after every step.<br>Token ids are checked on the host like forge's `BadToken`: an id at or above the model's vocab stops `train` and `eval` with forge's message (`token[4] = 9453 is not an integer id below 8192`, without forge's `pc 1:`) and exit code 1. Without the check XLA's gather returns NaN rows, and a run would checkpoint NaN weights and exit 0. |
 | **LR** | Bit for bit, for every schedule (cosine, wsd, constant) and the warmup. Computed in f32, with the cosine through libm `cosf` like Rust's `f32::cos`. |
 | **Bias correction** | Bit for bit. `t = optim_offset + step` and `0.9f.powf(t)`, through libm `powf`. |
-| **AdamW** | Same operation order and the same f32 constants. `1 - 0.9f` is 0.100000024, not 0.1. Weight decay applies to ndim >= 2. |
+| **AdamW** | Bit for bit on identical inputs. Same operation order and the same f32 constants: `1 - 0.9f` is 0.100000024, not 0.1. Weight decay applies to ndim >= 2.<br>Every product is rounded to f32 before its add, as in forge's Rust loop. XLA's CPU backend would otherwise contract `a*b + c` into one fma; accel blocks that with an integer xor against a run-time zero (see the AdamW check below). |
 | **Clipping** | Same: `min(clip / (norm + 1e-6), 1)` on the global pre-clip norm, and `grad_clip = 0` gives pure decay. |
-| **Model** | Same as forge:<br>• RMSNorm without a mean;<br>• interleaved RoPE with forge's own f32 table;<br>• GQA with contiguous head groups;<br>• causal softmax and SwiGLU;<br>• tied head;<br>• no biases. |
-| **Loss** | Same: f32 CE per row, rows summed in f64 per batch into an f32 register.<br>`xent="forge"` sums the softmax denominator strictly in order, as forge's `Xent` loop does. This is the default for every eval; see below. |
+| **Model** | Same as forge:<br>• RMSNorm without a mean;<br>• interleaved RoPE with forge's own f32 table (pairs split by a reshape, so the step has no gather or scatter for RoPE);<br>• GQA with contiguous head groups;<br>• causal softmax and SwiGLU;<br>• tied head;<br>• no biases. |
+| **Loss** | Same: f32 CE per row, rows summed in f64 per batch into an f32 register.<br>`xent="forge"` sums the softmax denominator strictly in order, as forge's `Xent` loop does. This is the default for every eval; see below.<br>Eval `perplexity` is glibc `expf(loss)`, as Rust's `f32::exp` computes it. numpy's float32 `exp` differs from it on 78,715 of 200,000 random inputs in [0.5, 11]. |
 | **Gradient accumulation** | `sum(CE) * f32(1/(B*T*accum))`, with micro-batch gradients summed in order. |
 | **Files** | Byte-identical to forge's:<br>• `model.safetensors` and `optim.safetensors` (m under `<name>`, v under `v.<name>`), written via `.tmp` and then renamed;<br>• `state.json` (sorted keys, ryu floats, 2-space indent, no trailing newline);<br>• `latest.json`;<br>• `TRUNK`, saved once at `max_steps - D` for wsd. |
 | **Lineage** | `model_sha256` and `parent_sha256` (the `init_from` model, copied on resume) follow forge's rules. `optim_offset` is set by `init_optim`. |
 | **Telemetry** | The same `event`, `telemetry`, `eval`, `checkpoint`, `trunk` and `done` lines, with the same keys.<br>`telemetry` also carries `devices`, `backend` and `precision`. |
-| **stdin commands** | `pause`, `resume`, `stop`, `checkpoint` and `set_lr` are handled.<br>`autotune`, `set_threads` and `swap_kernel` are acknowledged and ignored, because they have no meaning on XLA. |
+| **stdin commands** | `pause`, `resume`, `stop`, `checkpoint` and `set_lr` are handled, with forge's events, including `applied <cmd>` after a rejected value.<br>`set_threads` is validated like forge's (`1..=1024`) and otherwise ignored. `autotune` and `swap_kernel` are acknowledged and ignored. None of the three has a meaning on XLA.<br>Multi-host: process 0 reads stdin and every process applies the command at the same update (see "Multi-host slices"). |
 
 ## Measured parity
 
@@ -53,7 +53,7 @@ Every number here comes from this host:
 - accel: JAX 0.4.38 on CPU;
 - both single-threaded under `nice -n 19` while the long run was training.
 
-The command is `ACCEL_PARITY_REPORT=report.json nice -n 19 taskset -c 3 /home/user/accel-venv/bin/python -m pytest accel/tests -q`. It ran 20 tests, all passing, in 197 s.
+The command is `ACCEL_PARITY_REPORT=report.json nice -n 19 taskset -c 3 /home/user/accel-venv/bin/python -m pytest accel/tests -q`. Its 25 tests all pass. The disk next to the long run had about 2 GB free, so the last run was split into four `-k` groups, each with a scratch `--basetemp` deleted afterwards (each one-window base-s test writes about 600 MB of checkpoints): 23 + 25 + 24 + 147 s.
 
 ### Forward pass and eval (`runs/base-g3/FINAL`, `runs/base-s/FINAL`)
 
@@ -66,6 +66,8 @@ The command is `ACCEL_PARITY_REPORT=report.json nice -n 19 taskset -c 3 /home/us
 | `eval` base-g3, `data/stores/base`, val, b2 t64 ×3, seed 4242 | 2.834432601928711 / 0.4765625 | 2.834432601928711 / 0.4765625 | **0** |
 | `eval` base-g3, `data/out/base-v2`, same settings | 2.471578359603882 / 0.5625 | 2.471578359603882 / 0.5625 | **0** |
 | `eval` base-s, `data/stores/base`, train, b3 t48 ×2, seed 9 | 2.7626500129699707 / 0.4548611 | 2.7626500129699707 / 0.4548611 | **0** |
+
+Perplexity is identical where the loss is: 15.841768264770508 in the base-s case, where numpy's `exp` had given 15.841769218444824.
 
 **Where the 1.1e-5 eval gap came from.** With a tree-summed softmax denominator (`--xent fast`), accel's eval loss was 1.14e-5 above forge's on both base-g3 cases (2.834444046 vs 2.834432602) and 1.05e-5 on base-s.
 
@@ -105,12 +107,22 @@ Every eval uses it. Training steps use it with `--xent forge`; the default for t
 
 | | step-1 loss | step-2 loss | grad_norm (steps 1, 2) | weights after 2 steps |
 | --- | --- | --- | --- | --- |
-| `init_optim` (warm moments, `optim_offset` 2800 in both) | 11.560369491577148 in both | 8.730643273 vs 8.730642319 | 53.738216 vs 53.738182; 34.378838 vs 34.378845 | max abs 1.19e-7 against a max update of 1.41e-3; 0 elements above 1e-6; m and v within 3.3e-6 and 4.3e-6 relative |
-| fresh moments | 11.560369491577148 in both | 6.827474594 vs 6.827520847 | 53.738216 vs 53.738182; 29.708687 vs 29.709433 | max abs 2.70e-4; 582 of 12.6 M elements above 1e-5; median 1.4e-8 |
+| `init_optim` (warm moments, `optim_offset` 2800 in both) | 11.560369491577148 in both | 8.730643273 vs 8.730642319 | 53.738216 vs 53.738182; 34.378838 in both | max abs 1.19e-7 against a max update of 1.41e-3; 0 elements above 1e-6; m and v within 3.1e-6 and 4.0e-6 relative |
+| fresh moments | 11.560369491577148 in both | 6.827474594 vs 6.827519417 | 53.738216 vs 53.738182; 29.708687 vs 29.709433 | max abs 2.67e-4; 584 of 12.6 M elements above 1e-5; median 1.4e-8 |
 
 The fresh-moment gap is AdamW, not the port. With zero moments the first update is `lr·g/(|g| + eps')`, which is close to `lr·sign(g)`. For gradients that are essentially zero, the last-bit f32 noise decides the sign, so a few hundred weights move by a sizeable fraction of lr in different directions. The spec found the same thing with an independent reference.
 
 With warm moments the update is a smooth function of g. The two implementations then agree to one f32 ulp of the weights.
+
+**AdamW alone, bit for bit.** With `grad_clip 0` the clip coefficient is 0, so an update depends only on the loaded weights and moments (`init_optim`) and the f32 hyper-parameters, which are bit-equal in forge and accel. The GEMM noise is then out of the picture:
+
+| Run | Before the fma guard | Now |
+| --- | --- | --- |
+| tiny, `init_from` a forge step-2 checkpoint, 3 updates | 14,241 of 32,928 weights differ, max abs 1.49e-8 | 0 differ; `model.safetensors` sha256 equal; m and v equal |
+| `runs/base-s/FINAL`, one-window store, 2 updates | 5,143,771 of 12,587,904 weights differ, max abs 5.96e-8 | 0 differ |
+| `runs/base-s/FINAL`, `data/stores/base`, b1 t16, 3 updates | max abs 8.94e-8 | 0 differ |
+
+The guard adds integer operations, not memory traffic. An isolated AdamW over 1 M elements took 8.45 ms with it and 6.94 ms without, on one CPU core; that is small next to a train step.
 
 **Round trips.**
 
@@ -119,21 +131,24 @@ With warm moments the update is a smooth function of g. The two implementations 
 | accel → forge | forge read an accel checkpoint with `eval` and `logits` | Eval loss and accuracy identical (3.045487403869629 / 0.703125). Logits max abs 1.19e-7, argmax equal. |
 | accel → forge | `forge train --resume <accel step-2>` ran to step 4 | Matches forge's uninterrupted run: weights within 2.77e-6, step-4 loss identical (3.2456345558166504), `rng_state` equal. |
 | forge → accel | Rewrote forge's `model.safetensors` and `optim.safetensors` with accel's writer | Same sha256. |
-| forge → accel | `accel.train --resume <forge step-2>` ran to step 4 | Matches forge's uninterrupted run: weights within 1.19e-7, loss identical. |
-| accel → accel | Resumed an accel run | Bit-identical to the uninterrupted run (same `model.safetensors` sha256). |
+| forge → accel | `accel.train --resume <forge step-2>` ran to step 4 | Matches forge's uninterrupted run: weights within 1.19e-7; step-4 loss 3.2456347942 vs 3.2456345558, 1 ulp (accel's default tree-summed loss value). |
+| accel → accel | Resumed an accel run | Bit-identical to the uninterrupted run (same `model.safetensors` sha256). Measured on CPU; on GPU see the determinism flag below. |
 
 **Devices, precision and the cluster.**
 
 | Check | Result |
 | --- | --- |
-| 2 devices (forced on the host) vs 1 device, tiny run | Losses within 4.8e-7; weights within 8.9e-7. The batch is split and the gradients are all-reduced. |
+| 2 devices (forced on the host) vs 1 device, tiny run | Losses within 4.8e-7; weights within 1.12e-6. The batch is split and the gradients are all-reduced. |
+| Gradient all-reduce | Once per update, after the micro-batch loop. Compiled step of the base recipe (B8 × T256 × accum 4) on 8 forced host devices: 50,351,632 B all-reduced per update, in the entry computation. Before: 62,934,532 B inside the loop body, so 4 × 62.9 MB per update, with `tok_emb`'s gradient reduced twice (embedding scatter and tied head). With accum 1: 50,351,620 B, was 62,934,532 B. |
+| Simulated 2-host slice (2 processes × 4 CPU devices, gloo) vs one process with 8 devices | Weights within 8.24e-7 after 6 updates. |
+| Commands on the simulated slice, written to process 0's stdin only | `stop`, `checkpoint` + `stop`, `set_lr`, and `pause` / `set_lr` / `resume`: both processes exit 0 at the same step with the same parameter sha256. Before: `stop` hung both processes (process 0 entered the final eval alone), and `set_lr` left the two copies of the "replicated" weights different. |
 | `--remat` vs plain | Losses identical; weights within 4.3e-7. |
 | `--precision bf16` vs f32, tiny run | Losses within 4.9e-4 over 4 steps (bf16 has 8 mantissa bits). |
 | `cluster/fabric.py` with `FORGE=accel/bin/forge-accel` | `init --scratch` (accel) is forge's exact init to 1.8e-12; that is the one lr-1e-12 step. Then `work` ×2, `aggregate` and `eval` (val 4.166696548461914). `forge eval` of the same global model gives the identical 4.166696548461914. |
 
 ### Gaps that remain, and why
 
-1. **Logits: ≤ 2.2e-5.** Both sides are true f32. They differ in GEMM summation order: forge's AVX-512 blocking with FMA versus XLA/Eigen. They also differ in `exp` and `rsqrt` implementations. Averaged into an eval loss this vanishes; the eval losses above are identical.
+1. **Logits: ≤ 2.2e-5.** Both sides are true f32. They differ in GEMM summation order: forge's AVX-512 blocking with FMA versus XLA/Eigen. They also differ in `exp` and `rsqrt` implementations. Averaged into an eval loss this usually vanishes; the eval losses above are bit-identical. It does not always: `runs/base-s/FINAL` on general-v3's val bin (`--split val --batch 3 --seq 100 --batches 3 --seed 99`) gives forge 3.503957986831665 and accel 3.503958225250244, 1 ulp apart, reproducibly.
 
 2. **grad_norm: ≤ 6.4e-7 relative.**
    - forge sums the squared gradients in f64.
@@ -148,7 +163,7 @@ With warm moments the update is a smooth function of g. The two implementations 
 
 ## Running it
 
-accel needs Python ≥ 3.10, `numpy` and `jax`. It was tested with jax 0.4.38 and uses only stable APIs: `jax.jit` with `NamedSharding`, `make_array_from_callback`, `lax.scan` and `custom_vjp`.
+accel needs Python ≥ 3.10, `numpy` and `jax`. It was tested with jax 0.4.38. It uses `jax.jit` with `NamedSharding`, `make_array_from_callback`, `lax.scan` and `custom_vjp`, plus `jax.experimental.shard_map` for the per-device micro-batch loop.
 
 The commands take the same arguments as forge:
 
@@ -170,7 +185,7 @@ python -m accel.logits --ckpt runs/base-g3/FINAL --prompt-ids 1,200,3000 --ctx 5
 | `--devices N` | Use the first N devices. |
 | `--xent forge` | Report forge's exact loss value. |
 | `--init fast` | A numpy init. The default replays forge's generator, which takes about 1.7 s per million weights. |
-| `--no-final` | Do not write `FINAL`. |
+| `--final` | Point `<run>/FINAL` at the last checkpoint when the run reaches `max_steps`, never after a `stop`. Off by default, like forge, whose runs get `FINAL` from `scripts/longrun.py`. `--no-final` is still accepted. |
 
 **Environment variables** are honoured by `forge-accel`:
 
@@ -185,7 +200,8 @@ python -m accel.logits --ckpt runs/base-g3/FINAL --prompt-ids 1,200,3000 --ctx 5
 | `ACCEL_DISTRIBUTED=1` | Multi-host. |
 
 **Data parallelism.**
-- Parameters and moments are replicated. Each batch, `[accum, batch, seq]`, is split along `batch` over a 1-D `data` mesh, and XLA all-reduces the gradients inside the compiled step.
+- Parameters and moments are replicated. Each batch, `[accum, batch, seq]`, is split along `batch` over a 1-D `data` mesh.
+- Each device runs the micro-batch loop on its rows and accumulates its own gradients (`shard_map`); one `psum` after the loop all-reduces them. That is one all-reduce of the parameter size per update, whatever `grad_accum` is.
 - `batch` should be a multiple of the device count. Otherwise accel uses the largest device count that divides it and emits a warn event.
 - The math does not depend on the device count; this was checked above with 1 and 2 devices.
 
@@ -217,7 +233,8 @@ What a run needs on the machine:
 - Run the same command on every host with `ACCEL_DISTRIBUTED=1` (`jax.distributed.initialize()`).
 - Every host needs the store. All hosts draw the same global batch from the same seed, and each feeds only its own shards.
 - Process 0 prints and writes checkpoints, so `out_dir` must be on host 0's disk or on shared storage.
-- This path is written but untested here; there was no slice available.
+- Only process 0 reads stdin; a driver such as `scripts/longrun.py` talks to one process. Every loop iteration, each process adds its part of a 4-integer record (pause, stop, lr override) to a sum over all processes: process 0's part is its requested state, the others' parts are zero. So all processes pause, stop and change the lr at the same update, one update later than on a single process. The record from one iteration is read in the next, behind the update in flight, so the host does not wait for the device. `checkpoint` runs on process 0 at once; it needs no other process.
+- Tested only as a simulated slice on one host: 2 processes with gloo CPU collectives (`test_multihost_commands_reach_every_process`, and 2 × 4 devices by hand). Not tested on a real TPU slice.
 
 ### Kaggle / Colab TPU
 
@@ -237,7 +254,10 @@ Copy the checkpoint directory back out before the session ends; notebook session
 pip install "jax[cuda12]==0.4.38" numpy
 ACCEL_PRECISION=bf16 python -m accel.train --config RUN.json     # bf16 tensor cores
 python -m accel.train --config RUN.json                           # true f32 (no TF32)
+XLA_FLAGS=--xla_gpu_deterministic_ops=true python -m accel.train --config RUN.json   # parity checks, bit-exact resumes
 ```
+
+GPU runs are not bit-reproducible by default. The gradient of the embedding gather is a scatter-add over token ids, which repeat within a batch, and XLA's GPU backend may run it with atomics, in a varying order. Set `--xla_gpu_deterministic_ops=true` for parity checks and for resumes that must match an uninterrupted run bit for bit. The bit-identical accel → accel resume above was measured on CPU. None of this was run on GPU hardware here.
 
 ## The cluster and the long run
 

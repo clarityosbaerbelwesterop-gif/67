@@ -34,15 +34,17 @@ f32 = np.float32
 M64 = (1 << 64) - 1
 
 # ---------------------------------------------------------------------------------------------- libm
-# forge computes RoPE tables, bias corrections and the LR cosine with Rust's f32::powf/cos/sin, which
-# call the C library's powf/cosf/sinf. Calling the same functions keeps those constants bit-identical.
+# forge computes RoPE tables, bias corrections, the LR cosine and eval perplexity with Rust's
+# f32::powf/cos/sin/exp, which call the C library's powf/cosf/sinf/expf. Calling the same functions keeps
+# those values bit-identical (numpy's float32 exp differs from glibc expf for ~40 % of inputs).
 try:
     _libm = ctypes.CDLL(ctypes.util.find_library("m") or "libm.so.6")
-    for _n in ("powf", "cosf", "sinf"):
+    for _n in ("powf", "cosf", "sinf", "expf"):
         getattr(_libm, _n).restype = ctypes.c_float
     _libm.powf.argtypes = (ctypes.c_float, ctypes.c_float)
     _libm.cosf.argtypes = (ctypes.c_float,)
     _libm.sinf.argtypes = (ctypes.c_float,)
+    _libm.expf.argtypes = (ctypes.c_float,)
 except (OSError, AttributeError):  # pragma: no cover - non-glibc host: correctly rounded f64 fallback
     _libm = None
 
@@ -57,6 +59,17 @@ def cosf(a) -> np.float32:
 
 def sinf(a) -> np.float32:
     return f32(_libm.sinf(float(a))) if _libm else f32(math.sin(float(a)))
+
+
+def expf(a) -> np.float32:
+    """Rust's f32::exp (eval perplexity = loss.exp(), main.rs eval_cmd)."""
+    x = float(a)
+    if _libm:
+        return f32(_libm.expf(x))
+    try:
+        return f32(math.exp(x))
+    except OverflowError:
+        return f32(np.inf)
 
 
 # ---------------------------------------------------------------------------------------------- RNG
@@ -302,11 +315,23 @@ def set_final(run_dir, target) -> Path:
 
 
 # ---------------------------------------------------------------------------------------------- data
+def check_ids(ids: np.ndarray, limit: int) -> None:
+    """forge's BadToken check (isa machine.rs token(), in the Embed and Xent ops): every id must be an
+    integer in [0, limit). On a device an out-of-range id would not fail: XLA's gather returns NaN rows,
+    and the run would train and checkpoint NaN weights with exit code 0. Raises ValueError with forge's
+    wording (index = position in the row-major [batch, seq] tensor) minus forge's program counter."""
+    a = np.asarray(ids).reshape(-1)
+    if a.size and (int(a.max()) >= limit or int(a.min()) < 0):
+        i = int(np.flatnonzero((a < 0) | (a >= limit))[0])
+        raise ValueError(f"token[{i}] = {int(a[i])} is not an integer id below {limit}")
+
+
 class Store:
     """data.rs: a store meta (train.meta.json) or `synthetic:P`. batch() is forge's sample_windows."""
 
     def __init__(self, spec: str, model_vocab: int):
         self.spec = spec
+        self.limit = int(model_vocab)  # token ids must be below the model's vocabulary (embedding rows)
         if spec.startswith("synthetic:"):
             p = spec.split(":", 1)[1]
             if not p.isdigit():
@@ -348,10 +373,11 @@ class Store:
         return len(self.val if split == "val" else self.train)
 
     def _tokens(self, split: str, idx: np.ndarray) -> np.ndarray:
+        """int64 token ids (unchecked)."""
         if self.period:
-            return ((idx % self.period) % self.vocab).astype(np.int32)
+            return (idx % self.period) % self.vocab
         tok = self.val if split == "val" else self.train
-        return np.asarray(tok[idx], dtype=np.int64).astype(np.int32)
+        return np.asarray(tok[idx], dtype=np.int64)
 
     def starts(self, rng: Rng, split: str, b: int, t: int) -> np.ndarray:
         n = self.split_len(split)
@@ -362,7 +388,10 @@ class Store:
     def windows(self, split: str, starts: np.ndarray, t: int) -> tuple[np.ndarray, np.ndarray]:
         idx = starts[:, None] + np.arange(t + 1, dtype=np.int64)[None, :]
         w = self._tokens(split, idx)
-        return w[:, :-1], w[:, 1:]
+        x, y = w[:, :-1], w[:, 1:]
+        check_ids(x, self.limit)  # forge's Embed op checks the inputs first,
+        check_ids(y, self.limit)  # then Xent the targets
+        return x.astype(np.int32), y.astype(np.int32)
 
     def batch(self, rng: Rng, split: str, b: int, t: int) -> tuple[np.ndarray, np.ndarray]:
         """(x, y) int32 [b, t]: per row start = below(N - t - 1), x = w[s:s+t], y = w[s+1:s+t+1]."""

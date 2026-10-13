@@ -88,8 +88,12 @@ def rms_norm(x, w, eps: float, dim: int):
 
 
 def rope(x, cos, sin):
-    """Interleaved pairs: (x[2i], x[2i+1]) <- (a*c - b*s, a*s + b*c). x [B,T,h,hd]; cos/sin [T,hd/2]."""
-    a, b = x[..., 0::2], x[..., 1::2]
+    """Interleaved pairs: (x[2i], x[2i+1]) <- (a*c - b*s, a*s + b*c). x [B,T,h,hd]; cos/sin [T,hd/2].
+    The pairs are split by a reshape to [..., hd/2, 2], not by strided slices: x[..., 0::2] lowers to a
+    gather over the head dim and its gradient to a scatter-add, slow paths on TPUs and GPUs. Same
+    arithmetic either way."""
+    xr = x.reshape(*x.shape[:-1], x.shape[-1] // 2, 2)
+    a, b = xr[..., 0], xr[..., 1]
     c, s = cos[None, :, None, :], sin[None, :, None, :]
     return jnp.stack([a * c - b * s, a * s + b * c], axis=-1).reshape(x.shape)
 
