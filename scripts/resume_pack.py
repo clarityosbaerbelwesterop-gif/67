@@ -15,9 +15,15 @@ are unreadable, which keeps the restricted Rouge weights confidential.
 Corpora (data/out) are not packed; rebuild them with data/build_corpus_v2.py and
 data/build_corpus_v3.py.
 
+Instead of the shared key, the pack can be encrypted to the receiver's age public key
+(X25519): the receiver runs `age-keygen -o forge.key` on its own machine and hands over
+only the public line "age1..."; no secret ever exists on this side or in a chat.
+
 Usage:
   FORGE_PACK_KEY=... python3 scripts/resume_pack.py save [--dry-run]
   FORGE_PACK_KEY=... python3 scripts/resume_pack.py restore
+  python3 scripts/resume_pack.py save --age-recipient age1...      (receiver's public key)
+  python3 scripts/resume_pack.py restore --age-identity forge.key  (receiver's private key file)
 """
 from __future__ import annotations
 
@@ -25,6 +31,7 @@ import argparse
 import hashlib
 import json
 import os
+import re
 import subprocess
 import sys
 import time
@@ -117,7 +124,10 @@ def key() -> str:
     return k
 
 
-def save(dry: bool) -> int:
+AGE_RECIPIENT = re.compile(r"^age1[02-9ac-hj-np-z]{58}$")  # bech32 X25519 recipient
+
+
+def save(dry: bool, recipient: str | None = None) -> int:
     files = collect()
     total = sum(f.lstat().st_size for f in files)
     print(f"{len(files)} files, {total / 1e6:.0f} MB before encryption")
@@ -125,15 +135,23 @@ def save(dry: bool) -> int:
         for f in files:
             print(f"  {f.relative_to(ROOT)}  {f.lstat().st_size / 1e6:.1f} MB")
         return 0
-    k = key()
+    if recipient is not None and not AGE_RECIPIENT.match(recipient):
+        sys.exit("--age-recipient must be an age X25519 public key (age1 followed by 58 characters)")
+    k = key() if recipient is None else None
     PACK.mkdir(parents=True, exist_ok=True)
     for old in PACK.glob("part-*"):
         old.unlink()
     lst = PACK / ".files"
     lst.write_text("\n".join(str(f.relative_to(ROOT)) for f in files) + "\n")
     tar = subprocess.Popen(["tar", "-C", str(ROOT), "-cf", "-", "-T", str(lst)], stdout=subprocess.PIPE)
-    enc = subprocess.Popen(["openssl", "enc", "-aes-256-cbc", "-pbkdf2", "-iter", "200000", "-salt", "-pass", "env:FORGE_PACK_KEY"],
-                           stdin=tar.stdout, stdout=subprocess.PIPE, env={**os.environ, "FORGE_PACK_KEY": k})
+    if recipient is None:
+        enc = subprocess.Popen(["openssl", "enc", "-aes-256-cbc", "-pbkdf2", "-iter", "200000", "-salt", "-pass",
+                                "env:FORGE_PACK_KEY"], stdin=tar.stdout, stdout=subprocess.PIPE,
+                               env={**os.environ, "FORGE_PACK_KEY": k})
+        cipher = "openssl enc -aes-256-cbc -pbkdf2 -iter 200000 -salt (key: $FORGE_PACK_KEY)"
+    else:
+        enc = subprocess.Popen(["age", "-r", recipient], stdin=tar.stdout, stdout=subprocess.PIPE)
+        cipher = f"age X25519 (recipient: {recipient})"
     tar.stdout.close()
     parts, n, h = [], 0, hashlib.sha256()
     while chunk := enc.stdout.read(PART):
@@ -143,27 +161,34 @@ def save(dry: bool) -> int:
         parts.append({"file": p.name, "bytes": len(chunk), "sha256": hashlib.sha256(chunk).hexdigest()})
         n += 1
     if enc.wait() or tar.wait():
-        sys.exit("tar/openssl failed")
+        sys.exit("tar or encryption failed")
     lst.unlink()
     state = json.loads((ROOT / "runs/longrun/state.json").read_text())
     (PACK / "MANIFEST.json").write_text(json.dumps({
         "created": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()), "files": len(files), "plain_bytes": total,
-        "cipher": "openssl enc -aes-256-cbc -pbkdf2 -iter 200000 -salt (key: $FORGE_PACK_KEY)",
+        "cipher": cipher,
         "parts": parts, "sha256": h.hexdigest(),
         "current": {k2: (v or {}).get("dir") for k2, v in state.get("current", {}).items()}}, indent=2) + "\n")
     print(f"wrote {n} parts to {PACK.relative_to(ROOT)}")
     return 0
 
 
-def restore() -> int:
-    k = key()
+def restore(identity: str | None = None) -> int:
     man = json.loads((PACK / "MANIFEST.json").read_text())
+    use_age = str(man.get("cipher", "")).startswith("age")
+    if use_age and not identity:
+        sys.exit("this pack is encrypted with age: pass --age-identity <private key file>")
+    k = None if use_age else key()
     for p in man["parts"]:
         if hashlib.sha256((PACK / p["file"]).read_bytes()).hexdigest() != p["sha256"]:
             sys.exit(f"{p['file']} is corrupt")
     cat = subprocess.Popen(["cat"] + [str(PACK / p["file"]) for p in man["parts"]], stdout=subprocess.PIPE)
-    dec = subprocess.Popen(["openssl", "enc", "-d", "-aes-256-cbc", "-pbkdf2", "-iter", "200000", "-pass", "env:FORGE_PACK_KEY"],
-                           stdin=cat.stdout, stdout=subprocess.PIPE, env={**os.environ, "FORGE_PACK_KEY": k})
+    if use_age:
+        dec = subprocess.Popen(["age", "-d", "-i", identity], stdin=cat.stdout, stdout=subprocess.PIPE)
+    else:
+        dec = subprocess.Popen(["openssl", "enc", "-d", "-aes-256-cbc", "-pbkdf2", "-iter", "200000", "-pass",
+                                "env:FORGE_PACK_KEY"], stdin=cat.stdout, stdout=subprocess.PIPE,
+                               env={**os.environ, "FORGE_PACK_KEY": k})
     cat.stdout.close()
     tar = subprocess.run(["tar", "-C", str(ROOT), "-xpf", "-"], stdin=dec.stdout)
     if dec.wait() or tar.returncode:
@@ -176,5 +201,7 @@ if __name__ == "__main__":
     ap = argparse.ArgumentParser()
     ap.add_argument("cmd", choices=["save", "restore"])
     ap.add_argument("--dry-run", action="store_true")
+    ap.add_argument("--age-recipient", help="save: encrypt to this age public key instead of $FORGE_PACK_KEY")
+    ap.add_argument("--age-identity", help="restore: the age private key file for an age-encrypted pack")
     a = ap.parse_args()
-    sys.exit(save(a.dry_run) if a.cmd == "save" else restore())
+    sys.exit(save(a.dry_run, a.age_recipient) if a.cmd == "save" else restore(a.age_identity))
