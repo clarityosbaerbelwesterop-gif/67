@@ -182,7 +182,7 @@ Dazu für Quasnir, Rouge und Darus:
 Vorteil: kein Einschlafen und kein Sitzungs-Limit mehr; die Maschine läuft 24/7.
 
 1. Repo klonen, `cargo build --release -p forge`, Python 3 mit numpy installieren.
-2. Den Trainingsstand übertragen, ohne Fortschritt zu verlieren. `scripts/resume_pack.py` packt Champions, den aktuellen Base-TRUNK und die Releases verschlüsselt (AES-256, Schlüssel aus der Umgebungsvariable `FORGE_PACK_KEY`, mindestens 32 Zeichen). Der Owner setzt den Schlüssel als Secret der Cloud-Umgebung. Er wird nie im Chat geteilt.
+2. Den Trainingsstand übertragen, ohne Fortschritt zu verlieren. `scripts/resume_pack.py save` packt die Gewichte aller Checkpoints, auf die Langlauf-State, RSI-Champions und `latest.json` zeigen, dazu den vollen laufenden Checkpoint mit Optimizer und die Metadaten. Verschlüsselt wird mit AES-256, der Schlüssel kommt aus der Umgebungsvariable `FORGE_PACK_KEY` (mindestens 32 Zeichen). Der Owner setzt den Schlüssel als Secret der Cloud-Umgebung; er wird nie im Chat geteilt. Korpora werden nicht gepackt, sondern mit `data/build_corpus_v2.py` und `data/build_corpus_v3.py` neu gebaut. Auf der neuen Maschine: `resume_pack.py restore`.
 3. `bash scripts/resume_all.sh` starten. Der Lauf setzt am letzten Checkpoint fort.
 
 Mit GPU oder TPU: `accel/` ist eine exakte JAX-Kopie von forge. Die Parität ist gemessen
@@ -196,7 +196,7 @@ Self-hosted Runner bekommen das Label `forge`.
 
 **Die Lage:** Die heutigen Modelle haben 12,6 M Parameter auf 4 CPU-Kernen (≈ 0,17 TFLOP/s). Die Frontier-Modelle trainieren mit etwa 10⁶-mal mehr Rechenleistung. Effizienz allein (Muon, Daten, keine Ausfälle) bringt geschätzt 2–3×. Ausrichtung, nach Wirkung geordnet:
 
-1. **Kein Leerlauf.** Heute gingen etwa 7 h durch Einschlafen verloren. Die größte sofort verfügbare Steigerung ist eine 24/7-Maschine (Abschnitt 7).
+1. **Kein Leerlauf.** In den letzten 14 Stunden gingen etwa 7,5 h verloren, weil der Container eingeschlafen ist. Die größte sofort verfügbare Steigerung ist eine 24/7-Maschine (Abschnitt 7).
 2. **Beschleuniger.** TPU/GPU über `accel/` (TPU Research Cloud, Kaggle, Startup-Programme).
 3. **Muon.** Beim Training von Grund auf gemessen: val-Loss 4,806 statt 5,051 (AdamW) nach 300 Schritten; AdamW-Endstand nach 179 Schritten erreicht. Beim Weitertraining kein Effekt. Nutzen für alles, was neu trainiert wird (`"optimizer": "muon"`).
 4. **Jede Release-Stufe ≥ 2×.** Die Release-Leiter erzwingt das automatisch.
