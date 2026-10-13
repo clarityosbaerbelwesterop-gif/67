@@ -54,6 +54,13 @@ Usage:
   python3 scripts/longrun.py [--days 3 | --forever] [--allow-v1]
   python3 scripts/longrun.py --status
   python3 scripts/longrun.py --prepare      plan the next cycle, write its base config, exit
+  python3 scripts/longrun.py --storage-report [--json] [--include-restricted] [--root DIR]
+                                            read-only: reclaimable disk space by category, protected or not
+
+Disk: below min_free_gb, every `forge train` start first runs the hygiene the run already
+applies (superseded runs, rebased inits of finished runs, finished runs to keep_last, RSI
+rounds of finished RSI steps; never FINAL or anything protected), logs what each stage
+freed, re-checks, and only then fails the step (exit 1, retried by scripts/supervise.sh).
 Exit codes: 0 finished, 1 step failed (retry later), 3 fatal (fix the cause),
 4 another instance is running, 75 stopped (STOP file or signal).
 """
@@ -77,6 +84,7 @@ import threading
 import time
 from collections import Counter
 from pathlib import Path
+from stat import S_ISDIR
 
 REPO = Path(__file__).resolve().parent.parent
 EX_OK, EX_FAIL, EX_FATAL, EX_LOCKED, EX_STOPPED = 0, 1, 3, 4, 75
@@ -553,6 +561,7 @@ class LongRun:
         self.finished_file = self.dir / "FINISHED"
         self.signal_stop = False
         self.redo = False  # --rearbitrate: decide a finished cycle again
+        self.skip_restricted = False  # --storage-report without --include-restricted: never look at a restricted family
         self.code_sha = self.code_digest()
         self.state: dict = read_json(self.state_path) or {}
         self.base_cfg = read_json(root / cfg["base_config"])
@@ -1271,59 +1280,116 @@ class LongRun:
         return f"runs/{run}/FINAL"
 
     def check_disk(self) -> None:
+        """Before every `forge train`: below min_free_gb, first run the hygiene the run
+        already applies (disk_hygiene_stages: least deletion first, the same functions and
+        protections, re-checking after every stage) and log what each stage removed and
+        freed; fail the step only when that is not enough."""
         need = float(self.cfg.get("min_free_gb") or 0) * 1e9
         if not need:
             return
-        if shutil.disk_usage(self.root).free < need:
-            self.hygiene_all(superseded_only=True)
-            self.prune_rebased()
+        free = start = shutil.disk_usage(self.root).free
+        if free >= need:
+            return
+        self.log(f"disk low: {free / 1e9:.1f} GB free < min_free_gb {self.cfg['min_free_gb']}; "
+                 "running the hygiene before failing the step", free_bytes=free)
+        for name, stage in self.disk_hygiene_stages():
+            before = free
+            removed = stage(False)
             free = shutil.disk_usage(self.root).free
-            if free < need:
-                raise StepFailed(f"only {free / 1e9:.1f} GB free (< min_free_gb {self.cfg['min_free_gb']}); free disk space")
+            self.log(f"disk hygiene ({name}): removed {len(removed)}, freed {(free - before) / 1e9:.2f} GB, "
+                     f"{free / 1e9:.1f} GB free", removed=removed, freed_bytes=free - before, free_bytes=free)
+            if free >= need:
+                self.log(f"disk ok after the hygiene: {free / 1e9:.1f} GB free", freed_bytes=free - start)
+                return
+        raise StepFailed(f"only {free / 1e9:.1f} GB free (< min_free_gb {self.cfg['min_free_gb']}) after the hygiene freed "
+                         f"{(free - start) / 1e9:.2f} GB; free disk space (`python3 scripts/longrun.py --storage-report` "
+                         "lists what could go, read-only)")
 
     # ---- disk hygiene
+    def _restricted_name(self, name: str) -> bool:
+        return any(name == f or name.startswith((f"{f}-", f"{f}.", f"rsi-{f}-"))
+                   for f in self.cfg.get("restricted_models") or [])
+
+    def _hidden(self, path) -> bool:
+        """Only for --storage-report without --include-restricted (skip_restricted): a path
+        of a restricted family under runs/ (runs/rouge-*, runs/rsi/rouge-*, runs/releases/
+        rouge-*, runs/longrun/configs/rouge-*, ...) is neither opened nor listed."""
+        if not self.skip_restricted:
+            return False
+        parts = Path(path).parts
+        return "runs" in parts and any(self._restricted_name(c) for c in parts[parts.index("runs") + 1:])
+
+    def _hidden_run(self, run: str) -> bool:
+        return self.skip_restricted and self._restricted_name(run)
+
+    def _glob_runs(self, pattern: str) -> list:
+        """runs/<pattern>; with skip_restricted, level by level so that a restricted
+        directory is never listed or entered."""
+        runs = self.root / "runs"
+        if not self.skip_restricted:
+            return list(runs.glob(pattern))
+        paths = [runs]
+        for part in pattern.split("/"):
+            paths = [q for p in paths for q in sorted(p.glob(part)) if not self._hidden(q)]
+        return paths
+
     def protected(self) -> set:
-        """Real paths that must never be deleted: every FINAL target, every
+        """Real paths that must never be deleted (protected_reasons)."""
+        return set(self.protected_reasons())
+
+    def protected_reasons(self) -> dict:
+        """Real paths that must never be deleted, each with why: every FINAL target, every
         current model and the base it derives from, every champion in
         runs/champions.json (and its base), every RSI champion (and its history),
         every latest.json, and the init_from of every unfinished run (a rebased
         init still in use)."""
-        keep = set()
-        runs = self.root / "runs"
-        for link in runs.glob("*/FINAL"):
-            keep.add(link.resolve())
-        for latest in runs.glob("*/latest.json"):
+        keep: dict = {}
+
+        def add(path: Path, why: str) -> None:
+            if not self._hidden(path):
+                keep.setdefault(Path(path).resolve(), []).append(why)
+
+        for link in self._glob_runs("*/FINAL"):
+            add(link, f"FINAL target of {link.parent.name}")
+        for latest in self._glob_runs("*/latest.json"):
             v = read_json(latest)
             if v and v.get("dir"):
-                keep.add(self.p(v["dir"]).resolve())
-        for cur in self.state.get("current", {}).values():
+                run = latest.parent.name
+                done = (self.state.get("runs", {}).get(run) or {}).get("finished") or (latest.parent / "FINAL").exists()
+                add(self.p(v["dir"]), f"latest.json target of {run}" if done else f"latest checkpoint of the unfinished run {run}")
+        for fam, cur in self.state.get("current", {}).items():
             for k in ("dir", "base"):
                 if cur and cur.get(k):
-                    keep.add(self.p(cur[k]).resolve())
+                    add(self.p(cur[k]), f"current {fam} champion" if k == "dir" else f"base of the current {fam} champion")
         ch = read_json(self.p(self.cfg["champions"]["out"]))
         champs = ch.get("champions") if isinstance(ch, dict) else None
-        for e in champs.values() if isinstance(champs, dict) else []:
+        for fam, e in champs.items() if isinstance(champs, dict) else []:
             for k in ("dir", "base"):
                 if isinstance(e, dict) and e.get(k):
-                    keep.add(self.p(e[k]).resolve())
+                    add(self.p(e[k]), f"{fam} champion in runs/champions.json" if k == "dir" else
+                        f"base of the {fam} champion in runs/champions.json")
         cycles = self.state.get("cycles", {})
         last = max(cycles, key=int) if cycles else None
         for run, info in self.state.get("runs", {}).items():
+            if self._hidden_run(run):
+                continue
             m = re.search(r"-g(\d+)$", run)
             merge_open = bool(m) and m.group(1) == last and cycles[last].get("steps", {}).get("darus_merge", {}).get("status") != "done"
-            if (not info.get("finished") or merge_open) and info.get("config"):
+            if (not info.get("finished") or merge_open) and info.get("config") and not self._hidden(self.p(info["config"])):
                 # an unfinished run's init, or a rebased init the cycle's darus merge still needs (--via)
                 init = (read_json(self.p(info["config"])) or {}).get("init_from")
                 if init:
-                    keep.add(self.p(init).resolve())
-        for cj in runs.glob("rsi/*/champion.json"):
+                    add(self.p(init), f"init_from of the unfinished run {run}" if not info.get("finished") else
+                        f"init_from of {run}: the g{last} darus merge still needs it (--via)")
+        for cj in self._glob_runs("rsi/*/champion.json"):
             v = read_json(cj) or {}
-            for h in [v] + list(v.get("history") or []):
+            for i, h in enumerate([v] + list(v.get("history") or [])):
                 if h.get("dir"):
-                    keep.add(self.p(h["dir"]).resolve())
+                    add(self.p(h["dir"]), f"RSI champion of {cj.parent.name}" if i == 0 else
+                        f"RSI champion history of {cj.parent.name}")
         return keep
 
-    def _prune_dir(self, run_dir: Path, keep_last: int, protect: set) -> list:
+    def _prune_dir(self, run_dir: Path, keep_last: int, protect: set, dry: bool = False) -> list:
         steps = sorted((int(m.group(1)), d) for d in run_dir.iterdir()
                        if (m := STEP_RE.match(d.name)) and d.is_dir() and not d.is_symlink())
         victims = steps[:-keep_last] if keep_last > 0 else steps
@@ -1331,20 +1397,22 @@ class LongRun:
         for _, d in victims:
             if d.resolve() in protect or d.name == "FINAL":
                 continue
-            shutil.rmtree(d)
+            if not dry:
+                shutil.rmtree(d)
             removed.append(self.rel(d))
         return removed
 
-    def prune_run(self, run: str, keep_last: int) -> list:
+    def prune_run(self, run: str, keep_last: int, dry: bool = False) -> list:
+        """dry=True (--storage-report): the same victims, nothing deleted or logged."""
         run_dir = self.root / "runs" / run
-        if run not in self.state.get("runs", {}) or not run_dir.is_dir():
+        if self._hidden_run(run) or run not in self.state.get("runs", {}) or not run_dir.is_dir():
             return []  # only runs this orchestrator created are ever pruned
-        removed = self._prune_dir(run_dir, keep_last, self.protected())
-        if removed:
+        removed = self._prune_dir(run_dir, keep_last, self.protected(), dry)
+        if removed and not dry:
             self.log(f"{run}: pruned old checkpoints", removed=removed)
         return removed
 
-    def hygiene_all(self, superseded_only: bool = False) -> list:
+    def hygiene_all(self, superseded_only: bool = False, dry: bool = False) -> list:
         h = self.cfg["hygiene"]
         cur_runs = {c.get("run") for c in self.state.get("current", {}).values() if c}
         g_now = self.state.get("cycle")
@@ -1357,38 +1425,65 @@ class LongRun:
             superseded = run not in cur_runs and gen is not None and g_now is not None and gen < g_now
             if superseded_only and not superseded:
                 continue
-            removed += self.prune_run(run, int(h["keep_last_superseded"] if superseded else h["keep_last"]))
+            removed += self.prune_run(run, int(h["keep_last_superseded"] if superseded else h["keep_last"]), dry)
         return removed
 
-    def prune_rebased(self) -> list:
+    def prune_rebased(self, dry: bool = False) -> list:
         """Rebased inits (runs/<run>/rebased-init-*) of finished runs; protected ones
         (an unfinished run's init_from, a champion) stay."""
         protect = self.protected()
         removed = []
         for run, info in self.state.get("runs", {}).items():
             run_dir = self.root / "runs" / run
-            if not info.get("finished") or not run_dir.is_dir():
+            if self._hidden_run(run) or not info.get("finished") or not run_dir.is_dir():
                 continue
             for d in sorted(run_dir.glob(REBASED_PREFIX + "*")):
                 if d.is_dir() and not d.is_symlink() and d.resolve() not in protect:
-                    shutil.rmtree(d)
+                    if not dry:
+                        shutil.rmtree(d)
                     removed.append(self.rel(d))
-        if removed:
+        if removed and not dry:
             self.log("pruned the rebased inits of finished runs", removed=removed)
         return removed
 
-    def prune_rsi(self, model: str) -> list:
+    def prune_rsi(self, model: str, dry: bool = False) -> list:
         out = self.root / "runs" / "rsi" / model
-        if not self.cfg["hygiene"]["prune_rsi_rounds"] or not (out / "rounds").is_dir():
+        if self._hidden_run(model) or not self.cfg["hygiene"]["prune_rsi_rounds"] or not (out / "rounds").is_dir():
             return []
         protect = self.protected()
         removed = []
         for rd in sorted((out / "rounds").iterdir()):
             if rd.is_dir():
-                removed += self._prune_dir(rd, 0, protect)
-        if removed:
+                removed += self._prune_dir(rd, 0, protect, dry)
+        if removed and not dry:
             self.log(f"rsi {model}: pruned non-champion round checkpoints", removed=len(removed))
         return removed
+
+    def finished_rsi_models(self) -> list:
+        """RSI models whose step will not run again: every RSI step of a finished cycle (its
+        hygiene step pruned them already) and a done, skipped or finally failed RSI step of
+        the cycle in progress (its hygiene step prunes them at the end of the cycle)."""
+        out, attempts = [], int(self.cfg.get("step_attempts", 2))
+        for g, cyc in sorted(self.state.get("cycles", {}).items(), key=lambda kv: int(kv[0])):
+            for fam in ARBITER_FAMILIES:
+                st = cyc.get("steps", {}).get(f"{fam}_rsi")
+                if st and (cyc.get("status") == "done" or st.get("status") in ("done", "skipped")
+                           or (st.get("status") == "error" and st.get("attempts", 1) >= attempts)):
+                    out.append(st.get("rsi_model") or self.name(fam, int(g)))
+        return list(dict.fromkeys(out))
+
+    def disk_hygiene_stages(self) -> list:
+        """The hygiene the run already applies, least deletion first, as (name, fn(dry)):
+        superseded runs down to hygiene.keep_last_superseded and the rebased inits of
+        finished runs (what check_disk always ran), finished runs down to hygiene.keep_last
+        (finalize, step_hygiene) and the non-champion RSI round checkpoints of finished RSI
+        steps (step_hygiene). Every stage keeps protected() and FINAL. check_disk runs them
+        when the disk is low; --storage-report runs them with dry=True."""
+        return [("superseded runs", lambda dry: self.hygiene_all(superseded_only=True, dry=dry)),
+                ("rebased inits of finished runs", lambda dry: self.prune_rebased(dry=dry)),
+                ("finished runs", lambda dry: self.hygiene_all(dry=dry)),
+                ("RSI rounds of finished RSI steps",
+                 lambda dry: [r for m in self.finished_rsi_models() for r in self.prune_rsi(m, dry=dry)])]
 
     # ---- evaluation and gates
     def eval_ckpt(self, ckpt: str, store: str) -> dict:
@@ -2313,6 +2408,489 @@ def procs_or_self(pid: int) -> list:
     return [pid] if pid_alive(pid) else []
 
 
+# --------------------------------------------------------------------------- storage report (read-only)
+
+NOT_RUN_DIRS = {"longrun", "rsi", "releases", "vgpu", "headcenter"}
+PATH_TOKEN_RE = re.compile(r"[^\s'\"()\[\],;]*runs/[^\s'\"()\[\],;]+")
+REPORT_CATEGORIES = {
+    "hygiene": "what the existing low-disk hygiene would remove (superseded runs to keep_last_superseded, rebased inits "
+               "of finished runs, finished runs to keep_last, RSI rounds of finished RSI steps; FINAL and protected stay)",
+    "optim": "optim.safetensors (AdamW moments) of the checkpoints of finished runs that stay; only resuming that exact "
+             "checkpoint, or init_optim from a TRUNK, reads them",
+    "unreferenced": "step-* checkpoints of finished runs that no state.json, releases.json, champions.json, config, "
+                    "champion.json, latest.json or FINAL names (and the hygiene would not remove)",
+    "data": "corpus stores and build caches (data/out, data/stores, data/cache, runs/longrun/stores)",
+    "tmp": "pytest and temp leftovers on the same filesystem (pytest-of-*, humaneval tmp*.jsonl, .pytest_cache, "
+           "merge-search candidates, interrupted atomic writes)",
+    "build": "cargo build output (target/)",
+    "worktrees": "git worktrees of agent sessions (.claude/worktrees)",
+    "kept": "every protected checkpoint, for reference: kept by the run, not reclaimable",
+}
+
+
+def du(path: Path, hidden=None) -> dict:
+    """Allocated bytes under `path` (symlinks are not followed) and the bytes deleting it
+    would free: a file with hard links outside `path` (e.g. a release) frees nothing.
+    `hidden(p)` paths are skipped (partial=True)."""
+    dirs, files, partial = 0, {}, False  # files: (dev, inode) -> (bytes, links seen here, st_nlink)
+
+    def visit(p: Path) -> None:
+        nonlocal dirs, partial
+        try:
+            st = os.lstat(p)
+        except OSError:
+            partial = True
+            return
+        if not S_ISDIR(st.st_mode):  # a file or a symlink (never followed)
+            k = (st.st_dev, st.st_ino)
+            seen = files[k][1] if k in files else 0
+            files[k] = (st.st_blocks * 512, seen + 1, st.st_nlink)
+            return
+        dirs += st.st_blocks * 512
+        try:
+            names = sorted(os.listdir(p))
+        except OSError:
+            partial = True
+            return
+        for name in names:
+            q = p / name
+            if hidden and hidden(q):
+                partial = True
+                continue
+            visit(q)
+
+    if not (hidden and hidden(path)):
+        visit(Path(path))
+    total = dirs + sum(v[0] for v in files.values())
+    frees = dirs + sum(v[0] for v in files.values() if v[1] >= v[2])
+    return {"bytes": total, "frees": frees, "partial": partial}
+
+
+def fmt_bytes(n: float) -> str:
+    for unit, f in (("GB", 1e9), ("MB", 1e6), ("kB", 1e3)):
+        if abs(n) >= f:
+            return f"{n / f:.2f} {unit}"
+    return f"{int(n)} B"
+
+
+def json_strings(x):
+    if isinstance(x, str):
+        yield x
+    elif isinstance(x, dict):
+        for k, v in x.items():
+            yield from json_strings(k)
+            yield from json_strings(v)
+    elif isinstance(x, list):
+        for v in x:
+            yield from json_strings(v)
+
+
+class StorageReport:
+    """Reclaimable space by category, each item with its size, what deleting it would free
+    and whether it is protected (and why). Read-only: nothing is created, changed or
+    deleted; the owner decides. The hygiene category comes from the run's own hygiene
+    functions with dry=True, so it lists exactly what they would remove."""
+
+    def __init__(self, o: LongRun, tmpdir: Path):
+        self.o, self.root, self.tmpdir = o, o.root, Path(tmpdir)
+        self.runs = self.root / "runs"
+        self.real_root = self.root.resolve()
+        self.prot = self.protection()
+
+    def children(self, d: Path) -> list:
+        """Sorted entries of `d` (names only: a hidden entry is never stat'ed or entered)."""
+        return [x for x in (sorted(d.iterdir()) if d.is_dir() else []) if not self.o._hidden(x)]
+
+    # ---- protection: the hygiene's own set plus releases, TRUNKs, via chains and lineage
+    def protection(self) -> dict:
+        o = self.o
+        prot = {k: list(v) for k, v in o.protected_reasons().items()}
+
+        def add(path, why: str) -> None:
+            p = o.p(path)
+            if not o._hidden(p) and os.path.lexists(p):
+                prot.setdefault(p.resolve(), []).append(why)
+
+        for d in self.children(self.runs / "releases"):
+            if d.is_dir() and not d.name.endswith(".tmp"):
+                add(d, f"release {d.name}")
+        for t in sorted(o._glob_runs("*/TRUNK")):
+            add(t, f"TRUNK of {t.parent.name} (wsd: a base generation continues it with init_optim)")
+        cycles = o.state.get("cycles", {})
+        last = max(cycles, key=int) if cycles else None
+        for run, info in o.state.get("runs", {}).items():
+            m = re.search(r"-g(\d+)$", run)
+            if o._hidden_run(run) or not (m and m.group(1) == last) or not info.get("config"):
+                continue
+            init = (read_json(o.p(info["config"])) or {}).get("init_from") if not o._hidden(o.p(info["config"])) else None
+            if init:
+                add(init, f"init_from of {run} (latest cycle g{last})")
+        cyc = cycles.get(last) or {}
+        if last and cyc.get("steps", {}).get("darus_merge", {}).get("status") != "done":
+            g = int(last)
+            mc = read_json(o.dir / "configs" / f"{o.name('darus', g)}.merge.json")
+            if isinstance(mc, dict):
+                for d in mc.get("via") or []:
+                    add(d, f"--via chain of the g{g} darus merge")
+                for d in mc.get("children") or []:
+                    add(d, f"child of the g{g} darus merge")
+            else:
+                base = cyc.get("parent_base") or (o.state.get("current", {}).get("base") or {}).get("dir")
+                for fam in ("rouge", "quasnir"):
+                    if base and not o._hidden_run(o.name(fam, g)):
+                        child, chain = o.merge_parent(fam, g, base)
+                        for d in [child] + chain:
+                            add(d, f"--via chain of the g{g} darus merge ({fam})" if d != child else
+                                f"child of the g{g} darus merge ({fam})")
+        for fam, cur in (o.state.get("current") or {}).items():
+            if cur and cur.get("dir") and not o._hidden(o.p(cur["dir"])):
+                for d in self.lineage(cur["dir"]):
+                    add(d, f"lineage of the current {fam} champion (back to its base)")
+        return {k: list(dict.fromkeys(v)) for k, v in prot.items()}
+
+    def lineage(self, start: str) -> list:
+        """The checkpoints between `start` and the base it derives from (state.json
+        config.init_from; a rebased init ends the chain at its new_base)."""
+        o = self.o
+        bases = {o.p(b).resolve() for b in o.known_bases()}
+        out, d = [], start
+        for _ in range(16):
+            p = o.p(d)
+            if o._hidden(p) or not p.exists() or p.resolve() in bases:
+                break
+            if d != start:
+                out.append(d)
+            if (read_json(p / "rebase.json") or {}).get("type") == "rebase":
+                break
+            d = ((read_json(p / "state.json") or {}).get("config") or {}).get("init_from")
+            if not d:
+                break
+        return out
+
+    def reasons(self, path: Path) -> list:
+        return self.prot.get(Path(path).resolve(), [])
+
+    def entry(self, path: Path, note: str, reasons: list | None = None, **extra) -> dict:
+        reasons = self.reasons(path) if reasons is None else reasons
+        u = du(path, self.o._hidden)
+        e = {"path": self.o.rel(path), "bytes": u["bytes"], "frees": u["frees"], "protected": bool(reasons),
+             "why": reasons or [note], **extra}
+        if u["partial"]:
+            e["partial"] = True
+        return e
+
+    # ---- what exists
+    def run_dirs(self) -> list:
+        """(run, dir, finished) of every training run directory runs/<run>/."""
+        out, state_runs = [], self.o.state.get("runs", {})
+        for d in self.children(self.runs):
+            if not d.is_dir() or d.is_symlink() or d.name in NOT_RUN_DIRS:
+                continue
+            info = state_runs.get(d.name)
+            finished = bool(info.get("finished")) if info is not None else (
+                (d / "FINAL").exists() or not (d / "latest.json").exists())
+            out.append((d.name, d, finished))
+        return out
+
+    def rsi_models(self) -> list:
+        """(model, dir, finished) of runs/rsi/<model>/; running while its RSI step runs."""
+        running = {st.get("rsi_out") for c in self.o.state.get("cycles", {}).values()
+                   for st in c.get("steps", {}).values() if st.get("status") == "running" and st.get("rsi_out")}
+        return [(d.name, d, self.o.rel(d) not in running) for d in self.children(self.runs / "rsi")
+                if d.is_dir() and not d.is_symlink()]
+
+    @staticmethod
+    def steps(d: Path) -> list:
+        return sorted(x for x in d.iterdir() if STEP_RE.match(x.name) and x.is_dir() and not x.is_symlink()) \
+            if d.is_dir() else []
+
+    def ckpts_of_finished(self) -> list:
+        """Every checkpoint directory of a finished run or a finished RSI model."""
+        out = []
+        for _, d, finished in self.run_dirs():
+            if finished:
+                out += self.steps(d) + [x for x in sorted(d.iterdir()) if x.is_dir() and not x.is_symlink() and
+                                        (x.name in ("TRUNK", "FINAL") or x.name.startswith(REBASED_PREFIX))]
+        for _, d, finished in self.rsi_models():
+            if finished:
+                for rd in self.children(d / "rounds"):
+                    out += self.steps(rd)
+        return out
+
+    def references(self) -> set:
+        """Real paths (and their parents) named in state.json, releases.json, champions.json,
+        current.json, the configs, the RSI champion.json, every latest.json and FINAL."""
+        o = self.o
+        files = [o.state_path, o.p(o.cfg["releases"]["registry"]), o.p(o.cfg["champions"]["out"]), o.dir / "current.json"]
+        files += sorted((o.dir / "configs").glob("*.json")) + sorted((self.root / "training" / "configs").glob("*.json"))
+        files += sorted(o._glob_runs("rsi/*/champion.json")) + sorted(o._glob_runs("*/latest.json"))
+        refs = set()
+
+        def ref(p: Path) -> None:
+            if not o._hidden(p):
+                rp = p.resolve()
+                refs.add(rp)
+                refs.update(rp.parents)
+
+        for f in files:
+            v = None if o._hidden(f) else read_json(f)
+            for s in json_strings(v) if v is not None else []:
+                for m in PATH_TOKEN_RE.finditer(s):
+                    tok = m.group(0).rstrip(".:")
+                    ref(Path(tok) if os.path.isabs(tok) else self.root / tok)
+        for link in o._glob_runs("*/FINAL"):
+            ref(link)
+        return refs
+
+    # ---- categories
+    def hygiene(self) -> list:
+        seen: dict = {}
+        for name, stage in self.o.disk_hygiene_stages():
+            for rel in stage(True):
+                seen.setdefault(rel, name)
+        return [self.entry(self.o.p(rel), f"the hygiene would remove it ({name})", stage=name) for rel, name in seen.items()]
+
+    def unreferenced(self, listed: set) -> list:
+        refs, out, state_runs = self.references(), [], self.o.state.get("runs", {})
+        for d in self.ckpts_of_finished():
+            if STEP_RE.match(d.name) and self.o.rel(d) not in listed and d.resolve() not in refs:
+                run = d.parent.name
+                why = ("step checkpoint of a finished run that nothing references; "
+                       + ("the hygiene keeps it (hygiene.keep_last)" if run in state_runs else
+                          "an RSI round of a model no finished RSI step names: the hygiene does not prune it"
+                          if "rounds" in d.parts else
+                          "the orchestrator did not create this run, so the hygiene never prunes it"))
+                out.append(self.entry(d, why))
+        return out
+
+    def optim(self, gone: set) -> list:
+        o = self.o
+        cur_base = (o.state.get("current", {}).get("base") or {}).get("run")
+        needed: dict = {}
+        for run, info in o.state.get("runs", {}).items():
+            cfgp = o.p(info["config"]) if info.get("config") else None
+            if info.get("finished") or not cfgp or o._hidden_run(run) or o._hidden(cfgp):
+                continue
+            c = read_json(cfgp) or {}
+            if c.get("init_optim") and c.get("init_from"):
+                needed[o.p(c["init_from"]).resolve()] = f"init_optim source of the unfinished run {run}"
+        if cur_base:
+            needed.setdefault((self.runs / cur_base / "TRUNK").resolve(),
+                              f"TRUNK of the current base run {cur_base}: the next base generation continues its moments")
+        out = []
+        for d in self.ckpts_of_finished():
+            f = d / "optim.safetensors"
+            if o.rel(d) in gone or not f.is_file():
+                continue
+            why_needed = needed.get(d.resolve())
+            reasons = self.reasons(d) + ([why_needed] if why_needed else [])
+            out.append(self.entry(f, "optimizer state of a finished checkpoint that nothing resumes", reasons=reasons,
+                                  optim_needed=bool(why_needed)))
+        return out
+
+    def data(self) -> list:
+        o, c = self.o, self.o.cfg["corpus"]
+        refs: dict = {}
+
+        def ref(path, why: str) -> None:
+            if path and not o._hidden(o.p(path)):
+                refs.setdefault(o.p(path).resolve(), []).append(why)
+
+        cur = o.state.get("corpus") or {}
+        for k, v in (cur.get("stores") or {}).items():
+            ref(v.get("meta"), f"corpus {cur.get('version')} in use ({k})")
+        notes = {"v1": "fallback with --allow-v1", "v2": "longrun rebuilds v2 when it is missing",
+                 "v3": "adopted between cycles once complete and valid", "v4": "adopted between cycles once complete and valid"}
+        for ver, note in notes.items():
+            for k, m in (c.get(ver) or {}).items():
+                ref(m, f"configured corpus {ver} ({k}): {note}")
+        ref(c.get("reference_tokenizer"), "reference tokenizer: every store is validated against it")
+        ref((o.state.get("mix") or {}).get("meta"), "Rouge mix store in use (state.json mix)")
+        ref("data/stores/evals", "eval sets (scripts/humaneval.py, RSI decontamination)")
+        ref("data/out/evals", "eval sets (decontamination of the corpus builds)")
+        for f in sorted((self.root / "training" / "configs").glob("*.json")):
+            for s in json_strings(read_json(f)):
+                if s.startswith("data/"):
+                    ref(s, f"named by training/configs/{f.name}")
+        out = []
+        for parent, note in (("data/out", "corpus store that neither the config nor the state names"),
+                             ("data/stores", "store that neither the config nor the state names"),
+                             ("data/cache", "corpus build cache: only a rebuild of its corpus reads it"),
+                             ("runs/longrun/stores", "mix store that state.json no longer uses")):
+            for d in self.children(o.p(parent)):
+                if not d.is_dir() or d.is_symlink():
+                    continue
+                rd = d.resolve()
+                why = [w for p, ws in refs.items() if p == rd or rd in p.parents for w in ws]
+                out.append(self.entry(d, note, reasons=list(dict.fromkeys(why))))
+        return out
+
+    def tmp(self) -> list:
+        o, t = self.o, now()
+        dev = os.lstat(self.root).st_dev
+        recent = "modified within the last hour: may be in use"
+        out = []
+
+        def add(p: Path, note: str, busy: str | None = None) -> None:
+            if o._hidden(p):
+                return
+            try:
+                st = os.lstat(p)
+            except OSError:
+                return
+            if st.st_dev != dev:  # another filesystem: deleting it frees nothing here
+                return
+            reasons = [busy] if busy else ([recent] if t - st.st_mtime < 3600 else [])
+            out.append(self.entry(p, note, reasons=reasons))
+
+        for base in sorted(self.tmpdir.glob("pytest-of-*")) if self.tmpdir.is_dir() else []:
+            for d in sorted(base.iterdir()):
+                if d.is_dir() and not d.is_symlink():
+                    add(d, "pytest basetemp of an earlier session (pytest keeps the last 3)")
+        for f in sorted(self.tmpdir.glob("tmp*.jsonl")) if self.tmpdir.is_dir() else []:
+            add(f, "prompt file scripts/humaneval.py left behind (NamedTemporaryFile delete=False)")
+        for d in (self.root / ".pytest_cache",):
+            if d.is_dir():
+                add(d, "pytest cache")
+        merging = {f"runs/{o.name('darus', int(g))}" for g, c in o.state.get("cycles", {}).items()
+                   if c.get("steps", {}).get("darus_merge", {}).get("status") == "running"}
+        for d in sorted(o._glob_runs("*/search/cand-*")) + sorted(o._glob_runs("*/FINAL.search")):
+            run = o.rel(d).split("/")[:2]
+            add(d, "merge-search candidate left by an interrupted search",
+                "its merge search is running" if "/".join(run) in merging else None)
+        for f in sorted(o._glob_runs("releases/*.tmp")) + sorted(o._glob_runs("*/.FINAL.tmp")) + \
+                sorted(o._glob_runs("longrun/.*.tmp-*")):
+            m = re.search(r"\.tmp-(\d+)$", f.name)
+            add(f, "leftover of an interrupted write",
+                "its writer is still running" if m and pid_alive(int(m.group(1))) else None)
+        return out
+
+    def build(self) -> list:
+        forge = Path(self.o.forge)
+        out = []
+        for d in sorted((self.root / "target").iterdir()) if (self.root / "target").is_dir() else []:
+            if d.is_dir() and not d.is_symlink() and d.name != "tmp":
+                why = [f"holds {self.o.rel(forge)}, the binary the run uses"] if d.resolve() in forge.resolve().parents else []
+                out.append(self.entry(d, "cargo build output: `cargo build` recreates it", reasons=why))
+        return out
+
+    def worktrees(self) -> list:
+        wt = self.root / ".claude" / "worktrees"
+        return [self.entry(d, "", reasons=["git worktree of an agent session: review it, then `git worktree remove`"])
+                for d in (sorted(wt.iterdir()) if wt.is_dir() else []) if d.is_dir() and not d.is_symlink()]
+
+    def kept(self) -> list:
+        out = []
+        for p, why in sorted(self.prot.items(), key=lambda kv: str(kv[0])):
+            if self.real_root in p.parents and not self.o._hidden(p) and p.is_dir():
+                out.append(self.entry(p, "", reasons=why))
+        return out
+
+    def not_inspected(self) -> list:
+        """Names of restricted entries that were skipped (listing their parent only)."""
+        if not self.o.skip_restricted:
+            return []
+        out = []
+        for parent in (self.runs, self.runs / "rsi", self.runs / "releases", self.runs / "longrun" / "stores"):
+            for d in sorted(parent.iterdir()) if parent.is_dir() else []:
+                if self.o._hidden(d) and not d.name.endswith((".jsonl", ".ctl", ".log")):
+                    out.append(self.o.rel(d))
+        return out
+
+    def build_report(self) -> dict:
+        o = self.o
+        cats = {"hygiene": self.hygiene()}
+        listed = {e["path"] for e in cats["hygiene"]}
+        cats["unreferenced"] = self.unreferenced(listed)
+        gone = listed | {e["path"] for e in cats["unreferenced"] if not e["protected"]}
+        cats["optim"] = self.optim(gone)
+        cats["data"] = self.data()
+        cats["tmp"] = self.tmp()
+        cats["build"] = self.build()
+        cats["worktrees"] = self.worktrees()
+        cats["kept"] = self.kept()
+        out = {}
+        for name in ("hygiene", "optim", "unreferenced", "data", "tmp", "build", "worktrees", "kept"):
+            items = sorted(cats[name], key=lambda e: (-e["frees"], e["path"]))
+            free = [e for e in items if not e["protected"]]
+            out[name] = {"description": REPORT_CATEGORIES[name], "items": items, "summary": {
+                "items": len(items), "bytes": sum(e["bytes"] for e in items),
+                "reclaimable_bytes": 0 if name == "kept" else sum(e["frees"] for e in free),
+                "unprotected_items": 0 if name == "kept" else len(free),
+                "protected_items": len(items) - len(free), "protected_bytes": sum(e["bytes"] for e in items if e["protected"])}}
+        du_root = shutil.disk_usage(self.root)
+        unfinished = [r for r, _, done in self.run_dirs() if not done]
+        return {"type": "storage-report", "root": str(self.root), "generated_at": now(), "generated_at_iso": iso(),
+                "read_only": True, "units": "bytes (GB = 1e9 bytes, like min_free_gb)",
+                "disk": {"total_bytes": du_root.total, "free_bytes": du_root.free,
+                         "min_free_gb": o.cfg.get("min_free_gb")},
+                "include_restricted": not o.skip_restricted, "restricted_models": o.cfg.get("restricted_models"),
+                "restricted_not_inspected": self.not_inspected(), "unfinished_runs": unfinished,
+                "categories": out,
+                "total_reclaimable_bytes": sum(c["summary"]["reclaimable_bytes"] for c in out.values()),
+                "optim_not_needed_bytes": sum(e["frees"] for e in out["optim"]["items"] if not e.get("optim_needed")),
+                "hygiene_vs_protection": [e["path"] for e in out["hygiene"]["items"] if e["protected"]]}
+
+
+def storage_report_data(root: Path, cfg: dict, args, tmpdir: Path | None = None) -> dict:
+    """The report as a dict (read-only); tmpdir defaults to $TMPDIR or /tmp."""
+    a = argparse.Namespace(**{**vars(args), "dry_run": True})  # log() never writes events.jsonl
+    o = LongRun(root, cfg, a)
+    o.skip_restricted = not getattr(args, "include_restricted", False)
+    return StorageReport(o, tmpdir or Path(os.environ.get("TMPDIR") or "/tmp")).build_report()
+
+
+def print_storage_report(rep: dict, limit: int = 12) -> None:
+    d = rep["disk"]
+    print(f"storage report for {rep['root']} (read-only: nothing was created, changed or deleted)")
+    print(f"  disk           {fmt_bytes(d['free_bytes'])} free of {fmt_bytes(d['total_bytes'])}; "
+          f"min_free_gb {d['min_free_gb']} (GB = 1e9 bytes)")
+    if rep["restricted_not_inspected"]:
+        print(f"  not inspected  {', '.join(rep['restricted_not_inspected'])} (restricted: "
+              f"{', '.join(rep['restricted_models'] or [])}; the owner adds them with --include-restricted)")
+    if rep["unfinished_runs"]:
+        print(f"  unfinished     {', '.join(rep['unfinished_runs'])} (their checkpoints are left to the run)")
+    print(f"\n  {'category':<13} {'items':>5} {'size':>11} {'reclaimable':>12}  protected")
+    for name, c in rep["categories"].items():
+        s = c["summary"]
+        rec = "-" if name == "kept" else fmt_bytes(s["reclaimable_bytes"])
+        print(f"  {name:<13} {s['items']:>5} {fmt_bytes(s['bytes']):>11} {rec:>12}  "
+              f"{s['protected_items']} ({fmt_bytes(s['protected_bytes'])})")
+    print(f"  {'total':<13} {'':>5} {'':>11} {fmt_bytes(rep['total_reclaimable_bytes']):>12}  "
+          "(unprotected items only; what deleting them would free)")
+    print(f"  optimizer state no step of the run reads (also inside protected checkpoints): "
+          f"{fmt_bytes(rep['optim_not_needed_bytes'])}")
+    if rep["hygiene_vs_protection"]:
+        print(f"  note: the hygiene would remove {len(rep['hygiene_vs_protection'])} item(s) this report's wider rules "
+              "protect: " + ", ".join(rep["hygiene_vs_protection"]))
+    for name, c in rep["categories"].items():
+        if not c["items"]:
+            continue
+        print(f"\n[{name}] {c['description']}")
+        for e in c["items"][:limit]:
+            flag = "PROTECTED " if e["protected"] else "reclaim   "
+            extra = " (optimizer state still needed)" if e.get("optim_needed") else ""
+            extra += " (partly not inspected)" if e.get("partial") else ""
+            print(f"  {flag}{fmt_bytes(e['frees']):>11} of {fmt_bytes(e['bytes']):>11}  {e['path']}{extra}")
+            print(f"  {'':10}{'':>11}    {'; '.join(e['why'])}")
+        if len(c["items"]) > limit:
+            rest = c["items"][limit:]
+            print(f"  ... {len(rest)} more ({fmt_bytes(sum(e['bytes'] for e in rest))}); --json lists every item")
+
+
+def storage_report(root: Path, cfg: dict, args) -> int:
+    try:
+        rep = storage_report_data(root, cfg, args)
+    except Fatal as e:
+        print(f"[longrun] FATAL: {e}", file=sys.stderr)
+        return EX_FATAL
+    if args.json:
+        print(json.dumps(rep, indent=2))
+    else:
+        print_storage_report(rep)
+    return EX_OK
+
+
 # --------------------------------------------------------------------------- CLI
 
 def load_config(path: Path) -> dict:
@@ -2472,7 +3050,11 @@ def main(argv=None) -> int:
     ap.add_argument("--max-cycles", type=int, default=None, help="stop after this many completed cycles")
     ap.add_argument("--allow-v1", action="store_true", help="fall back to the v1 stores if corpus v2 is unavailable")
     ap.add_argument("--dry-run", action="store_true", help="print the plan (step counts, hours); run nothing")
-    ap.add_argument("--json", action="store_true", help="with --dry-run: machine-readable plan")
+    ap.add_argument("--json", action="store_true", help="with --dry-run or --storage-report: machine-readable output")
+    ap.add_argument("--storage-report", action="store_true",
+                    help="read-only: reclaimable disk space by category, each item marked protected or not; deletes nothing")
+    ap.add_argument("--include-restricted", action="store_true",
+                    help="with --storage-report (owner): also inspect the restricted families (restricted_models)")
     ap.add_argument("--tok-per-s", type=float, default=None, help="override the planning throughput")
     ap.add_argument("--status", action="store_true")
     ap.add_argument("--prepare", action="store_true", help="plan the next cycle and write its base config, then exit")
@@ -2491,6 +3073,8 @@ def main(argv=None) -> int:
     except Fatal as e:
         print(f"[longrun] FATAL: {e}", file=sys.stderr)
         return EX_FATAL
+    if args.storage_report:
+        return storage_report(root, cfg, args)
     if args.dry_run:
         return dry_run(root, cfg, args)
     try:
