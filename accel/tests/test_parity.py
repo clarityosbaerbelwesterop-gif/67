@@ -572,6 +572,60 @@ def test_final_only_for_finished_runs(tmp_path):
     assert sorted(os.listdir(tmp_path / "t-nofin")) == ["latest.json", "step-000001"]
 
 
+def test_muon_configs_never_train_adamw(tmp_path):
+    """accel has no Muon: a Muon config (either spelling of the key) is refused instead of training AdamW under
+    a Muon run's name, and muon_* keys under AdamW are refused like forge refuses them, with forge's message."""
+    from accel.config import ConfigError
+    base = tiny_cfg("t-opt", tmp_path, max_steps=1, ckpt_every=0)
+
+    def err(**kw) -> str:
+        with pytest.raises(ConfigError) as e:
+            TrainConfig.from_dict(dict(base, **kw))
+        return str(e.value)
+
+    for kw in ({"optimizer": "muon"}, {"optimiser": "muon"}, {"optimiser": "muon", "muon_lr": 0.02},
+               {"optimizer": "muon", "muon_lr": 0.05, "muon_weight_decay": 0.0}):
+        assert "not implemented by accel" in err(**kw), kw
+    for kw in ({"muon_lr": 0.02}, {"muon_lr": 0.05}, {"optimizer": "adamw", "muon_momentum": 0.95},
+               {"muon_ns_steps": 5}, {"optimiser": "adamw", "muon_weight_decay": 0.0}):
+        m = err(**kw)
+        assert next(k for k in kw if k.startswith("muon_")) in m and '"optimizer": "muon"' in m, (kw, m)
+    assert "adamw|muon" in err(optimizer="sgd")
+    assert "duplicate field `optimizer`" in err(optimizer="adamw", optimiser="adamw")
+    for kw in ({}, {"optimizer": "adamw"}, {"optimiser": "adamw"}, {"muon_lr": None}):
+        c = TrainConfig.from_dict(dict(base, **kw))
+        assert c.optimizer == "adamw" and c.ignored == [] and "optimizer" not in c.to_dict(), kw
+
+    # forge gives the same verdict, with the same message, before it does any work.
+    if FORGE.is_file():
+        for kw in ({"muon_lr": 0.02}, {"optimiser": "adamw", "muon_weight_decay": 0.0}):
+            msgs = {}
+            for kind in ("forge", "accel"):
+                (tmp_path / f"{kind}.json").write_text(json.dumps(dict(base, out_dir=str(tmp_path / kind), **kw)))
+                cmd = [FORGE, "train"] if kind == "forge" else [PY, "-m", "accel.train"]
+                msgs[kind] = run_rc(cmd + ["--config", tmp_path / f"{kind}.json"])
+            record(f"optimizer refusal {kw}", msgs)
+            assert msgs["forge"][0] != 0 and msgs["accel"][0] != 0, msgs
+            assert msgs["forge"][1].removeprefix("forge: ") == msgs["accel"][1].removeprefix("accel: "), msgs
+
+
+def test_muon_checkpoint_state_refused(tmp_path):
+    """resume and init_optim refuse a checkpoint holding Muon optimiser state (forge refuses mixing optimisers);
+    init_from without init_optim takes its weights."""
+    from accel.config import ConfigError
+    from accel.train import Trainer
+    Trainer(TrainConfig.from_dict(tiny_cfg("t-mu", tmp_path, max_steps=1, ckpt_every=0))).run()
+    ck = tmp_path / "t-mu" / "step-000001"
+    st = json.loads((ck / "state.json").read_text())
+    st["config"]["optimizer"] = "muon"  # what forge writes for a Muon run
+    (ck / "state.json").write_text(json.dumps(st))
+    for kw in ({"resume_from": str(ck)}, {"init_from": str(ck), "init_optim": True}):
+        cfg = TrainConfig.from_dict(tiny_cfg("t-mu2", tmp_path / "b", max_steps=2, ckpt_every=0, **kw))
+        with pytest.raises(ConfigError, match="holds muon optimiser state"):
+            Trainer(cfg)
+    Trainer(TrainConfig.from_dict(tiny_cfg("t-mu3", tmp_path / "c", max_steps=2, ckpt_every=0, init_from=str(ck))))
+
+
 HLO_PROBE = r"""
 import re, sys
 import numpy as np

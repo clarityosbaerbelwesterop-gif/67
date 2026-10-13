@@ -221,7 +221,9 @@ lr_muon(step) = lr(step) · `muon_lr` / `lr` (same schedule shape, and scaled by
 0.95, `muon_ns_steps` 5, `muon_weight_decay` 0. `optim.safetensors` holds
 AdamW m/v (`<name>`, `v.<name>`) for the AdamW tensors and the Muon momentum
 under `muon.<name>`; resume and `init_optim` refuse a checkpoint written by the
-other optimizer.
+other optimizer. The key may be spelt `"optimiser"` too. Any `muon_*` key under
+AdamW is refused, even at its default value, so a run meant as Muon cannot
+quietly train AdamW. accel (JAX) has no Muon yet and refuses such configs.
 Darus = θ0 + TIES(τ_rouge, τ_quasnir); both children must share θ0 by sha256.
 
 ## 9. Telemetry and control protocol (trainer ⇄ headcenter)

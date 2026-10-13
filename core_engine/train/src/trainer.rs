@@ -108,9 +108,9 @@ impl Trainer {
         let (eval_p, eval_r) =
             compile(model::build(m, b, t, Head::Eval), opts).map_err(|e| e.to_string())?;
         let muon = cfg.muon().then_some(model::MuonOpts {
-            momentum: cfg.muon_momentum,
-            ns_steps: cfg.muon_ns_steps,
-            weight_decay: cfg.muon_weight_decay,
+            momentum: cfg.muon_momentum(),
+            ns_steps: cfg.muon_ns_steps(),
+            weight_decay: cfg.muon_weight_decay(),
         });
         let (upd_p, _) = compile(
             model::build_update(m, cfg.weight_decay, cfg.grad_clip, muon),
@@ -195,10 +195,10 @@ impl Trainer {
                     "optimizer muon: {} matrices ({} params) on Muon (peak lr {}, momentum {}, {} Newton-Schulz steps, wd {}), {} tensors ({} params) on AdamW (peak lr {})",
                     mu.len(),
                     mu.iter().map(|p| p.len()).sum::<usize>(),
-                    tr.cfg.muon_lr,
-                    tr.cfg.muon_momentum,
-                    tr.cfg.muon_ns_steps,
-                    tr.cfg.muon_weight_decay,
+                    tr.cfg.muon_lr(),
+                    tr.cfg.muon_momentum(),
+                    tr.cfg.muon_ns_steps(),
+                    tr.cfg.muon_weight_decay(),
                     rest.len(),
                     rest.iter().map(|p| p.len()).sum::<usize>(),
                     tr.cfg.lr

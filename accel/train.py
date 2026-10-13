@@ -151,6 +151,16 @@ def eval_windows(ev, params, mesh: Mesh, data: Store, rng: Rng, split: str, b: i
     return f32(loss / cnt), f32(cor / cnt)
 
 
+def _check_adamw_state(st: dict, d, what: str) -> None:
+    """forge refuses to mix optimisers on resume / init_optim; accel runs AdamW only, so the checkpoint's
+    optimiser state must be AdamW too (init_from without init_optim takes the weights of any checkpoint)."""
+    cfg = st.get("config") or {}
+    theirs = cfg.get("optimizer", cfg.get("optimiser", "adamw"))
+    if theirs != "adamw":
+        raise ConfigError(f"{what}: {d} holds {theirs} optimiser state but accel runs optimizer \"adamw\"; "
+                          "mixing optimisers is refused (drop init_optim to start fresh state from the weights)")
+
+
 # ---------------------------------------------------------------------------------------------- trainer
 class Trainer:
     def __init__(self, cfg: TrainConfig, precision: str = "f32", remat: bool = False, devices: int = 0,
@@ -216,6 +226,8 @@ class Trainer:
         return params, zeros, {n: np.zeros(s, f32) for n, s in self.specs}
 
     def _init_moments(self, d: Path):
+        st = json.loads((d / "state.json").read_text())
+        _check_adamw_state(st, d, "init_optim")
         path = d / "optim.safetensors"
         opt, _, _ = fio.read_safetensors(path)
         m, v = {}, {}
@@ -226,7 +238,6 @@ class Trainer:
                 if tuple(opt[key].shape) != tuple(s):
                     raise ConfigError(f"{path}: {key} has shape {list(opt[key].shape)}, model wants {list(s)}")
                 dst[n] = opt[key]
-        st = json.loads((d / "state.json").read_text())
         self.optim_offset = int(st.get("step") or 0) + int(st.get("optim_offset") or 0)
         emit(event("info", f"AdamW moments from {path} ({self.optim_offset} steps behind them)", 0))
         return m, v
@@ -236,6 +247,7 @@ class Trainer:
         st = json.loads((dp / "state.json").read_text())
         if ModelConfig.from_dict(st["config"]["model"]) != self.cfg.model:
             raise ConfigError(f"{d}: model config differs from this run")
+        _check_adamw_state(st, d, "resume")
         w, _, _ = fio.read_safetensors(dp / "model.safetensors")
         opt, _, _ = fio.read_safetensors(dp / "optim.safetensors")
         params, m, v = {}, {}, {}

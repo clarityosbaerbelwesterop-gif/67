@@ -15,11 +15,15 @@ import numpy as np
 
 f32 = np.float32
 
-# Keys of forge's TrainConfig (config.rs:79-137). Anything else in a run config is
-# ignored with a warning (forge itself silently ignores unknown keys: serde default).
+# Keys of forge's TrainConfig (config.rs:79-168; "optimiser" is serde's alias of "optimizer"). Anything else in
+# a run config is ignored with a warning (forge itself silently ignores unknown keys: serde default).
+MUON_KEYS = ("muon_lr", "muon_momentum", "muon_ns_steps", "muon_weight_decay")
 TRAIN_KEYS = ("run", "model", "data", "batch", "seq_len", "grad_accum", "max_steps", "lr", "min_lr", "warmup_steps",
               "weight_decay", "grad_clip", "seed", "init_from", "resume_from", "out_dir", "log_every", "eval_every",
-              "eval_batches", "ckpt_every", "threads", "hbvm_mib", "autotune", "lr_schedule", "decay_steps", "init_optim")
+              "eval_batches", "ckpt_every", "threads", "hbvm_mib", "autotune", "lr_schedule", "decay_steps", "init_optim",
+              "optimizer", "optimiser") + MUON_KEYS
+# accel implements AdamW only; forge's "muon" optimizer is refused here until it is ported.
+OPTIMIZERS = ("adamw",)
 # Keys forge understands but that have no meaning on an XLA device: accepted silently.
 CPU_ONLY_KEYS = ("threads", "hbvm_mib", "autotune")
 MODEL_KEYS = ("vocab_size", "dim", "n_layers", "n_heads", "n_kv_heads", "ffn_hidden", "max_seq_len", "rope_theta",
@@ -152,6 +156,8 @@ class TrainConfig:
     lr_schedule: str = "cosine"
     decay_steps: int = 0
     init_optim: bool = False
+    optimizer: str = "adamw"
+    muon_set: tuple = ()  # muon_* keys the input sets (non-null); only valid with optimizer muon (not serialised)
     ignored: list = field(default_factory=list)  # unknown keys of the input (not serialised)
 
     @staticmethod
@@ -175,6 +181,11 @@ class TrainConfig:
         for k in ("autotune", "init_optim"):
             if k in d and not isinstance(d[k], bool):
                 raise ConfigError(f"`{k}` must be a boolean")
+        if "optimizer" in d and "optimiser" in d:
+            raise ConfigError("duplicate field `optimizer`")  # serde: "optimiser" is an alias of "optimizer"
+        optimizer = d.get("optimizer", d.get("optimiser", "adamw"))
+        if not isinstance(optimizer, str):
+            raise ConfigError("`optimizer` must be a string")
         c = TrainConfig(
             run=d["run"], model=ModelConfig.from_dict(d["model"]), data=d["data"], batch=_uint(d, "batch"),
             seq_len=_uint(d, "seq_len"), max_steps=_uint(d, "max_steps"), lr=_float32(d, "lr"),
@@ -184,7 +195,8 @@ class TrainConfig:
             resume_from=opt_str["resume_from"], log_every=_uint(d, "log_every", 10), eval_every=_uint(d, "eval_every", 0),
             eval_batches=_uint(d, "eval_batches", 10), ckpt_every=_uint(d, "ckpt_every", 0), threads=_uint(d, "threads", 0),
             hbvm_mib=_uint(d, "hbvm_mib", 0), autotune=bool(d.get("autotune", True)), lr_schedule=sched,
-            decay_steps=_uint(d, "decay_steps", 0), init_optim=bool(d.get("init_optim", False)),
+            decay_steps=_uint(d, "decay_steps", 0), init_optim=bool(d.get("init_optim", False)), optimizer=optimizer,
+            muon_set=tuple(k for k in MUON_KEYS if d.get(k) is not None),
             ignored=sorted(k for k in d if k not in TRAIN_KEYS))
         if c.seed >= 1 << 64:
             raise ConfigError("seed must fit in u64")
@@ -204,10 +216,21 @@ class TrainConfig:
             raise ConfigError(f"lr_schedule must be cosine|wsd|constant, not {self.lr_schedule!r}")
         if self.init_optim and self.init_from is None:
             raise ConfigError("init_optim needs init_from")
+        # forge's optimizer checks, then the one accel adds: no Muon (yet), so a Muon config must not
+        # quietly train AdamW here.
+        if self.optimizer not in ("adamw", "muon"):
+            raise ConfigError(f"optimizer must be adamw|muon, not {self.optimizer!r}")
+        if self.optimizer == "adamw" and self.muon_set:
+            raise ConfigError(f"{', '.join(self.muon_set)} set, but optimizer is \"adamw\": "
+                              "muon_* settings need \"optimizer\": \"muon\"")
+        if self.optimizer not in OPTIMIZERS:
+            raise ConfigError(f"optimizer {self.optimizer!r} is not implemented by accel (it runs "
+                              f"{'|'.join(OPTIMIZERS)} only); train this config with forge")
 
     def to_dict(self) -> dict:
         """The config as forge writes it into state.json: every field, f32 values as their f64 expansion,
-        lr_schedule omitted when "cosine", decay_steps when 0, init_optim when false."""
+        lr_schedule omitted when "cosine", decay_steps when 0, init_optim when false. optimizer and muon_* are
+        never written: validate() admits only "adamw" without muon_* keys, which forge omits as well."""
         d = {"run": self.run, "model": self.model.to_dict(), "data": self.data, "batch": self.batch,
              "seq_len": self.seq_len, "grad_accum": self.grad_accum, "max_steps": self.max_steps, "lr": float(self.lr),
              "min_lr": float(self.min_lr), "warmup_steps": self.warmup_steps, "weight_decay": float(self.weight_decay),
@@ -223,7 +246,7 @@ class TrainConfig:
             d["init_optim"] = True
         return d
 
-    # ---------------------------------------------------------------- LR schedule (config.rs:174-220)
+    # ---------------------------------------------------------------- LR schedule (config.rs:210-263)
     def wsd_decay_steps(self) -> int:
         if self.decay_steps > 0:
             return self.decay_steps

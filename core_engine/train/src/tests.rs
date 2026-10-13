@@ -143,10 +143,10 @@ fn cfg(run: &str, out: &str, steps: usize) -> TrainConfig {
         decay_steps: 0,
         init_optim: false,
         optimizer: "adamw".into(),
-        muon_lr: 0.02,
-        muon_momentum: 0.95,
-        muon_ns_steps: 5,
-        muon_weight_decay: 0.0,
+        muon_lr: None,
+        muon_momentum: None,
+        muon_ns_steps: None,
+        muon_weight_decay: None,
     }
 }
 
@@ -1162,6 +1162,15 @@ fn adamw_stays_the_default_and_muon_settings_validate() {
             c.muon_ns_steps,
             c.muon_weight_decay
         ),
+        (None, None, None, None)
+    );
+    assert_eq!(
+        (
+            c.muon_lr(),
+            c.muon_momentum(),
+            c.muon_ns_steps(),
+            c.muon_weight_decay()
+        ),
         (0.02, 0.95, 5, 0.0)
     );
     c.validate().unwrap();
@@ -1191,7 +1200,7 @@ fn adamw_stays_the_default_and_muon_settings_validate() {
     let v = serde_json::to_value(&m).unwrap();
     assert_eq!(v["optimizer"], "muon");
     assert!(v.get("muon_lr").is_none(), "defaults stay implicit");
-    m.muon_lr = 0.01;
+    m.muon_lr = Some(0.01);
     let back: TrainConfig = serde_json::from_value(serde_json::to_value(&m).unwrap()).unwrap();
     assert_eq!(back, m);
     // lr_muon follows the shape of the AdamW schedule: lr(step) · muon_lr / lr.
@@ -1206,21 +1215,97 @@ fn adamw_stays_the_default_and_muon_settings_validate() {
         x.validate().unwrap_err()
     };
     assert!(
-        bad(&|x| x.muon_lr = 0.01, &c).contains("optimizer"),
+        bad(&|x| x.muon_lr = Some(0.01), &c).contains("optimizer"),
         "muon_* without optimizer muon"
     );
     assert!(bad(&|x| x.optimizer = "sgd".into(), &c).contains("adamw|muon"));
-    bad(&|x| x.muon_momentum = 1.0, &m);
-    bad(&|x| x.muon_ns_steps = 0, &m);
-    bad(&|x| x.muon_lr = 0.0, &m);
+    bad(&|x| x.muon_momentum = Some(1.0), &m);
+    bad(&|x| x.muon_ns_steps = Some(0), &m);
+    bad(&|x| x.muon_lr = Some(0.0), &m);
     bad(&|x| x.lr = 0.0, &m);
-    bad(&|x| x.muon_weight_decay = -0.1, &m);
+    bad(&|x| x.muon_weight_decay = Some(-0.1), &m);
+}
+
+/// A run meant as Muon must never quietly train AdamW: the British spelling of
+/// the key selects Muon, and with optimizer "adamw" every explicit muon_* key
+/// is refused, also one equal to its default (review: {"optimiser": "muon",
+/// "muon_lr": 0.02} used to train AdamW).
+#[test]
+fn optimiser_alias_and_explicit_muon_keys_never_fall_back_to_adamw() {
+    let base = serde_json::json!({
+        "run": "d", "model": tiny(8), "data": "synthetic:5", "batch": 2, "seq_len": 8,
+        "max_steps": 30, "lr": 1e-3, "min_lr": 1e-4, "warmup_steps": 3, "out_dir": "/tmp"
+    });
+    let parse = |extra: serde_json::Value| -> Result<TrainConfig, String> {
+        let mut v = base.clone();
+        for (k, x) in extra.as_object().unwrap() {
+            v[k] = x.clone();
+        }
+        let c: TrainConfig = serde_json::from_value(v).map_err(|e| e.to_string())?;
+        c.validate()?;
+        Ok(c)
+    };
+
+    // "optimiser" is the same key as "optimizer".
+    for extra in [
+        serde_json::json!({"optimiser": "muon"}),
+        serde_json::json!({"optimiser": "muon", "muon_lr": 0.02}),
+        serde_json::json!({"optimiser": "muon", "muon_lr": 0.05}),
+    ] {
+        let c = parse(extra.clone()).unwrap();
+        assert!(c.muon(), "{extra} must select Muon");
+        // state.json uses the canonical spelling.
+        let v = serde_json::to_value(&c).unwrap();
+        assert_eq!(v["optimizer"], "muon");
+        assert!(v.get("optimiser").is_none());
+    }
+    assert!(!parse(serde_json::json!({"optimiser": "adamw"}))
+        .unwrap()
+        .muon());
+    // Both spellings at once is ambiguous: serde refuses the duplicate.
+    let e = parse(serde_json::json!({"optimizer": "adamw", "optimiser": "muon"})).unwrap_err();
+    assert!(e.contains("duplicate"), "{e}");
+
+    // Under AdamW (explicit or default), any muon_* key is refused, also at its
+    // default value; the message names the keys.
+    for (k, x) in [
+        ("muon_lr", serde_json::json!(0.02)),
+        ("muon_lr", serde_json::json!(0.05)),
+        ("muon_momentum", serde_json::json!(0.95)),
+        ("muon_ns_steps", serde_json::json!(5)),
+        ("muon_weight_decay", serde_json::json!(0.0)),
+    ] {
+        for opt in [None, Some("adamw")] {
+            let mut extra = serde_json::json!({ k: x });
+            if let Some(o) = opt {
+                extra["optimizer"] = serde_json::json!(o);
+            }
+            let e = parse(extra.clone()).unwrap_err();
+            assert!(
+                e.contains(k) && e.contains("\"optimizer\": \"muon\""),
+                "{extra}: {e}"
+            );
+        }
+    }
+    // A misspelt key that serde ignores, with a muon_* setting next to it.
+    let e = parse(serde_json::json!({"optimzer": "muon", "muon_lr": 0.02})).unwrap_err();
+    assert!(e.contains("muon_lr"), "{e}");
+
+    // Explicit defaults under Muon are accepted and round-trip exactly.
+    let c = parse(serde_json::json!({
+        "optimizer": "muon", "muon_lr": 0.02, "muon_momentum": 0.95,
+        "muon_ns_steps": 5, "muon_weight_decay": 0.0
+    }))
+    .unwrap();
+    assert_eq!(c.muon_lr, Some(0.02));
+    let back: TrainConfig = serde_json::from_value(serde_json::to_value(&c).unwrap()).unwrap();
+    assert_eq!(back, c);
 }
 
 fn muon_cfg(run: &str, out: &str, steps: usize) -> TrainConfig {
     let mut c = cfg(run, out, steps);
     c.optimizer = "muon".into();
-    c.muon_lr = 0.02;
+    c.muon_lr = Some(0.02);
     c
 }
 

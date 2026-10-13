@@ -161,6 +161,8 @@ The guard adds integer operations, not memory traffic. An isolated AdamW over 1 
 
 5. **AMX / bf16 is not tested against forge.** `--precision bf16` implements amx-bf16's arithmetic: both GEMM inputs rounded to bf16 (RNE) with f32 accumulation, in forward and backward. But this host has no AMX, so it could not be compared with forge's `amx-bf16` engine. Runs trained on AMX hosts (base-g3, per `scripts/longrun.py`) used bf16 GEMMs for some shapes. Which shapes is in their telemetry logs, which were not read for this work.
 
+6. **No Muon.** accel implements AdamW only. A config with forge's opt-in `"optimizer": "muon"` (or `"optimiser"`, its alias) stops with a `ConfigError` instead of training AdamW under a Muon run's name. So do `muon_*` keys under AdamW, as in forge. `resume_from`, or `init_from` with `init_optim`, refuses a checkpoint whose `state.json` says `"optimizer": "muon"`. `init_from` without `init_optim` takes such a checkpoint's weights, as forge does when it switches optimizers.
+
 ## Running it
 
 accel needs Python ≥ 3.10, `numpy` and `jax`. It was tested with jax 0.4.38. It uses `jax.jit` with `NamedSharding`, `make_array_from_callback`, `lax.scan` and `custom_vjp`, plus `jax.experimental.shard_map` for the per-device micro-batch loop.
