@@ -10,6 +10,9 @@ mkdir -p runs
 running() { pgrep -f "$1" > /dev/null; }
 gen1_trained=1
 for r in base-s rouge-1 quasnir-1 darus-1; do [ -e "runs/$r/FINAL" ] || gen1_trained=0; done
+# A restored resume pack carries no generation-1 FINALs, but runs/report.json marks
+# generation 1 as finished: never relaunch train_all.sh then.
+[ -e runs/report.json ] && gen1_trained=1
 # Training of generation 1: only while one of its checkpoints is missing (rerunning
 # train_all.sh after it finished would redo the fixed merge over the searched Darus).
 if [ "$gen1_trained" = 0 ] && ! running "bash scripts/train_all.sh"; then
@@ -25,7 +28,9 @@ if ! grep -q '"finished"' runs/benchmarks.jsonl 2>/dev/null && ! running "bash s
   echo "started darus finish chain"
 fi
 if [ ! -e runs/longrun/STOP ] && ! running "scripts/supervise.sh"; then
-  setsid nohup scripts/supervise.sh --days "${LONGRUN_DAYS:-100}" > /dev/null 2>&1 < /dev/null &
+  # Long-run config: $LONGRUN_CONFIG, else the path in runs/longrun/CONFIG, else longrun.json.
+  cfg="${LONGRUN_CONFIG:-$(cat runs/longrun/CONFIG 2>/dev/null)}"
+  setsid nohup scripts/supervise.sh --days "${LONGRUN_DAYS:-100}" --config "${cfg:-training/configs/longrun.json}" > /dev/null 2>&1 < /dev/null &
   echo "started long-run supervisor"
 fi
 if ! running "headcenter.backend"; then

@@ -15,6 +15,7 @@
   "retry_backoff_seconds": 60,
   "min_free_gb": 5,
   "min_steps": 20,
+  "disabled_families": [],
   "throughput": {
     "bench_steps": 3,
     "assumed_tokens_per_s": 1700,

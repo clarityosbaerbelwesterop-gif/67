@@ -125,6 +125,10 @@ DEFAULTS: dict = {
     "retry_backoff_seconds": 60,
     "min_free_gb": 5,
     "min_steps": 20,
+    # Families switched off (only "rouge", "darus"): their steps are skipped (no training,
+    # no RSI, no merge), their champions and releases stay as they are, and their
+    # compute shares go to quasnir and quasnir_rsi in proportion to those two shares.
+    "disabled_families": [],
     "throughput": {"bench_steps": 3, "assumed_tokens_per_s": 1700, "telemetry_min_samples": 10},
     "shares": {"base": 0.47, "quasnir": 0.12, "quasnir_rsi": 0.08, "rouge": 0.13, "rouge_rsi": 0.06,
                "darus": 0.08, "champions": 0.03, "report": 0.03},
@@ -380,11 +384,47 @@ def tool(name: str):
 
 # --------------------------------------------------------------------------- planning (pure)
 
+DISABLEABLE_FAMILIES = ("rouge", "darus")
+FAMILY_STEPS = {"rouge": ("rouge_mix", "rouge", "rouge_rsi", "rouge_gate"),
+                "darus": ("darus_merge", "darus_rsi", "darus_gate")}
+FAMILY_SHARES = {"rouge": ("rouge", "rouge_rsi"), "darus": ("darus",)}
+
+
+def effective_shares(cfg: dict) -> dict:
+    """cfg["shares"] with the shares of the disabled families set to 0 and handed to
+    quasnir and quasnir_rsi in proportion to their own shares (the sum stays 1)."""
+    sh = dict(cfg["shares"])
+    freed = 0.0
+    for fam in cfg.get("disabled_families") or []:
+        for k in FAMILY_SHARES[fam]:
+            freed += sh[k]
+            sh[k] = 0.0
+    if freed:
+        q, r = sh["quasnir"], sh["quasnir_rsi"]
+        sh["quasnir"] = q + freed * (q / (q + r) if q + r else 0.5)
+        sh["quasnir_rsi"] = r + freed * (r / (q + r) if q + r else 0.5)
+    return sh
+
+
+def disabled_step(cfg: dict, name: str) -> str | None:
+    """The disabled family a cycle step belongs to, or None."""
+    for fam in cfg.get("disabled_families") or []:
+        if name in FAMILY_STEPS[fam]:
+            return fam
+    return None
+
+
 def plan_cycle(cfg: dict, g: int, seconds: float, tps: float, tps_source: str, tok_step: int) -> dict:
-    """Step counts and hours for one cycle of `seconds` wall time at `tps` tokens/s."""
-    sh = cfg["shares"]
+    """Step counts and hours for one cycle of `seconds` wall time at `tps` tokens/s.
+    A disabled family gets 0 steps (no min_steps floor)."""
+    sh = effective_shares(cfg)
+    off = set(cfg.get("disabled_families") or [])
     phases = {}
     for fam in TRAIN_FAMILIES:
+        if fam in off:
+            phases[fam] = {"run": cfg["names"][fam].format(g=g), "kind": "train", "share": 0.0, "steps": 0,
+                           "tokens": 0, "hours": 0.0, "disabled": True}
+            continue
         sec = sh[fam] * seconds
         steps = max(int(cfg["min_steps"]), int(math.floor(sec * tps / tok_step + 1e-9)))
         phases[fam] = {"run": cfg["names"][fam].format(g=g), "kind": "train", "share": sh[fam], "steps": steps,
@@ -393,6 +433,9 @@ def plan_cycle(cfg: dict, g: int, seconds: float, tps: float, tps_source: str, t
                       ("report", "eval")):
         phases[key] = {"kind": kind, "share": sh[key], "hours": sh[key] * seconds / 3600}
     phases["darus"]["run"] = cfg["names"]["darus"].format(g=g)
+    for fam in off:
+        for k in FAMILY_SHARES[fam]:
+            phases[k]["disabled"] = True
     return {"generation": g, "seconds": seconds, "hours": seconds / 3600, "tokens_per_s": tps,
             "tps_source": tps_source, "tokens_per_step": tok_step, "phases": phases}
 
@@ -1095,6 +1138,13 @@ class LongRun:
                 continue
             if self.stop_requested():
                 raise Stopped("STOP requested between steps")
+            off = disabled_step(self.cfg, name)
+            if off:
+                st.update({"status": "skipped", "reason": f"family {off} disabled (disabled_families)",
+                           "finished_at": now()})
+                self.save()
+                self.log(f"g{g} {name}: skipped (family {off} disabled)")
+                continue
             if self.code_digest() != self.code_sha:  # nothing runs between steps: no work is lost
                 raise Reload(f"orchestrator code changed; restarting before g{g} {name}")
             self.reload_config()  # phase boundary: config edits apply from the next step on
@@ -2262,7 +2312,11 @@ class LongRun:
                 continue  # decided before a restart
             if self.stop_requested():
                 raise Stopped("STOP during the champion arbiter")
-            if self.arbiter_on(fam):
+            if fam in (self.cfg.get("disabled_families") or []):
+                cur = self.state["current"].get(fam) or {}
+                fams[fam] = {"decision": "kept", "by": "disabled", "dir": cur.get("dir"),
+                             "reason": f"family {fam} disabled: no new candidate, the champion stays"}
+            elif self.arbiter_on(fam):
                 fams[fam] = self.arbitrate(fam, g, cyc)
             elif cyc["steps"].get(f"{fam}_gate", {}).get("decision") == "deferred":
                 d = self.family_gate(fam, g, cyc, defer=False)  # the arbiter was switched off after the gate deferred
@@ -2906,6 +2960,10 @@ def load_config(path: Path) -> dict:
     total = sum(sh.values())
     if abs(total - 1.0) > 1e-6:
         raise Fatal(f"shares in {path} sum to {total}, not 1")
+    off = cfg.get("disabled_families")
+    if not isinstance(off, list) or not set(off) <= set(DISABLEABLE_FAMILIES):
+        raise Fatal(f"disabled_families in {path}: {off!r}; only {list(DISABLEABLE_FAMILIES)} can be disabled "
+                    "(base and quasnir always train)")
     if not set(cfg["champions"]["families"]) <= set(cfg["rsi"]["models"]):
         raise Fatal(f"champions.families in {path} must be among the rsi.models {sorted(cfg['rsi']['models'])}")
     if not set(cfg["rebase"]["families"]) <= {"quasnir", "rouge"}:

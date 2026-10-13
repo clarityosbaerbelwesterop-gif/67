@@ -1,0 +1,11 @@
+{
+  "_comment": "Owner priority until 2026-10-20 (docs/HANDOVER.md section 0): only Quasnir. base keeps training; rouge and darus get no training, RSI or merge, their champions and releases stay. Their shares go to quasnir and quasnir_rsi. Deep-merged over DEFAULTS; select it with runs/longrun/CONFIG or LONGRUN_CONFIG.",
+  "disabled_families": [
+    "rouge",
+    "darus"
+  ],
+  "wait_for": {
+    "_comment": "a restored resume pack has no generation-1 runs/base-s/FINAL; generation 1 is finished (runs/report.json), so do not wait for it",
+    "paths": []
+  }
+}
