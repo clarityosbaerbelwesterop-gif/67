@@ -17,6 +17,23 @@ JAX-Variante für TPU/GPU und ein Orchestrator für einen 100-Tage-Langlauf. Der
 Eigentümer („Owner“) entscheidet. Du arbeitest selbstständig innerhalb der Regeln
 unten, berichtest kurz auf Deutsch und nennst nur gemessene Zahlen.
 
+### 0. Prioritäten des Owners bis 2026-10-20 (gehen allem anderen vor)
+
+- **Du übernimmst ab dem Checkpoint.** Ausgangspunkt ist der Pack auf dem Branch (Commit 298a8ed, base-g4 bei Schritt 16.324). Du trainierst bis nächste Woche weiter, normal und effizient. Nichts Neues bauen, kein Modell installieren.
+- **Fokus nur auf Quasnir.** Base läuft weiter, weil Quasnir darauf aufbaut. Rouge und Darus bekommen kein neues Training und kein RSI. Ihre Champions und Releases bleiben unverändert; nichts davon wird gelöscht.
+  - Technisch: `scripts/longrun.py` hat keinen Schalter, um eine Familie abzuschalten. Ein Anteil von 0 in `shares` trainiert trotzdem mindestens 20 Schritte. Bau das zuerst sauber ein (Schalter plus Test, `training/configs/longrun.json` muss gleich `DEFAULTS` bleiben), teste in einer separaten Arbeitskopie mit `python3 -m pytest -q scripts/tests` und schicke die frei gewordene Zeit an `quasnir` und `quasnir_rsi`.
+- **Qwen nur als Lehrer für Quasnir.**
+  - `Qwen/Qwen3.8-27B` (Apache-2.0) läuft auf deiner Hardware und erzeugt Coding-Aufgaben und Lösungen. Kein Merge, kein Einbau ins System.
+  - Verwendet werden nur Lösungen, die die Sandbox-Tests bestehen. Sie werden dekontaminiert (HumanEval, MBPP, GSM8K) und laufen über den normalen Quasnir-Pfad mit allen Gates.
+  - Die Herkunft kommt ins Manifest. Erst ein A/B-Test gegen das Training ohne Qwen-Daten entscheidet, ob es bleibt.
+- **Champion- und Dangerous-Auswahl laufen unverändert weiter** (Abschnitte 4 und 5).
+- **Aufteilung deiner 5 Agenten:**
+  - **3 Agenten Betrieb:** Überwachung und Neustart, Training und RSI, Messung und Bericht alle 2 Stunden.
+  - **2 Agenten Forschung:** Wie erreichen und übertreffen wir Astra, und wie geht es noch effizienter?
+    - Ergebnis ist ein schriftlicher Bericht mit Quellen. Er enthält Vorschläge, sortiert nach erwartetem Gewinn pro Rechenzeit. Zu jedem Vorschlag gehören der nötige Rechenbedarf und ein A/B-Test, der ihn mit den vorhandenen Gates prüft.
+    - Ehrlich bleiben: Was nur mit mehr Hardware geht, wird als solches gekennzeichnet.
+    - Am laufenden Training ändert sich erst etwas, wenn ein gemessener A/B-Test es belegt.
+
 ### 1. Was du wissen musst, bevor du irgendetwas tust
 
 - **Wo der Langlauf läuft.** Er läuft in einem Cloud-Container einer Claude-Code-Sitzung
