@@ -183,6 +183,48 @@ finished run. It never deletes any of these:
 
 Rebased inits of finished runs are removed.
 
+### Low disk
+
+Before every `forge train` start, the run checks that `min_free_gb` is free. If not,
+it first runs the hygiene it already applies, least deletion first, and re-checks
+after each stage:
+1. superseded runs down to `hygiene.keep_last_superseded`;
+2. rebased inits of finished runs;
+3. finished runs down to `hygiene.keep_last`;
+4. non-champion RSI round checkpoints of RSI steps that will not run again.
+
+Every stage keeps FINAL and everything listed above. `runs/longrun/events.jsonl`
+records what each stage removed and how much it freed (`disk hygiene (...)`). The
+step fails (exit 1; `scripts/supervise.sh` retries with backoff) only when the
+disk is still below `min_free_gb` after all four stages. No other kind of file is
+ever deleted automatically.
+
+### Storage report (read-only)
+
+```
+python3 scripts/longrun.py --storage-report [--json] [--include-restricted] [--root DIR]
+```
+
+This lists reclaimable space by category. For each item it shows its size, how much
+deleting it would free (a file hard-linked by a release frees nothing), and whether it
+is protected, with the reasons. It creates, changes and deletes nothing; the owner
+decides.
+
+| Category | What it lists |
+| --- | --- |
+| `hygiene` | Exactly what the low-disk hygiene above would remove (its own functions, dry run). |
+| `optim` | `optim.safetensors` of kept checkpoints of finished runs. Only resuming that checkpoint reads it, or `init_optim` from the current base run's TRUNK (`optim_needed`). |
+| `unreferenced` | `step-*` dirs of finished runs that no state.json, releases.json, champions.json, config, champion.json, latest.json or FINAL names. |
+| `data` | `data/out`, `data/stores`, `data/cache`, `runs/longrun/stores`. The corpus in use, configured corpora (v2 is rebuilt when missing), the reference tokenizer, eval sets and the Rouge mix in use are protected. |
+| `tmp` | `pytest-of-*`, humaneval `tmp*.jsonl`, `.pytest_cache`, interrupted merge-search candidates and atomic writes (protected while possibly in use). |
+| `build` | `target/` (the directory with the forge binary is protected). |
+| `worktrees` | `.claude/worktrees` (protected: review, then `git worktree remove`). |
+| `kept` | Every protected checkpoint and why: champions, releases, FINAL targets, TRUNKs, the latest checkpoint of an unfinished run, init_from of the latest cycle's runs, the open darus merge's `--via` chain and children, current champions' lineage, and RSI champions with their history. |
+
+Without `--include-restricted`, the report never opens, lists or measures anything of a
+restricted family (`restricted_models`: `runs/rouge-*`, `runs/rsi/rouge-*`,
+`runs/releases/rouge-*`, ...). It names those entries under "not inspected".
+
 ## Config, corpus and restarts
 
 - The config file is re-read at every phase boundary when its sha256 changes, so

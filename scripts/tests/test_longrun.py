@@ -6,6 +6,7 @@ import argparse
 import importlib.util
 import inspect
 import json
+import os
 import subprocess
 import sys
 import time
@@ -782,3 +783,227 @@ def test_a_darus_merge_beyond_the_acceptance_rule_is_no_candidate(tmp_path, monk
     cyc["steps"]["darus_merge"]["accepted"] = True
     o.step_darus_rsi(4, cyc, {})
     assert started[-1] == "runs/darus-g4/FINAL"
+
+
+# --------------------------------------------------------------------------- low disk, storage report
+
+def snapshot(root: Path) -> dict:
+    """Every path under `root` with its mode, size, mtime and link target (symlinks not followed)."""
+    out = {}
+    for p in sorted(root.rglob("*")):
+        st = p.lstat()
+        out[str(p.relative_to(root))] = (st.st_mode, st.st_size, st.st_mtime_ns, os.readlink(p) if p.is_symlink() else None)
+    return out
+
+
+def low_disk_world(tmp_path):
+    """world() plus one victim for every hygiene stage and the protected paths around them."""
+    root, b = world(tmp_path)
+    o = orchestrator(root)
+    o.init_state()
+    o.cfg["min_free_gb"] = 5
+    ckpt(root, "runs/quasnir-g1/step-000010", [1, 0, 0, 0])  # superseded run: everything but FINAL goes
+    ckpt(root, "runs/quasnir-g1/step-000020", [1, 0, 0, 0])
+    final(root, "quasnir-g1", "step-000020")
+    o.state["runs"]["quasnir-g1"] = {"finished": True, "family": "quasnir"}
+    ckpt(root, f"runs/quasnir-g2/{lr.REBASED_PREFIX}abc-lam1", [1, 1, 1, 1])  # rebased init of a finished run
+    for s in ("step-000090", "step-000095"):  # base-g2 (current base) keeps the last 2: step-000090 goes
+        ckpt(root, f"runs/base-g2/{s}", [1, 1, 1, 1])
+    rej = "runs/rsi/quasnir-g2/rounds/rsi-quasnir-g2-r3/step-000060"  # rejected round of a finished RSI step
+    ckpt(root, rej, [1, 1, 1, 1])
+    victims = ["runs/quasnir-g1/step-000010", f"runs/quasnir-g2/{lr.REBASED_PREFIX}abc-lam1", "runs/base-g2/step-000090", rej]
+    keep = ["runs/quasnir-g1/step-000020", "runs/base-g2/step-000095", "runs/base-g2/step-000100",
+            "runs/quasnir-g2/step-000050", "runs/rsi/rouge-g2/rounds/rsi-rouge-g2-r2/step-000060",
+            "runs/rouge-g2/step-000050", "runs/base-g3/step-000100", "runs/darus-g2/FINAL"]
+    return root, o, victims, keep
+
+
+def fake_disk(monkeypatch, free):
+    monkeypatch.setattr(lr.shutil, "disk_usage", lambda p: argparse.Namespace(total=100e9, used=0, free=free()))
+
+
+def test_low_disk_runs_the_existing_hygiene_logs_it_and_only_then_fails(tmp_path, monkeypatch):
+    root, o, victims, keep = low_disk_world(tmp_path)
+    fake_disk(monkeypatch, lambda: 1.4e9)  # nothing the hygiene may delete is enough
+    started = []
+    monkeypatch.setattr(lr.LongRun, "forge_train", lambda self, *a: started.append(a) or (0, False))
+    with pytest.raises(lr.StepFailed, match=r"only 1\.4 GB free \(< min_free_gb 5\) after the hygiene freed"):
+        o.train("base-g3", "runs/longrun/configs/base-g3.json", {})
+    assert not started, "no forge train on a full disk"
+    assert all(not (root / v).exists() for v in victims), "every stage of the existing hygiene ran"
+    assert all((root / k / "state.json").exists() for k in keep), "FINAL, champions, RSI champions, latest stay"
+    ev = [json.loads(x) for x in (root / "runs/longrun/events.jsonl").read_text().splitlines()]
+    stages = [e for e in ev if e["msg"].startswith("disk hygiene (")]
+    assert [e["msg"].split(")")[0] for e in stages] == [
+        "disk hygiene (superseded runs", "disk hygiene (rebased inits of finished runs", "disk hygiene (finished runs",
+        "disk hygiene (RSI rounds of finished RSI steps"]
+    assert sorted(r for e in stages for r in e["removed"]) == sorted(victims)
+    assert all("freed_bytes" in e and e["free_bytes"] == 1.4e9 for e in stages)
+    assert ev[0]["msg"].startswith("disk low: 1.4 GB free < min_free_gb 5")
+
+
+def test_low_disk_stops_the_hygiene_as_soon_as_there_is_room(tmp_path, monkeypatch):
+    root, o, victims, keep = low_disk_world(tmp_path)
+    fake_disk(monkeypatch, lambda: 1.4e9 if (root / victims[0]).exists() else 6e9)
+    o.check_disk()  # no StepFailed: the superseded run freed enough
+    assert not (root / victims[0]).exists()
+    assert all((root / v).exists() for v in victims[1:]), "later stages never ran"
+    msgs = [json.loads(x)["msg"] for x in (root / "runs/longrun/events.jsonl").read_text().splitlines()]
+    assert any(m.startswith("disk ok after the hygiene: 6.0 GB free") for m in msgs)
+    fake_disk(monkeypatch, lambda: 9e9)
+    o.check_disk()  # enough free space: nothing runs
+    assert all((root / v).exists() for v in victims[1:])
+
+
+def test_storage_report_hygiene_is_exactly_what_the_hygiene_removes(tmp_path, monkeypatch):
+    root, o, victims, keep = low_disk_world(tmp_path)
+    o.save()
+    before = snapshot(root)
+    rep = lr.storage_report_data(root, o.cfg, args(include_restricted=True), tmpdir=tmp_path / "no-tmp")
+    assert snapshot(root) == before, "the report changes nothing"
+    listed = sorted(e["path"] for e in rep["categories"]["hygiene"]["items"])
+    assert listed == sorted(victims)
+    fake_disk(monkeypatch, lambda: 0)
+    with pytest.raises(lr.StepFailed):
+        o.check_disk()
+    after = snapshot(root)
+    gone = sorted(k for k in before if k not in after and Path(k).name.startswith(("step-", lr.REBASED_PREFIX)))
+    assert gone == listed
+
+
+def storage_world(tmp_path):
+    """world() with a champion, a release, FINALs, a TRUNK, the latest cycle's open darus merge
+    (quasnir-g3 from a rebased init, RSI champion r2 on r1 on its FINAL), unreferenced and
+    superseded steps, optimizer files, data stores, caches and leftovers."""
+    root, b = world(tmp_path)
+    o = orchestrator(root)
+    o.init_state()
+    zeros = b"\0" * 8192
+    (root / "runs/base-g2/step-000100/optim.safetensors").write_bytes(zeros)  # a FINAL target (current base)
+    ckpt(root, "runs/base-g2/TRUNK", [1, 1, 1, 1])
+    (root / "runs/base-g2/TRUNK/optim.safetensors").write_bytes(zeros)
+    (root / "runs/base-g3/step-000100/optim.safetensors").write_bytes(zeros)  # latest of the unfinished base-g3
+    ckpt(root, "runs/quasnir-g1/step-000010", [1, 0, 0, 0])  # superseded: the hygiene prunes it
+    ckpt(root, "runs/quasnir-g1/step-000020", [1, 0, 0, 0])
+    final(root, "quasnir-g1", "step-000020")
+    o.state["runs"]["quasnir-g1"] = {"finished": True, "family": "quasnir"}
+    ckpt(root, "runs/base-s/step-000005", [0, 0, 0, 0])  # base-s (train_all.sh) step nothing names
+    (root / "runs/base-s/step-000005/optim.safetensors").write_bytes(zeros)
+    ckpt(root, "runs/quasnir-g2/step-000040", [1.4, 1, 1, 1])  # named only by the eval cache: referenced, kept
+    (root / "runs/quasnir-g2/step-000040/optim.safetensors").write_bytes(zeros)
+    o.state["eval_cache"]["k"] = {"ckpt": "runs/quasnir-g2/step-000040", "loss": 2.0}
+    (root / "runs/quasnir-g2/step-000050/optim.safetensors").write_bytes(zeros)  # the quasnir champion
+    o.write_champions()
+    rel = lr.tool("releases").record_release(root, root / "runs/releases.json", "quasnir", 2.0, "runs/quasnir-g2/step-000050",
+                                              b["q2"], {}, None, 2)
+    assert rel["dir"] == "runs/releases/quasnir-v2"
+    init = f"runs/quasnir-g3/{lr.REBASED_PREFIX}abc-lam1"
+    i_sha = ckpt(root, init, [1.5, 1, 1, 1.05], parent=b["g2"])
+    write(root / init / "rebase.json", {"type": "rebase", "inputs": {"new_base": {"dir": "runs/base-g2/FINAL"}}})
+    f_sha = ckpt(root, "runs/quasnir-g3/step-000040", [1.6, 1, 1, 1], init, parent=i_sha)
+    final(root, "quasnir-g3", "step-000040")
+    rounds = "runs/rsi/quasnir-g3/rounds"
+    r1_sha = ckpt(root, f"{rounds}/r1/step-000060", [1.7, 1, 1, 1], "runs/quasnir-g3/FINAL", parent=f_sha)
+    ckpt(root, f"{rounds}/r2/step-000060", [1.8, 1, 1, 1], f"{rounds}/r1/step-000060", parent=r1_sha)
+    ckpt(root, f"{rounds}/r3/step-000060", [1.0, 1, 1, 1], f"{rounds}/r2/step-000060")  # a rejected round
+    write(root / "runs/rsi/quasnir-g3/champion.json", {"dir": f"{rounds}/r2/step-000060",
+                                                       "history": [{"dir": "runs/quasnir-g3/FINAL"}, {"dir": f"{rounds}/r1/step-000060"}]})
+    write(root / "runs/longrun/configs/quasnir-g3.json", {"run": "quasnir-g3", "init_from": init, "max_steps": 40})
+    o.state["runs"]["quasnir-g3"] = {"config": "runs/longrun/configs/quasnir-g3.json", "finished": True, "family": "quasnir",
+                                     "init_from": init}
+    o.state["cycles"]["3"]["steps"]["quasnir_rsi"] = {"status": "done", "rsi_out": "runs/rsi/quasnir-g3",
+                                                      "rsi_model": "quasnir-g3", "model_dir": f"{rounds}/r2/step-000060"}
+    ckpt(root, "runs/darus-g2/search/cand-000", [1, 1, 1, 1])  # an interrupted merge search
+    write(root / "data/cache/v2/docs/a.jsonl", "x" * 5000)
+    store(root, "data/out/base", root / "data/stores/base/tokenizer.json")  # a store nothing names
+    o.save()
+    tmpd = tmp_path / "tmp"
+    write(tmpd / "pytest-of-x/pytest-1/test_a0/f.txt", "y" * 3000)
+    os.utime(tmpd / "pytest-of-x/pytest-1", (time.time() - 7200,) * 2)
+    write(tmpd / "tmpabc.jsonl", "z")
+    os.utime(tmpd / "tmpabc.jsonl", (time.time() - 7200,) * 2)
+    return root, o, tmpd
+
+
+def by_path(rep, cat):
+    return {e["path"]: e for e in rep["categories"][cat]["items"]}
+
+
+def test_storage_report_never_deletes_and_marks_protected_items(tmp_path):
+    root, o, tmpd = storage_world(tmp_path)
+    before, tmp_before = snapshot(root), snapshot(tmpd)
+    rep = lr.storage_report_data(root, o.cfg, args(), tmpdir=tmpd)
+    assert snapshot(root) == before and snapshot(tmpd) == tmp_before, "read-only"
+    assert rep["read_only"] and rep["unfinished_runs"] == ["base-g3"]
+
+    hyg = by_path(rep, "hygiene")
+    assert set(hyg) == {"runs/quasnir-g1/step-000010", "runs/rsi/quasnir-g3/rounds/r3/step-000060"}
+    assert not any(e["protected"] for e in hyg.values()) and rep["hygiene_vs_protection"] == []
+
+    kept = by_path(rep, "kept")
+    why = lambda p: " | ".join(kept[p]["why"])  # noqa: E731
+    assert "champion" in why("runs/quasnir-g2/step-000050")
+    assert "release quasnir-v2" in why("runs/releases/quasnir-v2")
+    assert "FINAL target of base-g2" in why("runs/base-g2/step-000100")
+    assert "TRUNK of base-g2" in why("runs/base-g2/TRUNK")
+    assert "latest checkpoint of the unfinished run base-g3" in why("runs/base-g3/step-000100")
+    init = f"runs/quasnir-g3/{lr.REBASED_PREFIX}abc-lam1"
+    assert "--via" in why(init) and "init_from of quasnir-g3 (latest cycle g3)" in why(init)
+    r1 = "runs/rsi/quasnir-g3/rounds/r1/step-000060"
+    assert "RSI champion history of quasnir-g3" in why(r1) and "--via chain of the g3 darus merge (quasnir)" in why(r1)
+    assert "RSI champion of quasnir-g3" in why("runs/rsi/quasnir-g3/rounds/r2/step-000060")
+    assert all(e["protected"] for e in kept.values()) and rep["categories"]["kept"]["summary"]["reclaimable_bytes"] == 0
+    champ = kept["runs/quasnir-g2/step-000050"]
+    assert (root / "runs/quasnir-g2/step-000050/model.safetensors").stat().st_nlink == 2
+    assert champ["frees"] < champ["bytes"], "a model hard-linked by a release frees nothing"
+
+    unref = by_path(rep, "unreferenced")
+    assert set(unref) == {"runs/base-s/step-000005"} and not unref["runs/base-s/step-000005"]["protected"]
+    assert "the hygiene never prunes it" in unref["runs/base-s/step-000005"]["why"][0]
+
+    opt = by_path(rep, "optim")
+    f, t, q = (opt[f"runs/{p}/optim.safetensors"] for p in ("base-g2/step-000100", "base-g2/TRUNK", "quasnir-g2/step-000040"))
+    assert f["protected"] and not f["optim_needed"] and any("FINAL target" in w for w in f["why"])
+    assert t["protected"] and t["optim_needed"]
+    assert not q["protected"] and not q["optim_needed"] and q["frees"] == q["bytes"] > 0
+    assert "runs/base-g3/step-000100/optim.safetensors" not in opt, "an unfinished run's checkpoints are left alone"
+    assert "runs/base-s/step-000005/optim.safetensors" not in opt, "counted with its unreferenced step"
+
+    data = by_path(rep, "data")
+    assert data["data/out/base-v2"]["protected"] and "corpus v2 in use (base)" in data["data/out/base-v2"]["why"]
+    assert data["data/stores/base"]["protected"] and any("reference tokenizer" in w for w in data["data/stores/base"]["why"])
+    assert not data["data/cache/v2"]["protected"] and not data["data/out/base"]["protected"]
+
+    tmp = {Path(p).name: e for p, e in by_path(rep, "tmp").items()}
+    assert {"cand-000", "pytest-1", "tmpabc.jsonl"} <= set(tmp)
+    assert not any(tmp[k]["protected"] for k in ("pytest-1", "tmpabc.jsonl"))
+    assert tmp["cand-000"]["protected"] and "last hour" in tmp["cand-000"]["why"][0], "fresh: may be in use"
+
+    total = sum(e["frees"] for c, v in rep["categories"].items() if c != "kept" for e in v["items"] if not e["protected"])
+    assert rep["total_reclaimable_bytes"] == total > 0
+
+    # a restricted family is never looked at unless the owner asks for it
+    assert not any("rouge" in e["path"] for c in rep["categories"].values() for e in c["items"])
+    assert {"runs/rouge-g2", "runs/rsi/rouge-g2"} <= set(rep["restricted_not_inspected"])
+    owner = lr.storage_report_data(root, o.cfg, args(include_restricted=True), tmpdir=tmpd)
+    assert snapshot(root) == before and not owner["restricted_not_inspected"]
+    assert "RSI champion of rouge-g2" in " ".join(by_path(owner, "kept")["runs/rsi/rouge-g2/rounds/rsi-rouge-g2-r2/step-000060"]["why"])
+
+    write(root / "training/configs/extra.json", {"data": "data/out/base/train.meta.json"})  # a training config names it
+    named = by_path(lr.storage_report_data(root, o.cfg, args(), tmpdir=tmpd), "data")["data/out/base"]
+    assert named["protected"] and named["why"] == ["named by training/configs/extra.json"]
+
+
+def test_storage_report_cli_is_read_only(tmp_path):
+    root, o, tmpd = storage_world(tmp_path)
+    before = snapshot(root)
+    cmd = [sys.executable, str(ROOT / "scripts/longrun.py"), "--root", str(root), "--storage-report"]
+    env = {**os.environ, "TMPDIR": str(tmpd)}
+    out = subprocess.run(cmd + ["--json"], capture_output=True, text=True, timeout=120, env=env)
+    assert out.returncode == 0, out.stderr
+    rep = json.loads(out.stdout)
+    assert rep["type"] == "storage-report" and "runs/base-s/step-000005" in by_path(rep, "unreferenced")
+    txt = subprocess.run(cmd, capture_output=True, text=True, timeout=120, env=env)
+    assert txt.returncode == 0 and "read-only" in txt.stdout and "[hygiene]" in txt.stdout and "total" in txt.stdout
+    assert snapshot(root) == before
+    assert not (root / "runs/longrun/events.jsonl").exists(), "nothing is logged to the run"
