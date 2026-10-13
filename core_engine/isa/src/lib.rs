@@ -38,6 +38,8 @@ pub mod regs {
     pub const SUMSQ: Reg = 4;
     pub const CORRECT: Reg = 5;
     pub const LOSS_COUNT: Reg = 6;
+    /// Learning rate of the MUON instructions (the AdamW schedule × muon_lr / lr).
+    pub const MUON_LR: Reg = 7;
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -67,13 +69,14 @@ pub enum Opcode {
     ClipCoef = 0x31,
     AdamW = 0x32,
     Quant = 0x33,
+    Muon = 0x34,
     SetReg = 0x40,
     Alloc = 0x50,
     Free = 0x51,
 }
 
 impl Opcode {
-    pub const ALL: [Opcode; 27] = [
+    pub const ALL: [Opcode; 28] = [
         Opcode::Zero,
         Opcode::Copy,
         Opcode::Add,
@@ -98,6 +101,7 @@ impl Opcode {
         Opcode::ClipCoef,
         Opcode::AdamW,
         Opcode::Quant,
+        Opcode::Muon,
         Opcode::SetReg,
         Opcode::Alloc,
         Opcode::Free,
@@ -133,6 +137,7 @@ impl Opcode {
             Opcode::ClipCoef => "CLIP_COEF",
             Opcode::AdamW => "ADAMW",
             Opcode::Quant => "QUANT",
+            Opcode::Muon => "MUON",
             Opcode::SetReg => "SET_REG",
             Opcode::Alloc => "ALLOC",
             Opcode::Free => "FREE",
@@ -330,6 +335,25 @@ pub enum Instr {
     },
     /// In-place fake quantisation to a forge-formats format code (see `machine::quant`).
     Quant { x: V, format: u8 },
+    /// Muon step (Keller Jordan, modded-nanogpt) of one `rows × cols` weight matrix,
+    /// grad scaled by regs[clip]: m = momentum·m + g; u = g + momentum·m (Nesterov);
+    /// O = Newton–Schulz(u / (‖u‖_F + 1e-7)) with `ns_steps` quintic iterations
+    /// (a, b, c) = (3.4445, −4.7750, 2.0315) in f32 on the wide orientation
+    /// (Xᵀ when rows > cols): A = X·Xᵀ, B = b·A + c·A·A, X = a·X + B·X;
+    /// then p *= 1 − regs[lr]·wd and p −= regs[lr]·scale·O.
+    Muon {
+        p: V,
+        g: V,
+        m: V,
+        rows: u32,
+        cols: u32,
+        lr: Reg,
+        clip: Reg,
+        momentum: f32,
+        ns_steps: u32,
+        scale: f32,
+        wd: f32,
+    },
     /// regs[dst] = value
     SetReg { dst: Reg, value: f32 },
     /// Placement: bind a transient buffer to HBVM memory.
@@ -365,6 +389,7 @@ impl Instr {
             Instr::ClipCoef { .. } => Opcode::ClipCoef,
             Instr::AdamW { .. } => Opcode::AdamW,
             Instr::Quant { .. } => Opcode::Quant,
+            Instr::Muon { .. } => Opcode::Muon,
             Instr::SetReg { .. } => Opcode::SetReg,
             Instr::Alloc { .. } => Opcode::Alloc,
             Instr::Free { .. } => Opcode::Free,
@@ -429,6 +454,7 @@ impl Instr {
             } => (vec![*logits], vec![*logits, *targets]),
             SumSq { bufs, .. } => (vec![], bufs.clone()),
             AdamW { p, g, m, v, .. } => (vec![*p, *m, *v], vec![*p, *g, *m, *v]),
+            Muon { p, g, m, .. } => (vec![*p, *m], vec![*p, *g, *m]),
             ClipCoef { .. } | SetReg { .. } => (vec![], vec![]),
             Alloc { v } | Free { v } => (vec![*v], vec![]),
         }
@@ -478,6 +504,7 @@ impl Instr {
             } => vec![logits, targets],
             SumSq { bufs, .. } => bufs.iter_mut().collect(),
             AdamW { p, g, m, v, .. } => vec![p, g, m, v],
+            Muon { p, g, m, .. } => vec![p, g, m],
             ClipCoef { .. } | SetReg { .. } => vec![],
             Alloc { v } | Free { v } => vec![v],
         }
@@ -509,6 +536,17 @@ impl Instr {
             SiluMul { n, .. } => 6.0 * *n as f64,
             SiluMulBwd { n, .. } => 12.0 * *n as f64,
             Xent { rows, vocab, .. } => 4.0 * *rows as f64 * *vocab as f64,
+            Muon {
+                rows,
+                cols,
+                ns_steps,
+                ..
+            } => {
+                // Per iteration X·Xᵀ (2s²l), A·A (2s³) and B·X (2s²l) on the
+                // s × l orientation, plus ~12 element-wise flops per weight.
+                let (s, l) = (*rows.min(cols) as f64, *rows.max(cols) as f64);
+                *ns_steps as f64 * (4.0 * s * s * l + 2.0 * s * s * s) + 12.0 * s * l
+            }
             _ => 0.0,
         }
     }
@@ -853,6 +891,38 @@ impl Program {
                         }
                     }
                 }
+                Instr::Muon {
+                    p,
+                    g,
+                    m,
+                    rows,
+                    cols,
+                    lr,
+                    clip,
+                    ns_steps,
+                    ..
+                } => {
+                    reg(*lr)?;
+                    reg(*clip)?;
+                    if *rows == 0 || *cols == 0 || *ns_steps == 0 {
+                        return Err(ctx("empty matrix or zero Newton-Schulz steps".into()));
+                    }
+                    if len(*p) != *rows as u64 * *cols as u64 {
+                        return Err(ctx(format!(
+                            "p has {} words, rows × cols = {}",
+                            len(*p),
+                            *rows as u64 * *cols as u64
+                        )));
+                    }
+                    for b in [g, m] {
+                        if len(*b) != len(*p) {
+                            return Err(ctx("optimiser state length mismatch".into()));
+                        }
+                    }
+                    if p == g || p == m || g == m {
+                        return Err(ctx("operands alias".into()));
+                    }
+                }
                 Instr::SetReg { dst, .. } => reg(*dst)?,
                 _ => {}
             }
@@ -1085,6 +1155,26 @@ fn attrs(ins: &Instr, w: &mut W) {
             }
         }
         Quant { format, .. } => w.u8(*format),
+        Muon {
+            rows,
+            cols,
+            lr,
+            clip,
+            momentum,
+            ns_steps,
+            scale,
+            wd,
+            ..
+        } => {
+            w.u32(*rows);
+            w.u32(*cols);
+            w.u8(*lr);
+            w.u8(*clip);
+            w.f32(*momentum);
+            w.u32(*ns_steps);
+            w.f32(*scale);
+            w.f32(*wd);
+        }
         SetReg { dst, value } => {
             w.u8(*dst);
             w.f32(*value);
@@ -1468,6 +1558,22 @@ fn decode_instr(op: Opcode, o: &[V], a: &mut R<'_>) -> Result<Instr, IsaError> {
             Quant {
                 x: o[0],
                 format: a.u8()?,
+            }
+        }
+        Opcode::Muon => {
+            want(3)?;
+            Muon {
+                p: o[0],
+                g: o[1],
+                m: o[2],
+                rows: a.u32()?,
+                cols: a.u32()?,
+                lr: a.u8()?,
+                clip: a.u8()?,
+                momentum: a.f32()?,
+                ns_steps: a.u32()?,
+                scale: a.f32()?,
+                wd: a.f32()?,
             }
         }
         Opcode::SetReg => {

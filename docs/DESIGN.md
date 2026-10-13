@@ -28,7 +28,7 @@ core_engine/hbvm      forge-hbvm      High-Bandwidth Virtual Memory: tensor aren
 core_engine/isa       forge-isa       tensor ISA, bytecode, graph IR, fusion compiler, interpreter
 core_engine/comm      forge-comm      ring all-reduce over TCP (no NCCL)
 core_engine/data      forge-data      SCP tokenizer (BPE v2) + SCP token store reader + RNG
-core_engine/train     forge-train     SCP-compatible transformer, AdamW, checkpoints, TIES merge, DiLoCo
+core_engine/train     forge-train     SCP-compatible transformer, AdamW (opt-in Muon), checkpoints, TIES merge, DiLoCo
 core_engine/cli       forge (bin)     bench | train | merge | eval | generate
 headcenter/                           iPad mission control: FastAPI + WebSocket + agents + touch UI
 data/                                 corpus build on top of the SCP pipelines
@@ -133,8 +133,10 @@ Opcodes (forward and backward): MATMUL (shape/trans attrs, variant slot),
 MATMUL_BATCHED, ADD, ADD_INPLACE, MUL, SCALE, EMBED, EMBED_BWD, RMSNORM,
 RMSNORM_BWD, ROPE, ROPE_BWD, SOFTMAX_CAUSAL, SOFTMAX_BWD, SILU_MUL (fused
 SwiGLU gate), SILU_MUL_BWD, XENT (fused softmax+cross-entropy+grad), COPY,
-ZERO, ADAMW (fused optimizer step), QUANT (fake-quant to a forge-formats
-Format), FUSED_* (emitted only by the compiler).
+ZERO, ADAMW (fused optimizer step), MUON (fused Muon step: Nesterov momentum,
+Newton–Schulz orthogonalisation on the f32 GEMM engines, decoupled decay),
+QUANT (fake-quant to a forge-formats Format), FUSED_* (emitted only by the
+compiler).
 
 ## 6. forge-comm — collectives without NCCL
 
@@ -204,6 +206,22 @@ RoPE (theta 1e4), GQA, SwiGLU `w2(silu(w1 x) * w3 x)`, tied embeddings, AdamW
 (0.9, 0.95, eps 1e-8), warmup + cosine to min_lr, global-norm clip 1.0.
 Checkpoints: safetensors (f32, SCP parameter names) + JSON state (step,
 optimizer moments, RNG state, config, tokenizer sha256, parent sha256).
+
+Optimizer `"optimizer": "muon"` (default `"adamw"`, unchanged): Muon (Keller
+Jordan, modded-nanogpt) on the 2-D hidden matrices of the blocks (attention
+wq/wk/wv/wo, SwiGLU w1/w3/w2); the token embedding (= tied head) and the norm
+gains stay on AdamW with `lr`/`weight_decay`. Per matrix, with the clipped
+gradient g: m = β·m + g, u = g + β·m, X = u / (‖u‖_F + 1e-7), then
+`muon_ns_steps` quintic Newton–Schulz iterations (a, b, c) = (3.4445, −4.7750,
+2.0315) on the wide orientation (A = X·Xᵀ, B = b·A + c·A·A, X = a·X + B·X; the
+rows > cols case uses transposed GEMM operands), and W −= lr_muon ·
+max(1, rows/cols)^0.5 · X after W *= 1 − lr_muon · `muon_weight_decay`.
+lr_muon(step) = lr(step) · `muon_lr` / `lr` (same schedule shape, and scaled by
+`set_lr` too; register MUON_LR). Defaults: `muon_lr` 0.02, `muon_momentum`
+0.95, `muon_ns_steps` 5, `muon_weight_decay` 0. `optim.safetensors` holds
+AdamW m/v (`<name>`, `v.<name>`) for the AdamW tensors and the Muon momentum
+under `muon.<name>`; resume and `init_optim` refuse a checkpoint written by the
+other optimizer.
 Darus = θ0 + TIES(τ_rouge, τ_quasnir); both children must share θ0 by sha256.
 
 ## 9. Telemetry and control protocol (trainer ⇄ headcenter)

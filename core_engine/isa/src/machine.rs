@@ -491,6 +491,7 @@ fn exec(
             .chain(ins_only.iter())
             .map(|v| p.len_of(*v) as f64)
             .sum::<f64>();
+    let muon_variant = m.default_variant;
     let pool = &m.pool;
     let regs = &mut m.regs;
     let mut vw = views(pc, p, vmap, &mut m.hbvm, &outs_only, &ins_only)?;
@@ -1039,10 +1040,137 @@ fn exec(
             });
         }
         Quant { format, .. } => quant(vw.outs[0], *format)?,
+        Muon {
+            g,
+            rows,
+            cols,
+            lr,
+            clip,
+            momentum,
+            ns_steps,
+            scale,
+            wd,
+            ..
+        } => {
+            let gv = vw.ins[idx(g)];
+            let (lr, c) = (regs[*lr as usize], regs[*clip as usize]);
+            let beta = *momentum;
+            let (pp, mm) = vw.outs.split_at_mut(1);
+            let (p, mbuf) = (&mut *pp[0], &mut *mm[0]);
+            // m = β·m + g, u = g + β·m (Nesterov), g clipped like AdamW's.
+            let mut u = vec![0.0f32; p.len()];
+            pool.install(|| {
+                u.par_chunks_mut(CHUNK)
+                    .zip(mbuf.par_chunks_mut(CHUNK))
+                    .zip(gv.par_chunks(CHUNK))
+                    .for_each(|((u, m), g)| {
+                        for i in 0..u.len() {
+                            let gi = g[i] * c;
+                            m[i] = beta * m[i] + gi;
+                            u[i] = gi + beta * m[i];
+                        }
+                    })
+            });
+            let o = newton_schulz(
+                pool,
+                f32_variant(muon_variant),
+                u,
+                *rows as usize,
+                *cols as usize,
+                *ns_steps as usize,
+            );
+            let (decay, step) = (1.0 - lr * *wd, lr * *scale);
+            pool.install(|| {
+                p.par_chunks_mut(CHUNK)
+                    .zip(o.par_chunks(CHUNK))
+                    .for_each(|(p, o)| {
+                        for i in 0..p.len() {
+                            p[i] = p[i] * decay - step * o[i];
+                        }
+                    })
+            });
+        }
         SetReg { dst, value } => regs[*dst as usize] = *value,
         Alloc { .. } | Free { .. } => unreachable!("placement handled by run()"),
     }
     Ok(bytes)
+}
+
+/// Newton–Schulz runs in f32: the bf16 engine would round its inputs.
+fn f32_variant(v: GemmVariant) -> GemmVariant {
+    if v == GemmVariant::AmxBf16 {
+        GemmVariant::Avx512F32
+    } else {
+        v
+    }
+}
+
+/// Muon's orthogonalisation of the row-major `rows × cols` matrix `x`
+/// (modded-nanogpt `zeropower_via_newtonschulz5`, in f32): X = x / (‖x‖_F + 1e-7),
+/// then `steps` times A = X·Xᵀ, B = b·A + c·A·A, X = a·X + B·X on the wide
+/// orientation (s × l with s = min(rows, cols)). When rows > cols, X is the
+/// transpose of the stored matrix S; the GEMMs take transposed operands
+/// instead (A = Sᵀ·S, S ← a·S + S·Bᵀ), so nothing is transposed in memory.
+/// Deterministic for a given GEMM variant: the norm sums fixed chunks in order
+/// and the GEMM results do not depend on the pool size.
+fn newton_schulz(
+    pool: &Pool,
+    v: GemmVariant,
+    mut x: Vec<f32>,
+    rows: usize,
+    cols: usize,
+    steps: usize,
+) -> Vec<f32> {
+    const A: f32 = 3.4445;
+    const B: f32 = -4.7750;
+    const C: f32 = 2.0315;
+    let parts: Vec<f64> = pool.install(|| {
+        x.par_chunks(CHUNK)
+            .map(|c| c.iter().map(|&v| v as f64 * v as f64).sum::<f64>())
+            .collect()
+    });
+    let denom = parts.iter().sum::<f64>().sqrt() as f32 + 1e-7;
+    pool.install(|| {
+        x.par_chunks_mut(CHUNK)
+            .for_each(|c| c.iter_mut().for_each(|v| *v /= denom))
+    });
+    let wide = rows <= cols;
+    let (s, l) = if wide { (rows, cols) } else { (cols, rows) };
+    let mut a = vec![0.0f32; s * s];
+    let mut b = vec![0.0f32; s * s];
+    let mut y = vec![0.0f32; rows * cols];
+    let scaled = |dst: &mut [f32], src: &[f32], f: f32| {
+        pool.install(|| {
+            dst.par_chunks_mut(CHUNK)
+                .zip(src.par_chunks(CHUNK))
+                .for_each(|(d, s)| d.iter_mut().zip(s).for_each(|(d, s)| *d = f * s))
+        })
+    };
+    use Trans::{N, T};
+    // C[m×n] = alpha·op(A)·op(B) + beta·C (forge_kernels::gemm, row strides lda/ldb/ldc).
+    let mm =
+        |ta, tb, (m, n, k), alpha, a: &[f32], lda, b: &[f32], ldb, beta, c: &mut [f32], ldc| {
+            forge_kernels::gemm(
+                pool, v, ta, tb, m, n, k, alpha, a, lda, b, ldb, beta, c, ldc,
+            )
+        };
+    for _ in 0..steps {
+        if wide {
+            mm(N, T, (s, s, l), 1.0, &x, l, &x, l, 0.0, &mut a, s); // A = X·Xᵀ
+        } else {
+            mm(T, N, (s, s, l), 1.0, &x, s, &x, s, 0.0, &mut a, s); // A = Sᵀ·S
+        }
+        scaled(&mut b, &a, B);
+        mm(N, N, (s, s, s), C, &a, s, &a, s, 1.0, &mut b, s); // B = b·A + c·A·A
+        scaled(&mut y, &x, A);
+        if wide {
+            mm(N, N, (s, l, s), 1.0, &b, s, &x, l, 1.0, &mut y, l); // Y = a·X + B·X
+        } else {
+            mm(N, T, (l, s, s), 1.0, &x, s, &b, s, 1.0, &mut y, s); // Y = a·S + S·Bᵀ
+        }
+        std::mem::swap(&mut x, &mut y);
+    }
+    x
 }
 
 /// Fake quantisation (quantise, then dequantise) for low-precision simulation.

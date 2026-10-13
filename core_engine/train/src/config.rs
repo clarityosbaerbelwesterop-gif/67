@@ -99,8 +99,9 @@ pub struct TrainConfig {
     /// Continue from this checkpoint directory (children of a shared base).
     #[serde(default)]
     pub init_from: Option<String>,
-    /// Resume an interrupted run from its own checkpoint: weights, AdamW
-    /// moments, step, data RNG and lineage are restored.
+    /// Resume an interrupted run from its own checkpoint: weights, optimiser
+    /// state (AdamW moments, Muon momentum), step, data RNG and lineage are
+    /// restored. The checkpoint must come from the same `optimizer`.
     #[serde(default)]
     pub resume_from: Option<String>,
     pub out_dir: String,
@@ -129,11 +130,32 @@ pub struct TrainConfig {
     /// Length of the "wsd" decay; 0 = round(0.2 · max_steps).
     #[serde(default, skip_serializing_if = "is_zero")]
     pub decay_steps: usize,
-    /// With `init_from`: also load its AdamW moments (`optim.safetensors`), e.g.
+    /// With `init_from`: also load its optimiser state (`optim.safetensors`), e.g.
     /// to continue a previous generation's TRUNK without re-warming. Steps and
     /// schedule start at 0; bias correction counts the moments' own steps.
+    /// The checkpoint must come from the same `optimizer` (no mixing).
     #[serde(default, skip_serializing_if = "is_false")]
     pub init_optim: bool,
+    /// "adamw" (every parameter on AdamW) or "muon": Muon on the 2-D hidden
+    /// matrices of the blocks (attention wq/wk/wv/wo, SwiGLU w1/w3/w2), AdamW
+    /// with `lr` and `weight_decay` on the rest (token embedding = tied head,
+    /// norms). The defaults of the five optimiser fields are omitted from
+    /// state.json, so AdamW runs write the same checkpoints as before.
+    #[serde(default = "adamw", skip_serializing_if = "is_adamw")]
+    pub optimizer: String,
+    /// Muon peak learning rate. It follows the shape of `lr`'s schedule (and
+    /// of a `set_lr` override): lr_muon(step) = lr(step) · muon_lr / lr.
+    #[serde(default = "muon_lr", skip_serializing_if = "is_muon_lr")]
+    pub muon_lr: f32,
+    /// Muon momentum β (Nesterov).
+    #[serde(default = "muon_momentum", skip_serializing_if = "is_muon_momentum")]
+    pub muon_momentum: f32,
+    /// Newton–Schulz iterations of the Muon orthogonalisation.
+    #[serde(default = "muon_ns_steps", skip_serializing_if = "is_muon_ns_steps")]
+    pub muon_ns_steps: usize,
+    /// Decoupled weight decay of the Muon matrices, W -= lr_muon · wd · W (0 = off).
+    #[serde(default, skip_serializing_if = "is_zero_f")]
+    pub muon_weight_decay: f32,
 }
 
 fn one() -> usize {
@@ -162,6 +184,33 @@ fn is_zero(n: &usize) -> bool {
 }
 fn is_false(b: &bool) -> bool {
     !*b
+}
+fn adamw() -> String {
+    "adamw".into()
+}
+fn is_adamw(s: &str) -> bool {
+    s == "adamw"
+}
+fn muon_lr() -> f32 {
+    0.02
+}
+fn is_muon_lr(x: &f32) -> bool {
+    *x == muon_lr()
+}
+fn muon_momentum() -> f32 {
+    0.95
+}
+fn is_muon_momentum(x: &f32) -> bool {
+    *x == muon_momentum()
+}
+fn muon_ns_steps() -> usize {
+    5
+}
+fn is_muon_ns_steps(n: &usize) -> bool {
+    *n == muon_ns_steps()
+}
+fn is_zero_f(x: &f32) -> bool {
+    *x == 0.0
 }
 
 impl TrainConfig {
@@ -243,6 +292,44 @@ impl TrainConfig {
         if self.init_optim && self.init_from.is_none() {
             return Err("init_optim needs init_from".into());
         }
+        match self.optimizer.as_str() {
+            "adamw" => {
+                // Catches e.g. a misspelt "optimizer" key, which serde ignores.
+                if !is_muon_lr(&self.muon_lr)
+                    || !is_muon_momentum(&self.muon_momentum)
+                    || !is_muon_ns_steps(&self.muon_ns_steps)
+                    || !is_zero_f(&self.muon_weight_decay)
+                {
+                    return Err("muon_* settings need \"optimizer\": \"muon\"".into());
+                }
+            }
+            "muon" => {
+                if !(self.lr > 0.0 && self.muon_lr > 0.0 && self.muon_lr.is_finite()) {
+                    return Err("optimizer muon needs lr > 0 and muon_lr > 0 (lr_muon = lr(step) · muon_lr / lr)".into());
+                }
+                if !(0.0..1.0).contains(&self.muon_momentum) {
+                    return Err("muon_momentum must be in [0, 1)".into());
+                }
+                if !(1..=100).contains(&self.muon_ns_steps) {
+                    return Err("muon_ns_steps must be in 1..=100".into());
+                }
+                if !(self.muon_weight_decay >= 0.0 && self.muon_weight_decay.is_finite()) {
+                    return Err("muon_weight_decay must be >= 0".into());
+                }
+            }
+            other => {
+                return Err(format!("optimizer must be adamw|muon, not {other:?}"));
+            }
+        }
         Ok(())
+    }
+
+    pub fn muon(&self) -> bool {
+        self.optimizer == "muon"
+    }
+
+    /// Muon learning rate that goes with the AdamW learning rate `lr` of a step.
+    pub fn muon_lr_for(&self, lr: f32) -> f32 {
+        lr * (self.muon_lr / self.lr)
     }
 }

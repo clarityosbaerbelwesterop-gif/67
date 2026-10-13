@@ -27,6 +27,12 @@ impl Param {
     pub fn decays(&self) -> bool {
         self.shape.len() >= 2
     }
+    /// With `optimizer: muon`, Muon updates the 2-D hidden matrices of the
+    /// blocks (attention wq/wk/wv/wo, SwiGLU w1/w3/w2). The token embedding
+    /// (also the tied output head) and the 1-D norm gains stay on AdamW.
+    pub fn muon(&self) -> bool {
+        self.shape.len() == 2 && self.name.starts_with("blocks.")
+    }
 }
 
 /// Parameters in SCP `named_parameters()` order (tied head deduplicated).
@@ -58,6 +64,9 @@ pub fn adam_m(p: &str) -> String {
 }
 pub fn adam_v(p: &str) -> String {
     format!("adam_v.{p}")
+}
+pub fn muon_m(p: &str) -> String {
+    format!("muon_m.{p}")
 }
 pub fn tokens_name(n: usize) -> String {
     format!("tokens.{n}")
@@ -618,8 +627,24 @@ pub fn build(c: &ModelConfig, batch: usize, seq: usize, head: Head) -> Program {
     x.b.finish()
 }
 
-/// Optimiser step: global-norm clipping, AdamW per parameter, zero gradients.
-pub fn build_update(c: &ModelConfig, weight_decay: f32, grad_clip: f32) -> Program {
+/// Muon settings of the update program (`TrainConfig::muon_*`).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct MuonOpts {
+    pub momentum: f32,
+    pub ns_steps: usize,
+    pub weight_decay: f32,
+}
+
+/// Optimiser step: global-norm clipping over every gradient, then AdamW per
+/// parameter (or, with `muon`, MUON on the [`Param::muon`] matrices at
+/// regs[MUON_LR] with Keller Jordan's max(1, rows/cols)^0.5 scale), zero
+/// gradients. Without `muon` the program is the plain AdamW update.
+pub fn build_update(
+    c: &ModelConfig,
+    weight_decay: f32,
+    grad_clip: f32,
+    muon: Option<MuonOpts>,
+) -> Program {
     let mut b = Builder::new();
     let ps = params(c);
     let grads: Vec<V> = ps
@@ -637,6 +662,24 @@ pub fn build_update(c: &ModelConfig, weight_decay: f32, grad_clip: f32) -> Progr
     });
     for (p, &g) in ps.iter().zip(&grads) {
         let pv = b.persistent(p.name.clone(), p.len());
+        if let Some(mo) = muon.filter(|_| p.muon()) {
+            let m = b.persistent(muon_m(&p.name), p.len());
+            let (rows, cols) = (p.shape[0], p.shape[1]);
+            b.emit(Instr::Muon {
+                p: pv,
+                g,
+                m,
+                rows: rows as u32,
+                cols: cols as u32,
+                lr: regs::MUON_LR,
+                clip: regs::CLIP_COEF,
+                momentum: mo.momentum,
+                ns_steps: mo.ns_steps as u32,
+                scale: (rows as f32 / cols as f32).max(1.0).sqrt(),
+                wd: mo.weight_decay,
+            });
+            continue;
+        }
         let m = b.persistent(adam_m(&p.name), p.len());
         let v = b.persistent(adam_v(&p.name), p.len());
         b.emit(Instr::AdamW {

@@ -63,6 +63,22 @@ fn event(level: &str, msg: impl Into<String>, step: usize) -> Value {
     json!({"type": "event", "level": level, "msg": msg.into(), "step": step, "ts": now()})
 }
 
+/// The optimiser state of a run as (machine buffer, `optim.safetensors` key,
+/// shape): AdamW m under the parameter's name and v under "v.<name>"; with
+/// `optimizer: muon`, each Muon matrix has only its momentum, under "muon.<name>".
+pub fn optim_slots(cfg: &TrainConfig) -> Vec<(String, String, Vec<usize>)> {
+    let mut slots = Vec::new();
+    for p in model::params(&cfg.model) {
+        if cfg.muon() && p.muon() {
+            slots.push((model::muon_m(&p.name), format!("muon.{}", p.name), p.shape));
+        } else {
+            slots.push((model::adam_m(&p.name), p.name.clone(), p.shape.clone()));
+            slots.push((model::adam_v(&p.name), format!("v.{}", p.name), p.shape));
+        }
+    }
+    slots
+}
+
 impl Trainer {
     pub fn new(cfg: TrainConfig, sink: Sink) -> Result<Trainer, String> {
         cfg.validate()?;
@@ -91,8 +107,13 @@ impl Trainer {
         .map_err(|e| e.to_string())?;
         let (eval_p, eval_r) =
             compile(model::build(m, b, t, Head::Eval), opts).map_err(|e| e.to_string())?;
+        let muon = cfg.muon().then_some(model::MuonOpts {
+            momentum: cfg.muon_momentum,
+            ns_steps: cfg.muon_ns_steps,
+            weight_decay: cfg.muon_weight_decay,
+        });
         let (upd_p, _) = compile(
-            model::build_update(m, cfg.weight_decay, cfg.grad_clip),
+            model::build_update(m, cfg.weight_decay, cfg.grad_clip, muon),
             opts,
         )
         .map_err(|e| e.to_string())?;
@@ -165,11 +186,31 @@ impl Trainer {
             ),
         });
         (tr.sink)(report);
+        if tr.cfg.muon() {
+            let ps = model::params(&tr.cfg.model);
+            let (mu, rest): (Vec<_>, Vec<_>) = ps.iter().partition(|p| p.muon());
+            (tr.sink)(event(
+                "info",
+                format!(
+                    "optimizer muon: {} matrices ({} params) on Muon (peak lr {}, momentum {}, {} Newton-Schulz steps, wd {}), {} tensors ({} params) on AdamW (peak lr {})",
+                    mu.len(),
+                    mu.iter().map(|p| p.len()).sum::<usize>(),
+                    tr.cfg.muon_lr,
+                    tr.cfg.muon_momentum,
+                    tr.cfg.muon_ns_steps,
+                    tr.cfg.muon_weight_decay,
+                    rest.len(),
+                    rest.iter().map(|p| p.len()).sum::<usize>(),
+                    tr.cfg.lr
+                ),
+                tr.step,
+            ));
+        }
         Ok(tr)
     }
 
     /// SCP initialisation (normal 0.02; wo/w2 scaled by 1/sqrt(2L); norms = 1),
-    /// or the weights of `init_from` (and its AdamW moments with `init_optim`).
+    /// or the weights of `init_from` (and its optimiser state with `init_optim`).
     fn init_params(&mut self) -> Result<(), String> {
         let ps = model::params(&self.cfg.model);
         if let Some(dir) = self.cfg.init_from.clone() {
@@ -232,45 +273,55 @@ impl Trainer {
         Ok(())
     }
 
-    /// `init_optim`: AdamW moments of the `init_from` checkpoint; the step
-    /// counter stays 0, `optim_offset` takes the steps behind the moments.
+    /// `init_optim`: optimiser state of the `init_from` checkpoint, which must
+    /// come from the same optimizer; the step counter stays 0, `optim_offset`
+    /// takes the steps behind the AdamW moments.
     fn init_moments(&mut self, dir: &Path) -> Result<(), String> {
-        let path = dir.join("optim.safetensors");
-        let (opt, _) = ckpt::load_safetensors(&path)
-            .map_err(|e| format!("init_optim: {}: {e}", path.display()))?;
-        for p in model::params(&self.cfg.model) {
-            for (buf, key) in [
-                (model::adam_m(&p.name), p.name.clone()),
-                (model::adam_v(&p.name), format!("v.{}", p.name)),
-            ] {
-                let t = opt
-                    .get(&key)
-                    .ok_or(format!("{}: missing {key}", path.display()))?;
-                if t.shape != p.shape {
-                    return Err(format!(
-                        "{}: {key} has shape {:?}, model wants {:?}",
-                        path.display(),
-                        t.shape,
-                        p.shape
-                    ));
-                }
-                self.machine
-                    .persistent_mut(&buf)
-                    .ok_or("moment not bound")?
-                    .copy_from_slice(&t.data);
-            }
-        }
         let state: Value = serde_json::from_str(
             &std::fs::read_to_string(dir.join("state.json"))
                 .map_err(|e| format!("init_optim: {}/state.json: {e}", dir.display()))?,
         )
         .map_err(|e| e.to_string())?;
+        let theirs = state["config"]["optimizer"].as_str().unwrap_or("adamw");
+        if theirs != self.cfg.optimizer {
+            return Err(format!(
+                "init_optim: {} holds {theirs} optimiser state but this run uses optimizer {:?}; \
+                 mixing optimisers is refused (drop init_optim to start fresh state from the weights)",
+                dir.display(),
+                self.cfg.optimizer
+            ));
+        }
+        let path = dir.join("optim.safetensors");
+        let (opt, _) = ckpt::load_safetensors(&path)
+            .map_err(|e| format!("init_optim: {}: {e}", path.display()))?;
+        for (buf, key, shape) in optim_slots(&self.cfg) {
+            let t = opt
+                .get(&key)
+                .ok_or(format!("{}: missing {key}", path.display()))?;
+            if t.shape != shape {
+                return Err(format!(
+                    "{}: {key} has shape {:?}, model wants {:?}",
+                    path.display(),
+                    t.shape,
+                    shape
+                ));
+            }
+            self.machine
+                .persistent_mut(&buf)
+                .ok_or("moment not bound")?
+                .copy_from_slice(&t.data);
+        }
         self.optim_offset = (state["step"].as_u64().unwrap_or(0)
             + state["optim_offset"].as_u64().unwrap_or(0)) as usize;
+        let what = if self.cfg.muon() {
+            "AdamW moments and Muon momentum"
+        } else {
+            "AdamW moments"
+        };
         (self.sink)(event(
             "info",
             format!(
-                "AdamW moments from {} ({} steps behind them)",
+                "{what} from {} ({} steps behind them)",
                 path.display(),
                 self.optim_offset
             ),
@@ -291,23 +342,29 @@ impl Trainer {
         if saved.model != self.cfg.model {
             return Err(format!("{dir}: model config differs from this run"));
         }
+        if saved.optimizer != self.cfg.optimizer {
+            return Err(format!(
+                "{dir}: checkpoint was trained with optimizer {:?}, this run uses {:?}; \
+                 resume needs the same optimizer (init_from without init_optim switches)",
+                saved.optimizer, self.cfg.optimizer
+            ));
+        }
         let (weights, _) =
             ckpt::load_safetensors(&d.join("model.safetensors")).map_err(|e| e.to_string())?;
         let (opt, _) =
             ckpt::load_safetensors(&d.join("optim.safetensors")).map_err(|e| e.to_string())?;
-        for p in model::params(&self.cfg.model) {
-            let pairs = [
-                (p.name.clone(), weights.get(&p.name)),
-                (model::adam_m(&p.name), opt.get(&p.name)),
-                (model::adam_v(&p.name), opt.get(&format!("v.{}", p.name))),
-            ];
-            for (buf, t) in pairs {
-                let t = t.ok_or(format!("{dir}: missing tensor for {buf}"))?;
-                self.machine
-                    .persistent_mut(&buf)
-                    .ok_or("not bound")?
-                    .copy_from_slice(&t.data);
-            }
+        let weight_slots = model::params(&self.cfg.model)
+            .into_iter()
+            .map(|p| (p.name.clone(), weights.get(&p.name)));
+        let optim = optim_slots(&self.cfg)
+            .into_iter()
+            .map(|(buf, key, _)| (buf, opt.get(&key)));
+        for (buf, t) in weight_slots.chain(optim) {
+            let t = t.ok_or(format!("{dir}: missing tensor for {buf}"))?;
+            self.machine
+                .persistent_mut(&buf)
+                .ok_or("not bound")?
+                .copy_from_slice(&t.data);
         }
         self.step = state["step"].as_u64().unwrap_or(0) as usize;
         self.tokens_seen = state["tokens"].as_u64().unwrap_or(0);
@@ -400,6 +457,9 @@ impl Trainer {
             self.machine.regs[regs::LOSS as usize] / self.machine.regs[regs::LOSS_COUNT as usize];
         self.step += 1;
         self.machine.regs[regs::LR as usize] = lr;
+        if self.cfg.muon() {
+            self.machine.regs[regs::MUON_LR as usize] = self.cfg.muon_lr_for(lr);
+        }
         self.machine.regs[regs::STEP as usize] = (self.optim_offset + self.step) as f32;
         self.machine
             .run(&mut self.update_lp)
@@ -457,7 +517,7 @@ impl Trainer {
         let h = self.machine.hbvm_stats();
         let gn = self.machine.regs[regs::SUMSQ as usize].max(0.0).sqrt();
         let kernels = self.kernel_label();
-        let v = json!({
+        let mut v = json!({
             "type": "telemetry", "run": self.cfg.run, "step": self.step, "tokens": self.tokens_seen,
             "loss": self.last_loss, "val_loss": self.last_val, "lr": self.machine.regs[regs::LR as usize],
             "grad_norm": gn, "step_ms": step_ms, "tokens_per_s": toks / secs, "tflops": flops / secs / 1e12,
@@ -467,6 +527,9 @@ impl Trainer {
                      "allocs": h.allocs, "frees": h.frees, "fragmentation": h.fragmentation},
             "comm": null, "ts": now(),
         });
+        if self.cfg.muon() {
+            v["muon_lr"] = json!(self.machine.regs[regs::MUON_LR as usize]);
+        }
         (self.sink)(v);
     }
 
@@ -508,7 +571,7 @@ impl Trainer {
         Ok(())
     }
 
-    /// Weights, AdamW moments and state.json of the current step into `dir`.
+    /// Weights, optimiser state ([`optim_slots`]) and state.json of the current step into `dir`.
     fn save(&mut self, dir: &Path, trunk: bool) -> Result<String, String> {
         std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
         let ps = model::params(&self.cfg.model);
@@ -534,12 +597,13 @@ impl Trainer {
             &meta,
         )
         .map_err(|e| e.to_string())?;
-        let mut opt = collect(&self.machine, &|n| model::adam_m(n));
-        opt.extend(
-            collect(&self.machine, &|n| model::adam_v(n))
-                .into_iter()
-                .map(|(k, v)| (format!("v.{k}"), v)),
-        );
+        let opt: BTreeMap<String, Tensor> = optim_slots(&self.cfg)
+            .into_iter()
+            .map(|(buf, key, shape)| {
+                let data = self.machine.persistent(&buf).expect("bound").to_vec();
+                (key, Tensor { shape, data })
+            })
+            .collect();
         ckpt::save_safetensors(&dir.join("optim.safetensors"), &opt, &meta)
             .map_err(|e| e.to_string())?;
         let mut state = json!({
