@@ -1,0 +1,93 @@
+{
+  "type": "champions",
+  "updated_at": 1791962108.3531978,
+  "updated_at_iso": "2026-10-14T07:15:08Z",
+  "cycle": 5,
+  "rule": "automatic promotion; one rule per cycle by the champion arbiter (docs/LONGRUN.md)",
+  "eval": {
+    "val": {
+      "batch": 8,
+      "seq": 256,
+      "batches": 32,
+      "seed": 4242
+    },
+    "tol": 0.02,
+    "levels": [
+      0,
+      1,
+      2
+    ],
+    "heldout_tasks": 128,
+    "margin": 0.03
+  },
+  "champions": {
+    "base": {
+      "run": "base-g4",
+      "dir": "runs/base-g4/FINAL",
+      "sha256": "104654de4fc10675da4a8674a6c283360d421588ae4a5a13d43abfa0e5dee52b",
+      "gen": 4,
+      "source": "final",
+      "base": null,
+      "restricted": false,
+      "metrics": {
+        "val": {
+          "base": 1.992382287979126
+        }
+      },
+      "decided": {
+        "cycle": 4,
+        "by": "gate",
+        "changed": true,
+        "ts": 1791907736.366314
+      }
+    },
+    "quasnir": {
+      "run": "quasnir-g3",
+      "dir": "runs/rsi/quasnir-g3/rounds/rsi-quasnir-g3-r8/step-000120",
+      "sha256": "4da6575fb7e25907af0646726e70cac4025c44230fce5fb621a44e873ff6588a",
+      "gen": 3,
+      "source": "rsi-champion",
+      "base": "runs/base-g3/FINAL",
+      "restricted": false,
+      "metrics": {
+        "val": {
+          "code": 2.2192764282226562,
+          "general": 2.8732986450195312
+        },
+        "heldout": {
+          "0": {
+            "pass_rate": 0.3203125,
+            "passed": 41,
+            "n": 128
+          },
+          "1": {
+            "pass_rate": 0.453125,
+            "passed": 58,
+            "n": 128
+          },
+          "2": {
+            "pass_rate": 0.015625,
+            "passed": 2,
+            "n": 128
+          }
+        },
+        "heldout_mean": 0.2630208333333333,
+        "stores": [
+          "code",
+          "general"
+        ],
+        "levels": [
+          0,
+          1,
+          2
+        ]
+      },
+      "decided": {
+        "cycle": 4,
+        "by": "arbiter",
+        "changed": false,
+        "ts": 1791921462.019325
+      }
+    }
+  }
+}

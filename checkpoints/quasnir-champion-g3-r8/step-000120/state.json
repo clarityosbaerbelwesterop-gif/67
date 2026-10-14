@@ -1,0 +1,49 @@
+{
+  "config": {
+    "autotune": false,
+    "batch": 8,
+    "ckpt_every": 0,
+    "data": "/home/user/67/runs/rsi/quasnir-g3/data/r8/store/train.meta.json",
+    "eval_batches": 4,
+    "eval_every": 0,
+    "grad_accum": 4,
+    "grad_clip": 1.0,
+    "hbvm_mib": 0,
+    "init_from": "/home/user/67/runs/rsi/quasnir-g3/rounds/rsi-quasnir-g3-r6/step-000120",
+    "log_every": 6,
+    "lr": 0.000019999999494757503,
+    "max_steps": 120,
+    "min_lr": 1.9999999949504854e-6,
+    "model": {
+      "dim": 384,
+      "ffn_hidden": 1024,
+      "max_seq_len": 512,
+      "n_heads": 6,
+      "n_kv_heads": 2,
+      "n_layers": 6,
+      "norm_eps": 9.999999747378752e-6,
+      "rope_theta": 10000.0,
+      "vocab_size": 8192
+    },
+    "out_dir": "/home/user/67/runs/rsi/quasnir-g3/rounds",
+    "resume_from": null,
+    "run": "rsi-quasnir-g3-r8",
+    "seed": 487504665,
+    "seq_len": 256,
+    "threads": 0,
+    "warmup_steps": 5,
+    "weight_decay": 0.009999999776482582
+  },
+  "loss": 1.877245545387268,
+  "model_sha256": "4da6575fb7e25907af0646726e70cac4025c44230fce5fb621a44e873ff6588a",
+  "parent_sha256": "ce565b9323c4472c56ffbfe6f9e27300b8ede187726b50b6703c6a59febf840e",
+  "rng_state": [
+    1778826838001641523,
+    12576778557109408691,
+    11635741752167755066,
+    4485263075086390579
+  ],
+  "step": 120,
+  "tokens": 983040,
+  "val_loss": 1.1995112895965576
+}

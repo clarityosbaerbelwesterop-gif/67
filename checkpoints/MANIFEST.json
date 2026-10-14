@@ -1,0 +1,92 @@
+{
+  "note": "Teile mit: cat <datei>.part-* > <datei>; sha256 vs files[].sha256 pruefen",
+  "files": [
+    {
+      "path": "checkpoints/champions.json",
+      "size": 2059,
+      "sha256": "e5a824a3f5d380847b587d0c7a53d677d894cc7607a949a4b9dc0277bff05d8b"
+    },
+    {
+      "path": "checkpoints/base-g5/latest.json",
+      "size": 127,
+      "sha256": "a815f59e14b643422c88906c44756ade44e781a495d5c3be09b8400aada1b10d"
+    },
+    {
+      "path": "checkpoints/base-g5/step-000500/model.safetensors",
+      "size": 50356896,
+      "sha256": "8b36f7fd9865a43d9486bda079b145c0a8184977801a189b9d6357a172e0c972"
+    },
+    {
+      "path": "checkpoints/base-g5/step-000500/optim.safetensors",
+      "size": 100713896,
+      "sha256": "6ff310fbb7a6be7efc9833919c2626a8f59d574fcbc26377437242f0acaf7081",
+      "parts": [
+        {
+          "path": "checkpoints/base-g5/step-000500/optim.safetensors.part-00",
+          "sha256": "520512c25231780b4c6e8fd9f2d03966820e6f08d14470cea57090954166dcc1"
+        },
+        {
+          "path": "checkpoints/base-g5/step-000500/optim.safetensors.part-01",
+          "sha256": "488cd96817ae070ae0f0b938cfb4e33c197a3b1a4b63285ab763896ec797d5e6"
+        }
+      ],
+      "reassemble": "cat checkpoints/base-g5/step-000500/optim.safetensors.part-* > checkpoints/base-g5/step-000500/optim.safetensors"
+    },
+    {
+      "path": "checkpoints/base-g5/step-000500/state.json",
+      "size": 1283,
+      "sha256": "d0dd058098194834ac94538dfab1f80200c54ceafc41eb4a53f36270f8be0c50"
+    },
+    {
+      "path": "checkpoints/quasnir-champion-g3-r8/step-000120/model.safetensors",
+      "size": 50356896,
+      "sha256": "4da6575fb7e25907af0646726e70cac4025c44230fce5fb621a44e873ff6588a"
+    },
+    {
+      "path": "checkpoints/quasnir-champion-g3-r8/step-000120/state.json",
+      "size": 1356,
+      "sha256": "4e0a1eea1edc3712e4e2f22314e4092a5679c1a12d9e2d3a6c2a744bd3fb5070"
+    },
+    {
+      "path": "checkpoints/quasnir-g4/latest.json",
+      "size": 131,
+      "sha256": "e0caf84c3afadf4c9f3c3e8eae9a5f11efb60e373c5235fd0cbf73485697617a"
+    },
+    {
+      "path": "checkpoints/quasnir-g4/step-004567/model.safetensors",
+      "size": 50356896,
+      "sha256": "d7595a919b6a3a0de0178053702bc61ee3634e41c155b9613c8c20093327f3f0"
+    },
+    {
+      "path": "checkpoints/quasnir-g4/step-004567/optim.safetensors",
+      "size": 100713896,
+      "sha256": "769ff84aca4b5a7c8db8e36e92a63c2ede9034248224a036fdc33ca6ff70c852",
+      "parts": [
+        {
+          "path": "checkpoints/quasnir-g4/step-004567/optim.safetensors.part-00",
+          "sha256": "3d9d2e25e8f23f62cf5ee0766d3a4b308fbad15fc2effc32f144b5f80a77e1ee"
+        },
+        {
+          "path": "checkpoints/quasnir-g4/step-004567/optim.safetensors.part-01",
+          "sha256": "539099645f5c87f828d873adb63a4b11de91594cee57d094dc2c148753c3672a"
+        }
+      ],
+      "reassemble": "cat checkpoints/quasnir-g4/step-004567/optim.safetensors.part-* > checkpoints/quasnir-g4/step-004567/optim.safetensors"
+    },
+    {
+      "path": "checkpoints/quasnir-g4/step-004567/state.json",
+      "size": 1237,
+      "sha256": "7586f4cd851375485525a43141acc63b1e2403ac66354e1dfe4cd14fd6375b42"
+    },
+    {
+      "path": "checkpoints/configs/longrun-quasnir-focus.json",
+      "size": 564,
+      "sha256": "0d7737c4dc469545b7b124d913377357c5c9fd13bd034b7453d1d3789de3d831"
+    },
+    {
+      "path": "checkpoints/configs/longrun.json",
+      "size": 6123,
+      "sha256": "631f57f2a54cff148e86efb9f3a605b5d41f2267676e29d7c2314247c0175290"
+    }
+  ]
+}
