@@ -1,0 +1,126 @@
+{
+  "type": "evals_reference",
+  "date": "2026-10-14",
+  "note": "Agreed reference: no older sha256 reference for the eval sets existed anywhere (repo manifests list names only). Recorded from data/out/evals on 2026-10-14 after the VM rebuild; line counts match the official sets.",
+  "evals": {
+    "gsm8k.jsonl": {
+      "sha256": "3730d312f6e3440559ace48831e51066acaca737f6eabec99bccb9e4b3c39d14",
+      "lines": 1319
+    },
+    "humaneval.jsonl": {
+      "sha256": "1d49078ba3e2b196b9344535bef34a43021f038fad9561d6ee7c53450609a6a2",
+      "lines": 164
+    },
+    "mbpp.jsonl": {
+      "sha256": "ccf64ceae9c5403bf50a044cb6d505bfd2a2963ee58338ba268fd65beab92a9f",
+      "lines": 974
+    }
+  },
+  "heldout_tasks": {
+    "L0": {
+      "family": "code",
+      "n": 128,
+      "seeds": {
+        "first": 1000000000,
+        "last": 1000000127,
+        "skipped_duplicates": []
+      },
+      "sha256": "b70ae947a2b5b2eadc88ce9d8b4f55a175be0fd9ba76576fc92231713287129e",
+      "sha256_of": "sha256 over '\\n'.join(task_id + ' ' + key) in order (training.rsi.tasks.heldout_tasks)",
+      "dropped_contaminated": 0,
+      "task_id_comparison": {
+        "old_logs_checked": 13,
+        "each_old_log_n": [
+          64
+        ],
+        "all_old_ids_in_new": true,
+        "all_prefix_match": true,
+        "sources": "runs/rsi/quasnir-g2/heldout/*, runs/rsi/quasnir-g3/heldout/* (Quasnir only)"
+      }
+    },
+    "L1": {
+      "family": "code",
+      "n": 128,
+      "seeds": {
+        "first": 1000000000,
+        "last": 1000000127,
+        "skipped_duplicates": []
+      },
+      "sha256": "434b531249a586eec535904707c91bbec466621a00507e4192121c5ec7e3cae1",
+      "sha256_of": "sha256 over '\\n'.join(task_id + ' ' + key) in order (training.rsi.tasks.heldout_tasks)",
+      "dropped_contaminated": 0,
+      "task_id_comparison": {
+        "old_logs_checked": 6,
+        "each_old_log_n": [
+          64
+        ],
+        "all_old_ids_in_new": true,
+        "all_prefix_match": true,
+        "sources": "runs/rsi/quasnir-g2/heldout/*, runs/rsi/quasnir-g3/heldout/* (Quasnir only)"
+      }
+    },
+    "L2": {
+      "family": "code",
+      "n": 128,
+      "seeds": {
+        "first": 1000000000,
+        "last": 1000000131,
+        "skipped_duplicates": [
+          1000000056,
+          1000000103,
+          1000000115,
+          1000000121
+        ]
+      },
+      "sha256": "ce0077221a74c854c1a95be29d7f78716897d7e6417f210ae7f69b0311b5d532",
+      "sha256_of": "sha256 over '\\n'.join(task_id + ' ' + key) in order (training.rsi.tasks.heldout_tasks)",
+      "dropped_contaminated": 0,
+      "task_id_comparison": {
+        "old_logs_checked": 0,
+        "note": "no older L2 logs on the box"
+      }
+    }
+  },
+  "baseline_quasnir_g3_r8": {
+    "model_sha256": "4da6575fb7e25907af0646726e70cac4025c44230fce5fb621a44e873ff6588a",
+    "measured": "2026-10-14, official arbiter path scripts/champions.evaluate (forge generate + forge eval), decontamination from data/out/evals",
+    "heldout": {
+      "L0": {
+        "passed": 41,
+        "n": 128,
+        "pass_rate": 0.3203125
+      },
+      "L1": {
+        "passed": 58,
+        "n": 128,
+        "pass_rate": 0.453125
+      },
+      "L2": {
+        "passed": 2,
+        "n": 128,
+        "pass_rate": 0.015625
+      }
+    },
+    "val_loss": {
+      "seed1234_batches32 (arbiter default seed)": {
+        "code": 1.8302773237228394,
+        "general": 2.7348785400390625
+      },
+      "seed4242_batches32 (champions.json eval seed)": {
+        "code": 1.861963152885437,
+        "general": 2.752584934234619
+      }
+    },
+    "val_stores": {
+      "code-v2": {
+        "train.val.bin_sha256": "250d97bc4be5425a176cee4f9c6307a3a532b93dc2aa09134e90b5dcbcdcacb4"
+      },
+      "general-v2": {
+        "train.val.bin_sha256": "a274cc974f25e9fe2c4d06d8b47213112e3e5aeb0d023fc492c366e65ee85aae"
+      }
+    },
+    "batch": 8,
+    "seq": 256,
+    "note": "champions.json's 2.2193/2.8733 were measured on the old code-v3/general-v3 stores, which no longer exist; not comparable."
+  }
+}
