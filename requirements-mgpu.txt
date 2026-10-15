@@ -1,0 +1,10 @@
+# mgpu trainer: NO new third-party packages.
+# Imports: jax, jax.numpy, jax.sharding, numpy (+ stdlib, + repo modules accel/*, scripts/rebase.py).
+# Pinned+hashed set already used by the pod job (run_gpu.sh installs with
+#   pip install --require-hashes --no-deps --only-binary=:all: -r requirements-<cuda>.txt):
+#   /workspace/gpu-runs/h200-phase-a-1015e/stage/requirements-cuda12.txt
+#   sha256 6be1a3a33e80f814ba29650851cafed347666e5ff462be6fe0ecaca6749fc1c2
+#   -> jax==0.11.2, jaxlib==0.11.2, jax-cuda12-plugin==0.11.2, jax-cuda12-pjrt==0.11.2,
+#      numpy==2.5.4, ml_dtypes==0.6.0, nvidia-cudnn-cu12==9.27.0.42 (cudnn attention backend), ... (21 pkgs, all --hash=sha256)
+# ml_dtypes (bf16 export) is already in that pinned set (0.6.0).
+# Tested on the box with jax 0.11.2 / numpy 2.5.4 (same versions). orbax/optax NOT required.

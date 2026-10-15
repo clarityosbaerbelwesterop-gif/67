@@ -23,6 +23,7 @@ import numpy as np
 
 from .config import ModelConfig
 from .forge_io import Rng, cosf, powf, sinf
+from .attn import attend as _attend
 
 f32 = np.float32
 PRECISIONS = ("f32", "bf16")
@@ -99,24 +100,15 @@ def rope(x, cos, sin):
 
 
 # ---------------------------------------------------------------------------------------------- model
-def _block(x, p: dict, cfg: ModelConfig, cos, sin, mask, precision: str):
+def _block(x, p: dict, cfg: ModelConfig, cos, sin, mask, precision: str, attn: str = "naive"):
     """One pre-norm layer (model.rs:206-351). x [B,T,d]; p holds the layer's tensors by short name."""
     B, T, d = x.shape
     H, KV, hd = cfg.n_heads, cfg.n_kv_heads, cfg.head_dim
-    rep = H // KV
-    alpha = f32(1.0) / np.sqrt(f32(hd), dtype=f32)  # model.rs:216, f32 sqrt
     xn = rms_norm(x, p["attn_norm.weight"], cfg.norm_eps, d)
     q = rope(ein("btd,fd->btf", xn, p["attn.wq.weight"], precision).reshape(B, T, H, hd), cos, sin)
     k = rope(ein("btd,fd->btf", xn, p["attn.wk.weight"], precision).reshape(B, T, KV, hd), cos, sin)
     v = ein("btd,fd->btf", xn, p["attn.wv.weight"], precision).reshape(B, T, KV, hd)
-    # GQA: query head h = kv*rep + r reads kv head h // rep (jnp.repeat order, Stride{div=rep}).
-    q = q.reshape(B, T, KV, rep, hd)
-    s = ein("bikrd,bjkd->bkrij", q, k, precision) * alpha
-    s = jnp.where(mask, s, -jnp.inf)
-    mx = jax.lax.stop_gradient(jnp.max(s, axis=-1, keepdims=True))  # softmax is shift-invariant
-    e = jnp.where(mask, jnp.exp(s - mx), f32(0.0))
-    pr = e * (f32(1.0) / jnp.sum(e, axis=-1, keepdims=True))
-    o = ein("bkrij,bjkd->bikrd", pr, v, precision).reshape(B, T, H * hd)
+    o = _attend(q, k, v, attn, ein, precision)
     x = x + ein("btf,df->btd", o, p["attn.wo.weight"], precision)
     xn = rms_norm(x, p["ffn_norm.weight"], cfg.norm_eps, d)
     h1 = ein("btd,fd->btf", xn, p["ffn.w1.weight"], precision)
@@ -125,7 +117,7 @@ def _block(x, p: dict, cfg: ModelConfig, cos, sin, mask, precision: str):
     return x + ein("btf,df->btd", g, p["ffn.w2.weight"], precision)
 
 
-def forward(params: dict, cfg: ModelConfig, ids, precision: str = "f32", remat: bool = False):
+def forward(params: dict, cfg: ModelConfig, ids, precision: str = "f32", remat: bool = False, attn: str = "naive"):
     """Logits [B,T,V] (f32) of token ids [B,T]; every window starts at position 0 (model.rs:206-387)."""
     if precision not in PRECISIONS:
         raise ValueError(f"precision must be one of {PRECISIONS}")
@@ -136,11 +128,11 @@ def forward(params: dict, cfg: ModelConfig, ids, precision: str = "f32", remat: 
     x = jnp.take(emb, ids, axis=0)
     block = _block
     if remat:
-        block = jax.checkpoint(_block, static_argnums=(2, 6))
+        block = jax.checkpoint(_block, static_argnums=(2, 6, 7))
     for i in range(cfg.n_layers):
         pre = f"blocks.{i}."
         p = {k[len(pre):]: v for k, v in params.items() if k.startswith(pre)}
-        x = block(x, p, cfg, cos, sin, mask, precision)
+        x = block(x, p, cfg, cos, sin, mask, precision, attn)
     xf = rms_norm(x, params["norm.weight"], cfg.norm_eps, cfg.dim)
     return ein("btd,vd->btv", xf, emb, precision)
 
@@ -156,7 +148,7 @@ def sequential_row_sum(e, unroll: int = 16):
 
 
 def row_losses(params: dict, cfg: ModelConfig, ids, targets, precision: str = "f32", remat: bool = False,
-               xent: str = "fast"):
+               xent: str = "fast", attn: str = "naive"):
     """Per-row cross entropy f32(ln(sum exp(l - max)) + max - l[target]) and next-token hit
     (argmax = first index of the max), as machine.rs Xent computes them.
 
@@ -166,7 +158,7 @@ def row_losses(params: dict, cfg: ModelConfig, ids, targets, precision: str = "f
     "fast" (a tree reduction) is the default for training steps; the gradient is the same either way."""
     if xent not in XENT_MODES:
         raise ValueError(f"xent must be one of {XENT_MODES}")
-    lg = forward(params, cfg, ids, precision, remat)
+    lg = forward(params, cfg, ids, precision, remat, attn)
     mx = jax.lax.stop_gradient(jnp.max(lg, axis=-1))  # d/dlogits = softmax - onehot, as forge's Xent
     e = jnp.exp(lg - mx[..., None])
     lse = jnp.log(jnp.sum(e, axis=-1))
@@ -190,11 +182,12 @@ def pairwise_sum(x, width: int = 128):
     return jnp.sum(x)
 
 
-def loss(params: dict, cfg: ModelConfig, batch, precision: str = "f32", remat: bool = False, xent: str = "forge"):
+def loss(params: dict, cfg: ModelConfig, batch, precision: str = "f32", remat: bool = False, xent: str = "forge",
+         attn: str = "naive"):
     """Mean next-token cross entropy over every token of batch = (ids, targets), like forge's
     LOSS / LOSS_COUNT (no ignore index, no padding mask, no z-loss, no label smoothing)."""
     ids, targets = batch
-    ce, _ = row_losses(params, cfg, ids, targets, precision, remat, xent)
+    ce, _ = row_losses(params, cfg, ids, targets, precision, remat, xent, attn)
     return pairwise_sum(ce) / f32(ce.size)
 
 
