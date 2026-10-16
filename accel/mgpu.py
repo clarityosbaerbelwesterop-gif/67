@@ -112,6 +112,23 @@ def step_seed(seed: int, step: int, micro: int) -> int:
     z ^= z >> 31; z = (z * 0xD6E8FEB86CD8B5AD) & M64; z ^= z >> 29
     return z
 
+class _TrainBin:
+    """train.bin of a store meta, memmapped read-only; same checks as Store but no val_bin requirement."""
+    def __init__(self, meta: str, vocab: int):
+        m = json.loads(Path(meta).read_text())
+        dt = m.get("dtype") if isinstance(m.get("dtype"), str) else "uint16"
+        if dt not in ("uint16", "uint32"):
+            raise ValueError(f"{meta}: unsupported dtype {dt}")
+        w = 2 if dt == "uint16" else 4
+        p = Path(meta).parent / Path(m["bin"]).name
+        n = p.stat().st_size
+        if n % w or (isinstance(m.get("tokens"), int) and m["tokens"] != n // w):
+            raise ValueError(f"{meta}: tokens does not match the bin size")
+        self.train = np.memmap(p, "<u2" if w == 2 else "<u4", "r"); self.limit = int(vocab)
+
+    def __len__(self):
+        return len(self.train)
+
 class CleanStore:
     """Only kept docs. Virtual stream = concatenation of kept docs, each WITH its EOS:
     segment i covers train.bin[start_i .. start_i + len_i] inclusive (len excludes the EOS at start+len).
@@ -119,7 +136,7 @@ class CleanStore:
     segments, so a window never touches a dropped doc. Index lives in RAM (3 int64 arrays), bin is memmapped."""
     def __init__(self, meta: str, tsv: str, vocab: int, verify_sha: bool = True):
         import hashlib, time
-        self.base = Store(meta, vocab)
+        self.base = _TrainBin(meta, vocab)   # train split only: the val bin is never needed (nor shipped to pods)
         a = np.loadtxt(tsv, dtype=np.int64, delimiter="\t", skiprows=1, ndmin=2)
         self.doc, self.seg_start, self.seg_len = a[:, 0], a[:, 1], a[:, 2] + 1
         if np.any(np.diff(self.seg_start) <= 0):
