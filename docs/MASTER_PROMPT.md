@@ -161,9 +161,9 @@ Jede Stufe hat ein messbares Tor. Ohne bestandenes Tor beginnt die nächste Stuf
    Abruf des 1B-Exports: Diese Cloud-Box hat kein ausgehendes SSH, `runpod-fetch` braucht es aber.
    Einen Runner-seitigen Abruf (nur Chiffretext, Entwurfs-Release) legt der Owner selbst an oder
    gibt ihn ausdrücklich frei.
-   Skalierung über 100 Mrd. Parameter (25–30 Mrd. aktiv) mit 1–2 B300: `docs/PLAN_100B_MOE.md`. Daten für
-   250–500 Mrd. Tokens: `data/build_corpus_v6.py` auf RunPod-CPU-Pods, Auftrag an Grok in
-   `docs/PROMPT_GROK_RUNPOD.md`.
+   Heute: Weg B (23B-Schritt) aus dem 300-€-Budget. Plan fürs Funding: `docs/PLAN_100B_MOE.md`
+   (BTX, 108B gesamt, ≈ 26B aktiv, ≈ 56.500 $ in FP8). Daten: `data/build_corpus_v6.py`, zuerst als Pilot.
+   Neue Quellen nur über das Wert-Tor (`data/build_ablation.py`). Auftrag an Grok: `docs/PROMPT_GROK_RUNPOD.md`.
 4. Danach der volle s2-Lauf. Chinchilla-Ziel: etwa 19 Mrd. Tokens, also
    6 · 9,6e8 · 1,9e10 ≈ 1,1e20 FLOP. Das sind etwa 3 Tage auf einer H100 bei 40 % MFU oder
    etwa 10 Stunden auf 8 H100.
@@ -232,6 +232,10 @@ und nenne die ETA.
 - **Code:** Änderungen nur mit Tests (`python3 -m pytest -q scripts/tests`,
   `python3 -m pytest -q accel/tests/test_parity.py`) und zuerst in einer separaten Arbeitskopie.
 - **Sicherheitsprüfungen:** Werden sie abgelehnt, nicht umgehen, sondern den Owner fragen.
+- **Präzision:** kein 4-Bit-Training (NVFP4); FP8 und BF16 sind erlaubt.
+- **Evals:** Held-out-Sets verlassen die Box nie. Öffentliche Benchmarks auf Pods nur nach Owner-Ja.
+- **Daten:** Code- und neue Daten nur bei hoher Qualität und nur mit bestandenem Wert-Tor
+  (Ersatz-Ablation am 100M-Proxy, `docs/PLAN_100B_MOE.md` Abschnitt 6).
 
 ### 9. Berichte
 

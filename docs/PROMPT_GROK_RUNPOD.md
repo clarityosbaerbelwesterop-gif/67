@@ -1,6 +1,6 @@
-# Prompt für Grok: 1B messen und Corpus v6 auf RunPod bauen
+# Prompt für Grok: 1B messen, Daten-Pilot, Wert-Tor
 
-Diesen Text komplett an Grok geben. Er ist in sich vollständig.
+Diesen Text komplett an Grok geben. Er ist in sich vollständig. Stand 19.10.2026, nach Groks Prüfung überarbeitet.
 
 ---
 
@@ -9,41 +9,41 @@ Diesen Text komplett an Grok geben. Er ist in sich vollständig.
 Du arbeitest für das Projekt forge.
 - **Repo `67`**, Branch `claude/gitops-multi-model-finetuning-ort4m9`: Code, Daten-Pipelines, Evals.
 - **Repo `Osirus`:** GitOps-Steuerung und der RunPod-Key im GitHub-Environment `RUNPOD`.
-- **RunPod-Netzwerk-Volume:** `3qlkuqnr1u` in `US-NC-2`. Dort liegt der 1B-Lauf `s2-run2` mit dem Export bei step 7500.
+- **RunPod-Netzwerk-Volume:** `3qlkuqnr1u` in `US-NC-2`.
 
-Du hast zwei Aufträge. Arbeite sie nacheinander ab. Nach jedem Auftrag berichtest du mit Zahlen.
+Weg B, der 23B-Schritt, hat beim 300-€-Budget Vorrang. Die drei Aufträge hier sind klein und gedeckelt, zusammen
+höchstens 25 $ plus Speicher. Nach jedem Auftrag berichtest du mit Zahlen.
 
 ### Feste Regeln
 
 1. **Schlüssel**
    - Schlüssel erscheinen nie in Chat, Log, Commit oder Datei.
    - Der RunPod-Key bleibt im Environment `RUNPOD` oder in deiner RunPod-Sitzung.
-   - Ein Hugging-Face-Token liegt nur als RunPod-Secret `HF_TOKEN` am Pod. Die Pipeline liest es aus der Umgebung und gibt
-     es nie aus.
+   - Das Hugging-Face-Token liegt nur als RunPod-Secret `HF_TOKEN` am Pod. Die Pipeline liest es aus der Umgebung,
+     gibt es nie aus und sendet es nur an Hugging-Face-Hosts.
 2. **Geld**
-   - Jeder Pod bekommt vorher einen Deckel: Auftrag 1 höchstens 5 $, Auftrag 2 höchstens 60 $ CPU-Zeit.
+   - Jeder Pod bekommt vorher einen Deckel.
    - Bei 80 % des Deckels anhalten und melden.
-   - Pods nach Gebrauch immer löschen.
-   - Volumes nie löschen.
+   - Pods nach Gebrauch löschen, Volumes nie.
 3. **Nichts löschen**
-   - Keine Checkpoints, keine Exporte, keine Daten auf dem Volume.
-   - Ausnahme: Die Pipeline entfernt ihre eigenen Download-Caches (`raw/`) und Partitionsdateien selbst.
-4. **Gewichte bleiben auf RunPod.** Sie gehen nicht in ein öffentliches Repo, außer der Owner erlaubt es ausdrücklich.
-   Rouge und Darus nicht anfassen.
-5. **Daten**
-   - Nur Lizenzstufe A.
-   - Stufe B (Share-Alike) und Stufe C (Web-Crawls) nur nach ausdrücklicher Owner-Freigabe.
+   - Keine Checkpoints, keine Exporte, keine Daten.
+   - Ausnahme: Die Pipeline entfernt ihre eigenen Download-Caches und Partitionsdateien selbst.
+4. **Gewichte** bleiben auf RunPod oder der Box. Kein öffentliches Repo ohne ausdrückliches Owner-Ja. Rouge und Darus
+   nicht anfassen. Kein 4-Bit-Training.
+5. **Evals**
+   - Held-out-Sets (L0–L2) verlassen die Box nie.
+   - Auf einem Pod laufen nur öffentliche Benchmarks, und nur nach ausdrücklichem Owner-Ja (Auftrag 1).
+6. **Daten**
+   - Lizenzstufe A.
+   - Stufe C (FineWeb-Edu, FineMath) erst nach ausdrücklichem Owner-Ja, und dann ebenfalls durch das Wert-Tor.
+   - Code- und alle neuen Daten kommen nur in den Mix, wenn sie das Wert-Tor bestehen (Auftrag 3).
    - Keine Ausgaben geschlossener Modelle.
-   - Dekontamination gegen HumanEval, MBPP und GSM8K-Test bleibt an. Fehlen die Eval-Sets, bricht die Pipeline ab, und
-     das ist richtig so.
-6. **Push.** Nur Ergebnis-Dateien (JSON, Manifeste, Logs ohne Schlüssel) auf den Branch oben in `67`. Kein Training,
-   kein anderer Branch.
-7. **Bei Abweichung** (Prüfsumme falsch, Quelle liefert < 5 % Ausbeute, unbekannte Lizenzen in Masse, Fehler)
-   anhalten und melden. Nicht improvisieren.
+7. **Push.** Nur Ergebnis-Dateien (JSON, Manifeste) auf den Branch oben in `67`. Kein anderer Branch.
+8. **Bei Abweichung** (Prüfsumme falsch, Ausbeute < 5 %, unbekannte Lizenzen in Masse, Fehler) anhalten und melden.
 
-### Pod-Grundeinrichtung (für beide Aufträge)
+### Pod-Grundeinrichtung
 
-Ein CPU-Pod mit 32 vCPU und 50 GB Container-Disk, dazu das Volume `3qlkuqnr1u`, gemountet unter `/vol`:
+CPU-Pod mit 32 vCPU und 50 GB Container-Disk, dazu das Volume `3qlkuqnr1u` unter `/vol`:
 
 ```bash
 apt-get update -qq && apt-get install -y -qq git build-essential python3-pip curl
@@ -53,9 +53,11 @@ cd /root/67 && cargo build --release -p forge && pip install -q numpy pyarrow
 python3 -m pytest -q data/tests          # muss grün sein
 ```
 
-### Auftrag 1: Das 1B (s2-run2, step 7500) auf dem Pod messen
+### Auftrag 1: Öffentliche Benchmarks des 1B (s2-run2, step 7500). Nur nach ausdrücklichem Owner-Ja. Deckel 5 $.
 
-Die Gewichte bleiben auf dem Volume. In das Repo kommen nur die Ergebnisse.
+Gemessen werden HumanEval, MBPP und die harten Varianten. Die harten Varianten bestehen aus öffentlichen Aufgaben plus
+generierten Zusatztests, die bereits im Repo liegen. ARC-AGI-2 entfällt, weil es für 1B wenig aussagt. Die Gewichte
+bleiben auf dem Volume.
 
 ```bash
 cd /root/67
@@ -66,87 +68,97 @@ python3 scripts/import_export.py "$EXP" /root/ckpt/s2-run2-s7500 --expect-sha256
 python3 -c "import sys; sys.path.insert(0,'data'); import build_corpus as bc; bc.get_evals()"
 mkdir -p data/stores/evals && cp data/out/evals/*.jsonl data/stores/evals/
 mkdir -p runs/evals/s2-run2-s7500
-for s in humaneval mbpp humaneval-hard mbpp-hard arc-agi-2; do
+for s in humaneval mbpp humaneval-hard mbpp-hard; do
   python3 scripts/humaneval.py /root/ckpt/s2-run2-s7500 --suite $s --tokenizer data/tokenizer.json \
     > runs/evals/s2-run2-s7500/$s.json
 done
 ```
 
-Danach pushen:
-- `runs/evals/s2-run2-s7500/*.json`
-- `EXPORT.json`
-- den letzten Abschnitt von `train.jsonl` (ohne Schlüssel)
+Ergebnis pushen: `runs/evals/s2-run2-s7500/*.json` und `EXPORT.json`. Melden: pass@1 je Suite, den Abstand der harten
+zur normalen Suite, Laufzeit und Kosten.
 
-Melden:
-- pass@1 je Suite,
-- den Unterschied der harten zur normalen Suite,
-- Laufzeit und Kosten.
+### Auftrag 2: Pilot Corpus v6, nur Code mit hoher Qualität. Deckel 10 $ CPU, höchstens 100 GB Speicher.
 
-### Auftrag 2: Corpus v6 bauen (Ziel 250–500 Mrd. Tokens, zuerst Stufe A ≈ 300 Mrd. Budget)
-
-Pipeline: `data/build_corpus_v6.py`. Quellen: `data/sources_v6.json`. Beide Dateien haben eine Beschreibung oben im Kopf.
+Pipeline: `data/build_corpus_v6.py`. Quellen: `data/sources_v6.json`.
 
 **0. Owner-Schritt.** Die BigCode-Bedingungen für `bigcode/the-stack-dedup` mit dem Hugging-Face-Konto des Owners
-akzeptieren. Das Token als RunPod-Secret `HF_TOKEN` hinterlegen.
+akzeptieren und das Token als RunPod-Secret `HF_TOKEN` hinterlegen.
 
-**1. Quellen prüfen.**
-- Für jede Quelle mit `verify: true` einmal `inspect` ausführen. Für den Stack reicht eine Sprache.
-- Stimmen Repo-Name, Dateimuster oder Feldnamen nicht, korrigierst du `data/sources_v6.json` und committest das mit
-  Begründung.
+**1. Quellen prüfen.** Stimmt Repo, Dateimuster oder Feld nicht, korrigierst du `data/sources_v6.json` und committest
+das mit Begründung.
 
 ```bash
 python3 data/build_corpus_v6.py inspect --source stack-python
-python3 data/build_corpus_v6.py inspect --source cp-pes2o
+python3 data/build_corpus_v6.py inspect --source stack-typescript
+python3 data/build_corpus_v6.py inspect --source cp-stackv2-edu
 ```
 
-**2. Reasoning-Spuren erzeugen.** Sie sind verifiziert; der CPU-Lauf dauert etwa 1 Stunde und belegt etwa 11 GB.
-Muss vor `plan` passieren, weil `plan` die lokalen Dateien zum Planzeitpunkt erfasst:
+**2. Pilot**, höchstens 3 Mrd. Tokens je Quelle:
 
 ```bash
-python3 data/build_reasoning.py --synthetic-tokens 5e9 --seed 6 --workers 30 --docs-only
-mkdir -p /vol/data/reasoning && cp data/cache/reasoning/docs-*.jsonl /vol/data/reasoning/
-```
-
-**3. Planen, filtern, deduplizieren, tokenisieren, packen.**
-
-```bash
-O=/vol/data/v6; mkdir -p $O/logs
-python3 data/build_corpus_v6.py plan --out $O --tiers A
+O=/vol/data/v6-pilot; mkdir -p $O/logs
+python3 data/build_corpus_v6.py plan --out $O --tiers A --sources stack-python,stack-typescript,cp-stackv2-edu --pilot-tokens 3e9
 for w in $(seq 0 31); do
   nohup python3 data/build_corpus_v6.py filter --out $O --worker $w --workers 32 > $O/logs/filter-$w.log 2>&1 &
 done
-python3 data/build_corpus_v6.py status --out $O          # alle 30 min; Ausbeute je Quelle prüfen
-# wenn alle Filter fertig sind:
-python3 data/build_corpus_v6.py dedup --out $O --partitions 128
+python3 data/build_corpus_v6.py status --out $O          # alle 30 min
+python3 data/build_corpus_v6.py dedup --out $O --partitions 64
 for w in $(seq 0 31); do
   nohup python3 data/build_corpus_v6.py tokenize --out $O --worker $w --workers 32 > $O/logs/tok-$w.log 2>&1 &
 done
 python3 data/build_corpus_v6.py pack --out $O
 ```
 
-**4. Pushen** nach `data/manifests/v6/`:
+**3. Pushen** nach `data/manifests/v6-pilot/`:
 - die Ausgabe von `status`,
-- `$O/dedup/dedup.json`,
-- `$O/store/manifest.json`,
-- die Liste der Quellen mit Dateizahl und Größe aus `plan.json`. Keine Daten.
+- `dedup.json`,
+- `store/manifest.json`.
 
-**5. Melden:**
-- Tokens je Quelle und Lizenzstufe,
-- Verwerfgründe,
-- exakte und Beinahe-Duplikate,
-- Speicherbedarf auf dem Volume,
-- CPU-Kosten,
-- Laufzeit.
+**4. Melden:**
+- Tokens je Quelle,
+- Verwerfgründe und Ausbeute,
+- Duplikate,
+- Speicher, CPU-Kosten, Laufzeit.
 
-**Hinweise**
-- Alle Stufen sind wiederaufnehmbar. Ein abgebrochener Worker wird mit demselben Befehl neu gestartet.
-- `filter` stoppt selbst, wenn das Volume weniger als 30 GB frei hat. Dann Volume vergrößern (nach Kostenmeldung),
-  nichts löschen.
-- Erwarteter Speicher für Stufe A: ≈ 1 TB (Text gzip + Tokens + Index). Bei RunPod sind das ≈ 0,05–0,07 $/GB/Monat.
+### Auftrag 3: Wert-Tor (nach Weg B oder mit Owner-Ja). Deckel 10 $ GPU.
+
+Frage: Bringt ein Token der neuen Code-Quelle dem Modell mindestens so viel wie ein Token der bisherigen Daten?
+
+1. **Je Kandidat Arm B bauen.** 30 % Kandidat, 70 % bisheriger Basis-Store; das ist der Store mit der Kept-TSV, mit
+   der Lauf 2 trainiert wurde.
+
+   ```bash
+   python3 data/build_ablation.py --base-meta <BASIS>/train.meta.json --base-index <BASIS-KEPT.tsv> \
+     --cand-meta /vol/data/v6-pilot/store/train.meta.json --cand-index /vol/data/v6-pilot/store/kept.npy \
+     --frac 0.3 --tokens 1e9 --seed 1 --out /vol/data/ablation/code-pilot
+   ```
+
+   Der Pilot-Store mischt drei Quellen. Ein Arm pro Quelle braucht je einen eigenen Pilot-Lauf; zuerst den
+   gemeinsamen Arm messen.
+2. **Läufe auf 1 GPU**, alle vom 100M-Champion (`quasnir-1015e-s5744`), mit gleichem Plan:
+   - Arm A, Seed 1234
+   - Arm A, Seed 4242 (Rauschen)
+   - Arm B, Seed 1234
+
+   ```bash
+   python3 -m accel.run_s2 --init <100M-CKPT> --data <ARM>/train.meta.json --clean-tsv <ARM-INDEX> \
+     --out /vol/runs/ablation/<ARM>-<SEED> --deadline $(( $(date +%s) + 3600 )) --cap 1000 \
+     --batch 128 --accum 4 --seq 512 --seed <SEED>
+   ```
+
+   Für Arm A gelten der Basis-`train.meta.json` und die Basis-Kept-TSV, für Arm B `<ARM>/kept.npy`. Vorher einmal
+   `python3 -m pytest -q accel/tests/test_parity.py` auf dem GPU-Pod: Der Trainer liest den `.npy`-Index neu.
+3. **Messen auf der Box**, wie bisher: Held-out-Code L0–L2 und val general, mit denselben Seeds. Die Exporte der Arme
+   (≈ 200 MB je Arm) kommen dafür zur Box; die Held-out-Sets nicht zum Pod.
+4. **Entscheidung.** Die Quelle besteht, wenn beide Bedingungen gelten:
+   - Arm B ist auf Held-out-Code um mehr als das Doppelte des Seed-Rauschens besser als Arm A.
+   - Arm B ist auf val general nicht schlechter als das Rauschen.
+
+   Sonst bleibt sie draußen. Melde die Tabelle: Arm, Seed, Held-out-Code, val general, Kosten.
 
 ### Nicht in diesem Auftrag
 
-- Kein Training.
-- Keine GPU-Pods.
-- Keine Stufe B oder C.
-- Kein Messtag auf B300. Dafür kommt ein eigener Prompt mit eigenem Budget (`docs/PLAN_100B_MOE.md`, Abschnitt 6).
+- Kein voller Corpus v6.
+- Keine Stufe C ohne Owner-Ja.
+- Kein Training außer den drei Proxyläufen.
+- Kein B300-Messtag. Das kommt erst mit Funding (`docs/PLAN_100B_MOE.md`).

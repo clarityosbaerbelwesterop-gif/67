@@ -26,7 +26,7 @@ and is never printed or written anywhere.
 PYTHONHASHSEED is forced to 0 when run as a script (the decontamination n-gram hashes must agree across
 processes and pods).
 
-  python3 data/build_corpus_v6.py plan --out /vol/data/v6 [--tiers A] [--sources a,b]
+  python3 data/build_corpus_v6.py plan --out /vol/data/v6 [--tiers A] [--sources a,b] [--pilot-tokens 3e9]
   python3 data/build_corpus_v6.py filter --out /vol/data/v6 --worker 0 --workers 16
   python3 data/build_corpus_v6.py dedup --out /vol/data/v6
   python3 data/build_corpus_v6.py tokenize --out /vol/data/v6 --worker 0 --workers 16
@@ -302,7 +302,7 @@ def _where(row: dict, cond: dict) -> bool:
 # ---------------------------------------------------------------- stages
 
 
-def stage_plan(out: Path, cfg: dict, tiers: set[str], only: set[str] | None) -> None:
+def stage_plan(out: Path, cfg: dict, tiers: set[str], only: set[str] | None, pilot: float | None = None) -> None:
     out.mkdir(parents=True, exist_ok=True)
     plan_path = out / "plan.json"
     if plan_path.exists():
@@ -313,12 +313,14 @@ def stage_plan(out: Path, cfg: dict, tiers: set[str], only: set[str] | None) -> 
             continue
         fl = list_files(src)
         log(f"{src['name']}: {len(fl)} files, {sum(f['size'] for f in fl) / 1e9:.1f} GB")
+        if pilot:  # pilot run: small budget per source until the value gate has measured it (docs/PLAN_100B_MOE.md)
+            src = {**src, "budget_tokens": min(src.get("budget_tokens", pilot), pilot)}
         sources.append(src)
         for f in fl:
             files.append({"idx": len(files), "source": src["name"], **f})
     if len(files) >= 1 << (64 - SHIFT):
         raise SystemExit("too many files for the gid layout")
-    plan_path.write_text(json.dumps({"tiers": sorted(tiers), "sources": sources, "files": files,
+    plan_path.write_text(json.dumps({"tiers": sorted(tiers), "pilot_tokens": pilot, "sources": sources, "files": files,
                                      "created": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())}, indent=1))
     log(f"plan: {len(files)} files, {sum(f['size'] for f in files) / 1e12:.2f} TB raw")
 
@@ -691,6 +693,7 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--config", type=Path, default=CONFIG)
     ap.add_argument("--tiers", default="A")
     ap.add_argument("--sources", default="")
+    ap.add_argument("--pilot-tokens", type=float, default=None, help="plan: cap every source at this many tokens")
     ap.add_argument("--source", default="")
     ap.add_argument("--worker", type=int, default=0)
     ap.add_argument("--workers", type=int, default=1)
@@ -701,7 +704,7 @@ def main(argv: list[str] | None = None) -> int:
     a = ap.parse_args(argv)
     cfg = load_config(a.config)
     if a.stage == "plan":
-        stage_plan(a.out, cfg, set(a.tiers.split(",")), set(a.sources.split(",")) - {""} or None)
+        stage_plan(a.out, cfg, set(a.tiers.split(",")), set(a.sources.split(",")) - {""} or None, a.pilot_tokens)
     elif a.stage == "filter":
         stage_filter(a.out, a.worker, a.workers, a.min_free_gb)
     elif a.stage == "dedup":
