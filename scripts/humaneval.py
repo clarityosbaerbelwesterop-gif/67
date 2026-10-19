@@ -16,7 +16,11 @@ package arckit==1.0.1, fetched once into data/benchmarks/. Grids are written as
 rows of digits; a task whose prompt does not fit the model's context window
 counts as failed and is reported under "not_fit".
 
-Usage: python3 scripts/humaneval.py runs/quasnir-1/FINAL [--suite humaneval|mbpp] [--limit N] [--max-new 192]
+HumanEval-hard and MBPP-hard (`--suite humaneval-hard|mbpp-hard`) use the same prompts plus ~37
+extra differential tests per task from data/build_hardbench.py (data/benchmarks/*-hard.jsonl);
+a task passes only if the official tests and every extra test pass.
+
+Usage: python3 scripts/humaneval.py runs/quasnir-1/FINAL [--suite humaneval|mbpp|humaneval-hard|mbpp-hard] [--limit N] [--max-new 192]
 """
 import argparse
 import hashlib
@@ -36,6 +40,8 @@ STOPS = {
 
 
 def problems(suite: str) -> list:
+    if suite.endswith("-hard"):
+        return [json.loads(l) for l in (ROOT / f"data/benchmarks/{suite}.jsonl").read_text().splitlines() if l.strip()]
     rows = [json.loads(l) for l in (ROOT / f"data/stores/evals/{suite}.jsonl").read_text().splitlines() if l.strip()]
     if suite == "humaneval":
         return [{"prompt": p["prompt"], "tail": "\n\n" + p["test"] + f"\ncheck({p['entry_point']})\n"} for p in rows]
@@ -136,8 +142,11 @@ def arc_main(args, tok) -> int:
     return 0
 
 
+CPU_S = 10
+
+
 def limits() -> None:
-    resource.setrlimit(resource.RLIMIT_CPU, (10, 10))
+    resource.setrlimit(resource.RLIMIT_CPU, (CPU_S, CPU_S))
     resource.setrlimit(resource.RLIMIT_AS, (1 << 30, 1 << 30))
     resource.setrlimit(resource.RLIMIT_FSIZE, (1 << 20, 1 << 20))
     resource.setrlimit(resource.RLIMIT_NPROC, (64, 64))
@@ -148,7 +157,7 @@ def passes(program: str) -> bool:
         f = Path(d) / "t.py"
         f.write_text(program)
         try:
-            r = subprocess.run([sys.executable, "-I", str(f)], cwd=d, env={}, capture_output=True, timeout=15, preexec_fn=limits)
+            r = subprocess.run([sys.executable, "-I", str(f)], cwd=d, env={}, capture_output=True, timeout=CPU_S + 5, preexec_fn=limits)
         except subprocess.TimeoutExpired:
             return False
         return r.returncode == 0
@@ -157,7 +166,7 @@ def passes(program: str) -> bool:
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("ckpt")
-    ap.add_argument("--suite", choices=["humaneval", "mbpp", "arc-agi-2"], default="humaneval")
+    ap.add_argument("--suite", choices=["humaneval", "mbpp", "humaneval-hard", "mbpp-hard", "arc-agi-2"], default="humaneval")
     ap.add_argument("--limit", type=int, default=None)
     ap.add_argument("--max-new", type=int, default=192)
     ap.add_argument("--tokenizer", default=str(ROOT / "data/stores/base/tokenizer.json"))
@@ -165,6 +174,9 @@ def main() -> int:
     tok = Tokenizer(Path(args.tokenizer))
     if args.suite == "arc-agi-2":
         return arc_main(args, tok)
+    global CPU_S
+    if args.suite.endswith("-hard"):
+        CPU_S = 40  # the extra tests run inside the same sandboxed process
     probs = problems(args.suite)[: args.limit]
     with tempfile.NamedTemporaryFile("w", suffix=".jsonl", delete=False) as f:
         for ids in tok.encode_many([p["prompt"] for p in probs]):
@@ -177,7 +189,7 @@ def main() -> int:
     solved = 0
     for p, g in zip(probs, gens):
         text = tok.decode([i for i in g["ids"] if i < 256 + len(tok.merges)])
-        cut = min([text.find(s) for s in STOPS[args.suite] if s in text] + [len(text)])
+        cut = min([text.find(s) for s in STOPS[args.suite.removesuffix("-hard")] if s in text] + [len(text)])
         program = p["prompt"] + text[:cut] + p["tail"]
         solved += passes(program)
     result = {"ckpt": args.ckpt, "suite": args.suite, "problems": len(probs), "passed": solved, "pass@1": solved / max(1, len(probs)),

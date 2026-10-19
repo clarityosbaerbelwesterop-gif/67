@@ -1,0 +1,37 @@
+{
+ "type": "hardbench",
+ "seed": 67067,
+ "per_task": 40,
+ "suites": {
+  "humaneval": {
+   "file": "data/benchmarks/humaneval-hard.jsonl",
+   "sha256": "965c48a3a807bdc5a5531eb8784445b83738a860b4b518fbe623dd6fa7f27dd4",
+   "tasks": 164,
+   "extra_tests": 6048,
+   "tasks_without_extra": 5,
+   "fallbacks": 0,
+   "challenge_tests": 0,
+   "validation": {
+    "reference_pass": 164,
+    "mutants_passing_official": 84,
+    "killed_by_hard": 19,
+    "kill_rate": 0.2262
+   }
+  },
+  "mbpp": {
+   "file": "data/benchmarks/mbpp-hard.jsonl",
+   "sha256": "1782ca9bf42ffe880a2378dfeb89a6aaaaca9250f59b8ae478a279405ba31344",
+   "tasks": 500,
+   "extra_tests": 16709,
+   "tasks_without_extra": 27,
+   "fallbacks": 0,
+   "challenge_tests": 16,
+   "validation": {
+    "reference_pass": 500,
+    "mutants_passing_official": 290,
+    "killed_by_hard": 109,
+    "kill_rate": 0.3759
+   }
+  }
+ }
+}

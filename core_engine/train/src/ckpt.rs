@@ -166,9 +166,13 @@ pub fn load_safetensors(
             }
             continue;
         }
-        if v["dtype"] != "F32" {
-            return Err(bad(&format!("{name}: only F32 is supported")));
-        }
+        // F32 is the native format; BF16 (weights-only exports of the accel trainer) is widened
+        // to f32 on load, exactly (bf16 is the upper half of an f32).
+        let width = match v["dtype"].as_str() {
+            Some("F32") => 4,
+            Some("BF16") => 2,
+            _ => return Err(bad(&format!("{name}: only F32 and BF16 are supported"))),
+        };
         let shape: Vec<usize> = v["shape"]
             .as_array()
             .ok_or_else(|| bad("shape"))?
@@ -180,13 +184,20 @@ pub fn load_safetensors(
             off[0].as_u64().unwrap_or(0) as usize + body,
             off[1].as_u64().unwrap_or(0) as usize + body,
         );
-        if e > bytes.len() || b > e || (e - b) != 4 * shape.iter().product::<usize>() {
+        if e > bytes.len() || b > e || (e - b) != width * shape.iter().product::<usize>() {
             return Err(bad(&format!("{name}: data range")));
         }
-        let data = bytes[b..e]
-            .chunks_exact(4)
-            .map(|c| f32::from_le_bytes(c.try_into().unwrap()))
-            .collect();
+        let data = if width == 4 {
+            bytes[b..e]
+                .chunks_exact(4)
+                .map(|c| f32::from_le_bytes(c.try_into().unwrap()))
+                .collect()
+        } else {
+            bytes[b..e]
+                .chunks_exact(2)
+                .map(|c| f32::from_bits((u16::from_le_bytes([c[0], c[1]]) as u32) << 16))
+                .collect()
+        };
         tensors.insert(name, Tensor { shape, data });
     }
     Ok((tensors, meta))
@@ -195,6 +206,33 @@ pub fn load_safetensors(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn bf16_tensors_load_as_exact_f32() {
+        // 1.0, -2.5, 0.15625 and the largest finite bf16 are exact in bf16
+        let vals = [1.0f32, -2.5, 0.15625, f32::from_bits(0x7f7f_0000)];
+        let mut hdr = json!({"w": {"dtype": "BF16", "shape": [2, 2], "data_offsets": [0, 8]},
+                             "__metadata__": {"dtype": "bf16"}})
+        .to_string()
+        .into_bytes();
+        while hdr.len() % 8 != 0 {
+            hdr.push(b' ');
+        }
+        let mut file = (hdr.len() as u64).to_le_bytes().to_vec();
+        file.extend_from_slice(&hdr);
+        for v in vals {
+            file.extend_from_slice(&((v.to_bits() >> 16) as u16).to_le_bytes());
+        }
+        let dir = std::env::temp_dir().join(format!("forge-bf16-{}", std::process::id()));
+        fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("m.safetensors");
+        fs::write(&path, &file).unwrap();
+        let (t, meta) = load_safetensors(&path).unwrap();
+        assert_eq!(t["w"].shape, vec![2, 2]);
+        assert_eq!(t["w"].data, vals.to_vec());
+        assert_eq!(meta["dtype"], "bf16");
+        fs::remove_dir_all(&dir).unwrap();
+    }
 
     #[test]
     fn sha256_known_vectors() {
