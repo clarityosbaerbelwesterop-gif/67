@@ -1064,6 +1064,8 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--seed", type=int, default=5)
     ap.add_argument("--sources", default="gsm8k,aqua,synthetic")
     ap.add_argument("--samples", type=int, default=0, help="print N samples per synthetic family and exit")
+    ap.add_argument("--docs-only", action="store_true",
+                    help="stop after data/cache/reasoning/docs-*.jsonl (corpus v6 tokenizes them itself)")
     a = ap.parse_args(argv)
     if a.samples:
         for fam, (fn, _) in FAMILIES.items():
@@ -1087,7 +1089,7 @@ def main(argv: list[str] | None = None) -> int:
     near_spec.loader.exec_module(v4)
 
     dest = OUT / STORE
-    if dest.exists():
+    if dest.exists() and not a.docs_only:
         raise SystemExit(f"{dest} exists; move it away first (nothing is overwritten)")
     CACHE.mkdir(parents=True, exist_ok=True)
     MANIFESTS.mkdir(parents=True, exist_ok=True)
@@ -1148,6 +1150,11 @@ def main(argv: list[str] | None = None) -> int:
                 log(f"synthetic: {nxt:,} instances, ~{sum(fam_chars.values()) / CHARS_PER_TOKEN / 1e6:.1f} M tokens")
     for f in files.values():
         f.close()
+    if a.docs_only:
+        (MANIFESTS / "reasoning-docs.json").write_text(json.dumps({"per_source": stats, "chars": chars, "seed": a.seed,
+                                                                   "evals_decontaminated_against": eval_names}, indent=1))
+        log(f"docs only: {sum(st.get('ok', 0) for st in stats.values()):,} documents in {CACHE}")
+        return 0
 
     stage = OUT / f".{STORE}-staging"
     shutil.rmtree(stage, ignore_errors=True)

@@ -137,7 +137,9 @@ class CleanStore:
     def __init__(self, meta: str, tsv: str, vocab: int, verify_sha: bool = True):
         import hashlib, time
         self.base = _TrainBin(meta, vocab)   # train split only: the val bin is never needed (nor shipped to pods)
-        a = np.loadtxt(tsv, dtype=np.int64, delimiter="\t", skiprows=1, ndmin=2)
+        # kept-docs index: TSV with a header, or (corpus v6, ~1e8+ documents) the same 3 columns as a .npy array
+        a = (np.load(tsv).astype(np.int64).reshape(-1, 3) if str(tsv).endswith(".npy")
+             else np.loadtxt(tsv, dtype=np.int64, delimiter="\t", skiprows=1, ndmin=2))
         self.doc, self.seg_start, self.seg_len = a[:, 0], a[:, 1], a[:, 2] + 1
         if np.any(np.diff(self.seg_start) <= 0):
             raise ValueError("kept TSV starts must be strictly increasing")

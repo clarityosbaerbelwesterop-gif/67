@@ -161,6 +161,9 @@ Jede Stufe hat ein messbares Tor. Ohne bestandenes Tor beginnt die nächste Stuf
    Abruf des 1B-Exports: Diese Cloud-Box hat kein ausgehendes SSH, `runpod-fetch` braucht es aber.
    Einen Runner-seitigen Abruf (nur Chiffretext, Entwurfs-Release) legt der Owner selbst an oder
    gibt ihn ausdrücklich frei.
+   Skalierung über 100 Mrd. Parameter (25–30 Mrd. aktiv) mit 1–2 B300: `docs/PLAN_100B_MOE.md`. Daten für
+   250–500 Mrd. Tokens: `data/build_corpus_v6.py` auf RunPod-CPU-Pods, Auftrag an Grok in
+   `docs/PROMPT_GROK_RUNPOD.md`.
 4. Danach der volle s2-Lauf. Chinchilla-Ziel: etwa 19 Mrd. Tokens, also
    6 · 9,6e8 · 1,9e10 ≈ 1,1e20 FLOP. Das sind etwa 3 Tage auf einer H100 bei 40 % MFU oder
    etwa 10 Stunden auf 8 H100.

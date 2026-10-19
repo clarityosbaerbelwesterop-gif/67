@@ -25,6 +25,8 @@ prose
   * >= 500 characters, >= 8 % English stopwords, URLs <= 15 % of the characters, table rows
     <= 40 % of the lines (generated model/property pages are mostly tables), Sphinx directive
     lines <= 30 % (autodoc stubs carry no prose)
+text (keep_text, corpus v6: books, papers, encyclopedias, educational pages without a package path)
+  * the prose content rules above without the path rules; documents up to 3 M characters stay whole
 """
 from __future__ import annotations
 
@@ -121,6 +123,22 @@ def keep_prose(text: str, path: str) -> tuple[bool, str]:
         return False, "denied-file"
     if not (PROSE_ALLOW_NAME.match(name) or PROSE_ALLOW_DIR.search(path)):
         return False, "not-documentation"
+    return _prose_content(text)
+
+
+TEXT_MAX = 3_000_000
+
+
+def keep_text(text: str) -> tuple[bool, str]:
+    """Prose without a package path (books, papers, encyclopedias, educational web pages): the content rules of
+    keep_prose. Long documents are kept whole up to TEXT_MAX characters (long-context training); the v4 rules,
+    which cap at 100k characters, judge the first 100k."""
+    if len(text) > TEXT_MAX:
+        return False, "too-long"
+    return _prose_content(text[:100_000])
+
+
+def _prose_content(text: str) -> tuple[bool, str]:
     ok, why = hq_filter.keep_prose(text)
     if not ok:
         return False, f"v4-{why}"
