@@ -50,7 +50,8 @@ dim 384, 6 Layer, 6 Heads, 2 KV-Heads, head_dim 64, FFN 1024, vocab 8192, Kontex
 RMSNorm eps 1e-5, RoPE θ 10.000, Embedding an den Ausgabekopf gebunden.
 
 **Größenleiter:** 12,58 M (Champion) → 100,66 M (Phase A: dim 768, 15 Layer) →
-959,5 M (s2, gewachsen, `accel/mgpu.py`).
+959,5 M (s2, gewachsen: dim 1920, 24 Layer, 30 Heads, 10 KV-Heads, FFN 5120;
+`accel/mgpu.py`).
 
 ### 3. Gemessener Produktstand
 
@@ -77,6 +78,13 @@ HumanEval 0,99, MBPP 0,95, ARC-AGI-2 0,942. **Kein Modell ist frontier oder dang
 - JAX-Port bitgenau (Logits ≤ 2,2e-5, Eval-Loss identisch).
 - Muon-Optimierer: von Grund auf val 4,806 statt 5,051 (AdamW); beim Weitertraining kein Unterschied.
 - DiLoCo-Cluster: 4 Runner, von Grund auf, val 9,01 → 5,49 nach einer Runde.
+
+**Laut Operator-Bericht vom 19.10. (im Repo noch nicht belegt):**
+- 100 M `quasnir-1015e-s5744`: H200, 5.744 Schritte, ~1,5 Mrd. Tokens, ~300k Tokens/s; schlug
+  g3-r8 auf dekontaminiertem Code-val 1,754 gegen 2,288.
+- 1B Lauf 1 (1 × B200) knapp neuer Champion; Lauf 2 bis step-007500, beim Code-val in 122 bzw.
+  128 von 128 gepaarten Paketen besser. Allgemeinwissen-Test offen. Tokens gesamt unbekannt.
+- MoE-Upcycling 1B → 23B gebaut und getestet, nicht gestartet.
 
 **Beim Operator, nicht im Repo:**
 - `quasnir-phase-a-100m` step-005744. Seine Konfiguration ist in `accel/mgpu.py` als Preset
@@ -128,7 +136,10 @@ Jede Stufe hat ein messbares Tor. Ohne bestandenes Tor beginnt die nächste Stuf
 2. Messen, mit derselben Methode wie die Baseline:
    - Held-out L0 bis L2 (je 128 Aufgaben);
    - val code und general, seeds 1234 und 4242;
-   - HumanEval, MBPP, ARC-AGI-2.
+   - HumanEval, MBPP, ARC-AGI-2 und der harte Test HumanEval-hard / MBPP-hard
+     (`scripts/humaneval.py CKPT --suite humaneval-hard`; ~37 Zusatztests je Aufgabe,
+     `data/build_hardbench.py`). bf16-Exporte lädt forge direkt
+     (`scripts/import_export.py EXPORT OUT`).
 3. Gate A: Arbiter gegen `4da6575f` (tol 0,02, margin 0,03).
 4. Release **Quasnir 3** nur bei Odds Ratio ≥ 2 (unteres 95-%-Band), ohne McNemar-Verlust
    und mit val höchstens +2 %. Diese Regel setzt die Owner-Vorgabe „jede Version mindestens
@@ -139,11 +150,14 @@ Jede Stufe hat ein messbares Tor. Ohne bestandenes Tor beginnt die nächste Stuf
    die letzten 200 Schritte, lr 2e-4 → 3e-5.
 2. Daten nur gefiltert über die Kept-Docs-TSV. Fehlt der Filter, bricht der Trainer ab
    (`DataSafetyError`). Das bleibt so.
-3. Danach der volle s2-Lauf. Chinchilla-Ziel: etwa 19 Mrd. Tokens, also
+3. **Dichtes 1B zuerst** (Owner-Entscheidung 19.10.): weitertrainieren bis etwa 19 Mrd. Tokens,
+   dann benchmarken; MoE-Upcycling erst danach. Ein 23B-Checkpoint mit AdamW hat 276–368 GB und
+   passt nicht auf ein 200-GB-Volume.
+4. Danach der volle s2-Lauf. Chinchilla-Ziel: etwa 19 Mrd. Tokens, also
    6 · 9,6e8 · 1,9e10 ≈ 1,1e20 FLOP. Das sind etwa 3 Tage auf einer H100 bei 40 % MFU oder
    etwa 10 Stunden auf 8 H100.
-4. Gate S2 wie Gate A, gegen den Stufe-A-Champion.
-5. Größen: Ein voller f32-Checkpoint hat 11,5 GB und gehört nie ins Git. Der bf16-Export hat
+5. Gate S2 wie Gate A, gegen den Stufe-A-Champion.
+6. Größen: Ein voller f32-Checkpoint hat 11,5 GB und gehört nie ins Git. Der bf16-Export hat
    1,92 GB und wird mit sha256 dort abgelegt, wo der Owner es freigibt.
 
 **Stufe B – Bausteine** (`docs/PROMPT_SCALING.md`)
