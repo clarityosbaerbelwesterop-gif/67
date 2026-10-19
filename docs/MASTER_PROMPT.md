@@ -105,6 +105,8 @@ step 16324, val 1,966. Training läuft beim Operator.
 | Eval-Sets, Held-out-Hashes, Quasnir-Baseline | `data/manifests/evals.sha256.json` | öffentlich |
 | Korpora (7,4 GB) | nicht im Git; aus `data/manifests/` mit sha256-Pins neu baubar | – |
 | Konfigurationen | `checkpoints/configs/` (`longrun.json`, `longrun-quasnir-focus.json`) | öffentlich |
+| Korpus v5 (19.10.): `code-v5add`, `general-v5add` (nur neue Pakete), AAA-Stufe `code-v5aaa`, `general-v5aaa` | nicht im Git; Manifeste `data/manifests/v5/` (`stores.json`, `aaa.json`) | neu baubar: `data/build_corpus_v5.py`, dann `--aaa` |
+| Reasoning-Store `reasoning-v5` (Problem/Thinking/Answer; GSM8K-Train, geprüfte AQuA-Teilmenge, 20 verifizierte synthetische Familien) | nicht im Git; Manifest `data/manifests/v5/reasoning.json` | neu baubar: `data/build_reasoning.py` (deterministisch, Seed 5) |
 
 Wiederherstellen des Pakets:
 `python3 scripts/resume_pack.py restore --age-identity forge.key`.
@@ -153,6 +155,12 @@ Jede Stufe hat ein messbares Tor. Ohne bestandenes Tor beginnt die nächste Stuf
 3. **Dichtes 1B zuerst** (Owner-Entscheidung 19.10.): weitertrainieren bis etwa 19 Mrd. Tokens,
    dann benchmarken; MoE-Upcycling erst danach. Ein 23B-Checkpoint mit AdamW hat 276–368 GB und
    passt nicht auf ein 200-GB-Volume.
+   Datenmix dafür: base-v4 plus die AAA-Stufe v5 und `reasoning-v5`. Der Reasoning-Anteil ist
+   ein Experiment, kein fester Wert. Er wird an val und am harten Test gemessen, bevor er steigt.
+   Synthetische Spuren nicht öfter als etwa 2× wiederholen.
+   Abruf des 1B-Exports: Diese Cloud-Box hat kein ausgehendes SSH, `runpod-fetch` braucht es aber.
+   Einen Runner-seitigen Abruf (nur Chiffretext, Entwurfs-Release) legt der Owner selbst an oder
+   gibt ihn ausdrücklich frei.
 4. Danach der volle s2-Lauf. Chinchilla-Ziel: etwa 19 Mrd. Tokens, also
    6 · 9,6e8 · 1,9e10 ≈ 1,1e20 FLOP. Das sind etwa 3 Tage auf einer H100 bei 40 % MFU oder
    etwa 10 Stunden auf 8 H100.

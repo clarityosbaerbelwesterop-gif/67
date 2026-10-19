@@ -78,3 +78,11 @@ def test_generated_packages_are_dropped_whole():
            [("pypi:clean", "code", gen)] + [("pypi:clean", "code", GOOD_PY)] * 9 + \
            [("hackage:amazonka-s3", "code", GOOD_PY)]
     assert premium.package_flags(docs) == {"pypi:sdkgen", "hackage:amazonka-s3"}
+
+
+def test_transpiler_and_bundler_output_is_dropped():
+    spaced = GOOD_PY.replace("import math\n", "import math\n\n\n\n\n")
+    assert premium.keep(spaced, "code", "p/s.py")[1] == "blank-runs"
+    js = "// helpers for the CLI runner\n" + GOOD_PY.replace('"""', "//").replace(
+        "import math", 'import x from "../1827.js";')
+    assert premium.keep(js, "code", "pkg/src/run.js")[1] == "bundled"
