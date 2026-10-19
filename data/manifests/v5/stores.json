@@ -1,0 +1,124 @@
+{
+  "stores": {
+    "code-v5add": {
+      "store": ".code-v5add-staging",
+      "tokens": 273182493,
+      "val_tokens": 3063644,
+      "dtype": "uint16",
+      "vocab_size": 8192,
+      "bin": "train.bin",
+      "val_bin": "train.val.bin",
+      "mix": {
+        "crates": 22780,
+        "hackage": 22477,
+        "npm": 15502,
+        "pypi": 43279,
+        "rubygems": 20008
+      },
+      "mix_fractions": {
+        "crates": 0.18364155232736243,
+        "hackage": 0.18119891008174388,
+        "npm": 0.12496976927913839,
+        "pypi": 0.3488947648452993,
+        "rubygems": 0.161295003466456
+      },
+      "sha256": {
+        "train.bin": "73862e5be8054995ca4dd15c7367f687f482329f27237f674e78f3a2ca0daed0",
+        "train.val.bin": "6d5a7b4bb0ba269cc01fc0ec7eae2a6483525ec6465ece67a1fe6d9a38736f1c"
+      },
+      "pipeline": "corpus v5 add-on (data/build_corpus_v5.py, reusing data/build_corpus_v3.py)",
+      "docs": 125313
+    },
+    "general-v5add": {
+      "store": ".general-v5add-staging",
+      "tokens": 36029555,
+      "val_tokens": 412106,
+      "dtype": "uint16",
+      "vocab_size": 8192,
+      "bin": "train.bin",
+      "val_bin": "train.val.bin",
+      "mix": {
+        "crates": 1769,
+        "hackage": 869,
+        "npm": 4983,
+        "pypi": 7482,
+        "rubygems": 3459
+      },
+      "mix_fractions": {
+        "crates": 0.09530223036310742,
+        "hackage": 0.04681607585389506,
+        "npm": 0.26845167546600585,
+        "pypi": 0.4030815644865855,
+        "rubygems": 0.1863484538304062
+      },
+      "sha256": {
+        "train.bin": "2fbcf7bbafe315d2e80b45fc1667712a17be4c80928f9f908727f0588ddf847e",
+        "train.val.bin": "4cff800ed74c0126d1de88e4e7b363bd5fd02ab106cc1ccd01a3d2de1151b500"
+      },
+      "pipeline": "corpus v5 add-on (data/build_corpus_v5.py, reusing data/build_corpus_v3.py)",
+      "docs": 18754
+    }
+  },
+  "stopped": "target reached",
+  "registries": {
+    "rubygems": {
+      "chars": 77664810,
+      "general-train": 3459,
+      "code-train": 20008,
+      "code-val": 220,
+      "general-val": 28
+    },
+    "crates": {
+      "chars": 238764861,
+      "general-train": 1769,
+      "code-train": 22780,
+      "code-val": 232,
+      "general-val": 17
+    },
+    "npm": {
+      "chars": 105780891,
+      "general-train": 4983,
+      "code-train": 15502,
+      "code-val": 145,
+      "general-val": 43
+    },
+    "pypi": {
+      "chars": 424260619,
+      "general-train": 7482,
+      "code-train": 43279,
+      "code-val": 430,
+      "general-val": 94
+    },
+    "hackage": {
+      "chars": 143597580,
+      "general-train": 869,
+      "code-train": 22477,
+      "code-val": 240,
+      "general-val": 10
+    }
+  },
+  "filters": {
+    "duplicate_v2": 5826,
+    "duplicate": 2975,
+    "quality": 8216,
+    "generated": 18210,
+    "short": 0,
+    "contaminated": 437
+  },
+  "licence_policy": {
+    "allow": "\\b(MIT|BSD|Apache|PSF|Python Software Foundation|ISC|Unlicense|CC0|Public Domain|0BSD|Zlib)\\b",
+    "deny": "\\b(GPL|LGPL|AGPL|MPL|EUPL|SSPL|CC-BY-SA|Commons Clause|proprietary)\\b",
+    "deny_also": "\\b(?:A|L)?GPL-?v?\\d|General Public License|Mozilla Public|Eclipse Public|\\bEPL\\b|\\bEPL-|\\bCDDL|Common Development and Distribution|European Union Public|Server Side Public|Share-?Alike|\\bMPL-?v?\\d"
+  },
+  "dedup": {
+    "method": "sha1 of whitespace-normalised text",
+    "against": "every v2+v3 document (base-v3/docs.sha1)",
+    "earlier_documents": 359739,
+    "v5_documents": 144067
+  },
+  "evals_decontaminated_against": [
+    "gsm8k",
+    "humaneval",
+    "mbpp"
+  ]
+}
