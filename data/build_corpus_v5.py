@@ -17,7 +17,14 @@ every document. No Hugging Face, no outputs of closed models.
 Resumable: fetched documents go to data/cache/v5/docs/*.jsonl, finished packages to
 data/cache/v5/done.jsonl. The cache is kept unless --drop-cache.
 
+AAA tier (--aaa, after the fetch): the cached documents pass data/premium.py on top of the v4
+content rules (path, file-type, syntax, structure, documentation, generated-SDK and prose
+allow-list rules), whole generated packages are dropped, and near duplicates within v5 are
+removed with corpus v4's MinHash (val documents first, so no train document near-copies a val
+one). Result: code-v5aaa and general-v5aaa, report in data/manifests/v5/aaa.json.
+
   python3 data/build_corpus_v5.py --target-tokens 300e6 [--registries pypi,npm] [--dry-run]
+  python3 data/build_corpus_v5.py --aaa
 """
 from __future__ import annotations
 
@@ -71,10 +78,10 @@ def sha256(path: Path) -> str:
     return h.hexdigest()
 
 
-def write_stores(docs: Path, counts: dict) -> dict:
+def write_stores(docs: Path, counts: dict, suffix: str = "v5add") -> dict:
     stores = {}
     for kind in ("code", "general"):
-        name = f"{kind}-v5add"
+        name = f"{kind}-{suffix}"
         stage, dest = OUT / f".{name}-staging", OUT / name
         shutil.rmtree(stage, ignore_errors=True)
         stage.mkdir(parents=True)
@@ -96,6 +103,59 @@ def write_stores(docs: Path, counts: dict) -> dict:
     return stores
 
 
+def aaa(docs: Path) -> int:
+    """Premium tier from the cached v5 documents; see the module docstring."""
+    sys.path.insert(0, str(ROOT / "data"))
+    import premium  # noqa: E402
+    _v4 = importlib.util.spec_from_file_location("corpus_v4", ROOT / "data" / "build_corpus_v4.py")
+    v4 = importlib.util.module_from_spec(_v4)
+    _v4.loader.exec_module(v4)
+
+    def rows(kind: str, split: str):
+        p = docs / f"{kind}-{split}.jsonl"
+        if p.exists():
+            with p.open() as f:
+                for line in f:
+                    yield json.loads(line)
+
+    order = [(k, s) for k in ("code", "general") for s in ("val", "train")]
+    bad = premium.package_flags((d["s"], k, d["t"]) for k, s in order for d in rows(k, s))
+    log(f"AAA: {len(bad)} packages dropped whole (generated SDKs)")
+    out = CACHE / "aaa"
+    shutil.rmtree(out, ignore_errors=True)
+    out.mkdir(parents=True)
+    reasons: dict[str, dict[str, int]] = {"code": {}, "general": {}}
+    chars = {k: {"in": 0, "kept": 0} for k in ("code", "general")}
+    counts: dict[str, dict[str, int]] = {}
+    for kind in ("code", "general"):
+        near = v4.NearDup()
+        for split in ("val", "train"):
+            with (out / f"{kind}-{split}.jsonl").open("w") as f:
+                for d in rows(kind, split):
+                    chars[kind]["in"] += len(d["t"])
+                    if d["s"] in bad:
+                        why = "package"
+                    else:
+                        ok, why = premium.keep(d["t"], kind, d["p"])
+                        if ok:
+                            sk = v4.sketch(d["t"])
+                            why = "near-duplicate" if sk is not None and near.seen(sk) else "ok"
+                    reasons[kind][why] = reasons[kind].get(why, 0) + 1
+                    if why == "ok":
+                        f.write(json.dumps(d) + "\n")
+                        chars[kind]["kept"] += len(d["t"])
+                        c = counts.setdefault(d["s"].split(":", 1)[0], {"chars": 0})
+                        c["chars"] += len(d["t"])
+                        c[f"{kind}-{split}"] = c.get(f"{kind}-{split}", 0) + 1
+        log(f"AAA {kind}: kept {reasons[kind].get('ok', 0):,} documents, "
+            f"{chars[kind]['kept'] / max(1, chars[kind]['in']):.1%} of the characters")
+    stores = write_stores(out, counts, "v5aaa")
+    (MANIFESTS / "aaa.json").write_text(json.dumps({
+        "rules": "data/premium.py (on top of data/hq_filter.py) + MinHash near-dup within v5 (data/build_corpus_v4.py)",
+        "packages_dropped_whole": sorted(bad), "reasons": reasons, "chars": chars, "stores": stores}, indent=1))
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     ap.add_argument("--target-tokens", type=float, default=300e6)
@@ -105,7 +165,12 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--fetch-only", action="store_true")
     ap.add_argument("--drop-cache", action="store_true", help="delete data/cache/v5/docs after the stores are written")
     ap.add_argument("--dry-run", action="store_true")
+    ap.add_argument("--aaa", action="store_true", help="build the premium tier from the cached documents")
     a = ap.parse_args(argv)
+    if a.aaa:
+        MANIFESTS.mkdir(parents=True, exist_ok=True)
+        v2.CACHE = CACHE
+        return aaa(CACHE / "docs")
     done_before = earlier_tasks()
     plan_args = SimpleNamespace(packages=None, registries=a.registries, limit=a.limit)
     if a.dry_run:
