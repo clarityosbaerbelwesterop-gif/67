@@ -77,3 +77,26 @@ Quellen:
   arXiv 2408.03314.
 - Guan et al., rStar-Math, ICML 2025, arXiv 2501.04519.
 - Muennighoff et al., „Scaling Data-Constrained Language Models“, 2023: bis zu 4 Epochen fast so gut wie neue Daten.
+
+## 6. Alternative: 23B dicht
+
+Möglicher Aufbau: 56 Schichten, d_model 6144, 48/8 Köpfe × 128, SwiGLU 16.384, insgesamt 22,65 Mrd. Parameter.
+Gerechnet mit denselben Annahmen wie oben.
+
+| | 10B | 23B |
+|---|---|---|
+| 200 Mrd. Tokens | ≈ 18.500 $ | ≈ 41.400 $ |
+| 300 Mrd. Tokens | ≈ 27.800 $ | ≈ 62.100 $ (mehr als das 108B-MoE) |
+| Wandzeit, 300 Mrd. Tokens auf 8 B300 | 19,5 Tage | 44 Tage |
+| Gewichte in FP8 | 10,1 GB | 22,6 GB |
+| Agenten × 8k auf H100 / A100 80 GB / L40S / RTX 5090 | 42 / 36 / 22 / 12 | 26 / 15 / 10 / 2 |
+| RL-Rollouts je Dollar | 2,25× | 1× |
+
+- **Stärke des 23B:** Bei gleicher Tokenzahl ist es besser beim Faktenwissen und bei den schwersten Aufgaben.
+  Gerade dort hilft Denkzeit am wenigsten (Snell et al.).
+- **Rechenoptimal** ist bei ≈ 28.000 $ ein Modell von ≈ 12 Mrd. Parametern (Chinchilla, D ≈ 20 N).
+- **Inferenz entscheidet:** Unser Ansatz besteht vor allem aus Inferenz: Denkzeit, viele Agenten, RSI-Rollouts.
+  Dann lohnt ein kleineres Modell, das länger trainiert wird.
+- **Entscheidung:** zuerst das 10B. Das 23B ist Stufe 2, wenn das 10B die Kurve belegt hat und Funding da ist. Es wird
+  aus dem 10B gewachsen (Depth Up-Scaling wie bei SOLAR 10.7B aus Mistral 7B) statt von null trainiert; die
+  Ersparnis wird vorher gemessen.
