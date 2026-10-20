@@ -20,16 +20,25 @@ HumanEval-hard and MBPP-hard (`--suite humaneval-hard|mbpp-hard`) use the same p
 extra differential tests per task from data/build_hardbench.py (data/benchmarks/*-hard.jsonl);
 a task passes only if the official tests and every extra test pass.
 
-Best-of-N (`--samples N`): greedy plus N-1 sampled completions per task. One is picked by the tests the
-prompt itself shows (MBPP's assert line, HumanEval's doctest or `f(x) => y` examples; 130 of 164
-HumanEval and all MBPP tasks have some), and only that one runs against the hidden tests, so the score
-is still a pass@1. `--oracle` also scores every candidate (a ceiling, not a pass@1). `--cache-dir`
-keeps completions so the -hard suites reuse those of their base suite.
+Thinking (all optional; the defaults are the plain greedy pass@1):
+- `--samples N`: greedy plus N-1 sampled candidates per task.
+- `--rounds R`: up to R-1 further rounds of N candidates, only for tasks whose visible tests still fail.
+- `--self-tests K`: the model, as tester, writes up to K `assert f(...) == ...` lines per task.
+- `--repair`: one repair round; the model sees its best failed attempt and the check it fails.
+Visible tests are the ones the prompt itself shows (MBPP's assert line, HumanEval's doctest or
+`f(x) => y` examples; 130 of 164 HumanEval and all MBPP tasks have some). A candidate is picked by its
+visible tests, then by the size of the group of candidates that return the same on every probe call,
+weighted by the self-tests that group satisfies (execution agreement as in AlphaCode and CodeT). Only
+the picked candidate runs against the hidden tests, so the score stays a pass@1; `ablation_pass@1` adds
+greedy and plain best-of-N on the same candidates. `--oracle` also scores every candidate (a ceiling,
+not a pass@1). `--cache-dir` keeps completions, so the -hard suites reuse those of their base suite.
 
 Usage: python3 scripts/humaneval.py runs/quasnir-1/FINAL [--suite humaneval|mbpp|humaneval-hard|mbpp-hard] [--limit N] [--max-new 192]
-       [--samples 8 --temperature 0.8 --seed 1 --oracle --cache-dir DIR]
+       [--samples 8 --rounds 2 --self-tests 8 --repair --temperature 0.8 --seed 1 --oracle --cache-dir DIR]
 """
 import argparse
+import ast
+import builtins
 import concurrent.futures
 import doctest
 import hashlib
@@ -41,6 +50,7 @@ import secrets
 import subprocess
 import sys
 import tempfile
+from collections import Counter
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -243,12 +253,47 @@ def visible_tests(prompt: str, entry_point: str | None = None) -> list:
     return out
 
 
-CHECK = """
+def probe_of(src: str, want) -> tuple | None:
+    """(call, expected) that a test evaluates: a doctest pair as it is, `assert f(x) == y` split at the ==."""
+    if want is not None:
+        return src, want
+    try:
+        node = ast.parse(src).body[0]
+    except (SyntaxError, IndexError):
+        return None
+    t = getattr(node, "test", None)
+    if isinstance(node, ast.Assert) and isinstance(t, ast.Compare) and len(t.ops) == 1 and isinstance(t.ops[0], ast.Eq):
+        return ast.get_source_segment(src, t.left), ast.get_source_segment(src, t.comparators[0])
+    return None
 
 
-def _forge_visible(_tests, _tag):
+def callee(src: str) -> str | None:
+    try:
+        node = ast.parse(src, mode="eval").body
+    except SyntaxError:
+        return None
+    return node.func.id if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) else None
+
+
+def entry_of(p: dict, vis: list) -> str | None:
+    """The function under test: HumanEval names it, MBPP shows it in its visible assert."""
+    if p.get("entry_point"):
+        return p["entry_point"]
+    calls = [probe_of(s, w) for s, w in vis]
+    return next((callee(c[0]) for c in calls if c and callee(c[0])), None)
+
+
+def tester_prompt(p: dict, ep: str) -> str:
+    """The tester role: the task, a placeholder body, then a test block the model continues."""
+    return p["prompt"] + ("    ...\n" if f"def {ep}(" in p["prompt"] else "") + f"\n\n# Tests\nassert {ep}("
+
+
+PROBE = """
+
+
+def _forge_probe(_vis, _probes, _tag):
     print(_tag, "loaded", flush=True)
-    for _src, _want in _tests:
+    for _i, (_src, _want) in enumerate(_vis):
         try:
             if _want is None:
                 exec(_src, globals())
@@ -257,24 +302,65 @@ def _forge_visible(_tests, _tag):
                 _ok = bool(eval(_src, globals()) == eval(_want, globals()))
         except BaseException:
             _ok = False
-        if _ok:
-            print(_tag, "pass", flush=True)
+        print(_tag, "v", _i, int(_ok), flush=True)
+    for _i, (_src, _want) in enumerate(_probes):
+        try:
+            _got = eval(_src, globals())
+            _r = repr(_got)[:200]
+            _ok = _want is not None and bool(_got == eval(_want, globals()))
+        except BaseException as _e:
+            _r, _ok = "raised " + type(_e).__name__, False
+        print(_tag, "p", _i, int(_ok), repr(_r), flush=True)
 
 
-_forge_visible({tests!r}, {tag!r})
+_forge_probe({vis!r}, {probes!r}, {tag!r})
 """
 
 
-def visible_score(job: tuple) -> tuple:
-    """(visible tests passed, module loaded) of one candidate; `tag` is a fresh nonce the candidate cannot print."""
-    body, tests, tag = job
-    out = run(body + CHECK.format(tests=tests, tag=tag), VISIBLE_CPU_S)[1].splitlines()
-    return out.count(f"{tag} pass"), int(f"{tag} loaded" in out)
+def evaluate(job: tuple) -> dict:
+    """One candidate in the sandbox: which visible tests pass, and what it returns on every probe call (visible
+    calls and self-tests). `tag` is a fresh nonce, so printing from the candidate counts for nothing."""
+    body, vis, probes, tag = job
+    out = run(body + PROBE.format(vis=vis, probes=probes, tag=tag), VISIBLE_CPU_S)[1].splitlines()
+    v, sig, ok = [0] * len(vis), [None] * len(probes), [0] * len(probes)
+    for line in out:
+        f = line.split(" ", 4)
+        try:
+            if f[0] == tag and f[1] == "v":
+                v[int(f[2])] = int(f[3])
+            elif f[0] == tag and f[1] == "p":
+                sig[int(f[2])], ok[int(f[2])] = ast.literal_eval(f[4]), int(f[3])
+        except (IndexError, ValueError, SyntaxError):
+            continue  # a line cut off by the CPU limit
+    return {"passed": sum(v), "loaded": int(f"{tag} loaded" in out), "vis": tuple(v), "sig": tuple(sig), "ok": tuple(ok)}
 
 
-def choose(scores: list) -> int:
-    """Most visible tests passed, then loads cleanly; ties keep the earlier candidate, greedy first."""
-    return max(range(len(scores)), key=lambda j: (scores[j], -j))
+def choose(evals: list, n_self: int = 0, consensus: bool = True) -> int:
+    """Most visible tests passed, then loads cleanly, then (with consensus) the largest group of candidates that
+    return the same on every probe, weighted by the self-tests that group satisfies. A group whose probes all
+    raise gets no weight. Ties keep the earlier candidate, greedy first."""
+    groups = Counter(e["sig"] for e in evals if e["loaded"])
+
+    def key(j):
+        e = evals[j]
+        alive = e["loaded"] and any(r is not None and not r.startswith("raised ") for r in e["sig"])
+        c = groups[e["sig"]] * (1 + sum(e["ok"][len(e["ok"]) - n_self:])) if consensus and alive else 0
+        return e["passed"], e["loaded"], c, -j
+
+    return max(range(len(evals)), key=key)
+
+
+def repair_prompt(p: dict, body: str, e: dict, vis: list, vis_probe: list) -> str | None:
+    """The repair role: the failed attempt, the first visible check it fails and what it gave, then the task again."""
+    i = next((k for k, ok in enumerate(e["vis"]) if not ok), None)
+    if i is None:
+        return None
+    src, want = vis[i]
+    note = "# This check fails: " + " ".join((src + (f" == {want}" if want is not None else "")).split())
+    j = vis_probe[i]
+    if j is not None and e["sig"][j] is not None:
+        note += f"\n# It gives: {e['sig'][j]}"
+    return body + "\n\n\n" + note + "\n# Fixed version:\n" + p["prompt"]
 
 
 def hidden_pass(job: tuple) -> bool:
@@ -286,10 +372,13 @@ def ckpt_id(ckpt: str, tokenizer: str) -> list:
     return [str(Path(ckpt).resolve())] + [[f.name, f.stat().st_size, f.stat().st_mtime_ns] for f in files if f.is_file()]
 
 
-def completions(args, tok, texts: list, temperature: float, seed: int, copies: int) -> list:
+def completions(args, tok, texts: list, temperature: float, seed: int, copies: int, max_new: int | None = None) -> list:
     """`copies` decoded completions per prompt (line j of the batch decodes with seed + j). With --cache-dir the
     result is reused by any suite with the same prompts, so the -hard variants cost no extra decoding."""
-    key = hashlib.sha256(json.dumps([ckpt_id(args.ckpt, args.tokenizer), texts, args.max_new, temperature, seed,
+    max_new = max_new or args.max_new
+    if not texts:
+        return []
+    key = hashlib.sha256(json.dumps([ckpt_id(args.ckpt, args.tokenizer), texts, max_new, temperature, seed,
                                      copies]).encode()).hexdigest()[:32]
     cache = Path(args.cache_dir) / f"{key}.json" if args.cache_dir else None
     if cache and cache.exists():
@@ -300,7 +389,7 @@ def completions(args, tok, texts: list, temperature: float, seed: int, copies: i
         prompts = f.name
     eos = len(tok.merges) + 256 + 1
     cmd = [str(ROOT / "target/release/forge"), "generate", "--ckpt", args.ckpt, "--prompts-file", prompts,
-           "--max-new", str(args.max_new), "--stop-id", str(eos)]
+           "--max-new", str(max_new), "--stop-id", str(eos)]
     if temperature > 0:
         cmd += ["--temperature", str(temperature), "--seed", str(seed)]
     out = subprocess.run(cmd, check=True, capture_output=True, text=True).stdout
@@ -313,6 +402,35 @@ def completions(args, tok, texts: list, temperature: float, seed: int, copies: i
     return res
 
 
+def self_tests(args, tok, probs: list, eps: list, vis: list) -> list:
+    """Up to --self-tests distinct `assert f(...) == ...` lines per task, written by the model as tester. Their
+    expected values may be wrong; selection only rewards candidates that agree with them as a group."""
+    todo = [i for i, ep in enumerate(eps) if ep]
+    gens = completions(args, tok, [tester_prompt(probs[i], eps[i]) for i in todo], args.temperature,
+                       args.seed + TESTER * STREAM, 2 * args.self_tests, max_new=64)
+    out = [[] for _ in probs]
+    for i, g in zip(todo, gens):
+        seen = {c[0] for c in (probe_of(s, w) for s, w in vis[i]) if c}
+        for t in g:
+            c = probe_of(f"assert {eps[i]}(" + t.split("\n", 1)[0].strip(), None)
+            if c and callee(c[0]) == eps[i] and c[0] not in seen and _closed(c, eps[i]) and len(out[i]) < args.self_tests:
+                seen.add(c[0])
+                out[i].append(c)
+    return out
+
+
+def _closed(call: tuple, ep: str) -> bool:
+    """A self-test that names nothing but the function under test and builtins (no undefined variables)."""
+    try:
+        names = {n.id for src in call for n in ast.walk(ast.parse(src, mode="eval")) if isinstance(n, ast.Name)}
+    except SyntaxError:
+        return False
+    return names <= {ep} | set(dir(builtins))
+
+
+STREAM, TESTER, REPAIR = 1_000_003, 900, 901  # seed streams: round r samples use seed + r * STREAM
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("ckpt")
@@ -320,7 +438,10 @@ def main() -> int:
     ap.add_argument("--limit", type=int, default=None)
     ap.add_argument("--max-new", type=int, default=192)
     ap.add_argument("--tokenizer", default=str(ROOT / "data/stores/base/tokenizer.json"))
-    ap.add_argument("--samples", type=int, default=1, help="candidates per task: greedy plus samples-1 sampled ones")
+    ap.add_argument("--samples", type=int, default=1, help="candidates per task and round: greedy plus samples-1 in round 1")
+    ap.add_argument("--rounds", type=int, default=1, help="further rounds of --samples candidates for tasks not yet solved on their visible tests")
+    ap.add_argument("--self-tests", type=int, default=0, help="test lines the model writes per task as tester")
+    ap.add_argument("--repair", action="store_true", help="one repair round from the best failed attempt and its failing check")
     ap.add_argument("--temperature", type=float, default=0.8)
     ap.add_argument("--seed", type=int, default=1)
     ap.add_argument("--oracle", action="store_true", help="also run the hidden tests on every candidate (ceiling, not pass@1)")
@@ -334,36 +455,80 @@ def main() -> int:
     if args.suite.endswith("-hard"):
         CPU_S = 40  # the extra tests run inside the same sandboxed process
     probs = problems(args.suite)[: args.limit]
+    n = len(probs)
     texts = [p["prompt"] for p in probs]
+    stops = STOPS[args.suite.removesuffix("-hard")]
+    body = lambda i, t: probs[i]["prompt"] + t[:min([t.find(s) for s in stops if s in t] + [len(t)])]
+    thinking = args.samples > 1 or args.rounds > 1 or args.self_tests > 0 or args.repair
     cands = completions(args, tok, texts, 0.0, 0, 1)
     if args.samples > 1:
         cands = [c + more for c, more in zip(cands, completions(args, tok, texts, args.temperature, args.seed, args.samples - 1))]
-    stops = STOPS[args.suite.removesuffix("-hard")]
-    bodies = [[p["prompt"] + t[:min([t.find(s) for s in stops if s in t] + [len(t)])] for t in c] for p, c in zip(probs, cands)]
-    pick = [0] * len(probs)
+    bodies = [[body(i, t) for t in c] for i, c in enumerate(cands)]
+    vis = [visible_tests(p["prompt"], p.get("entry_point")) for p in probs]
+    eps = [entry_of(p, v) for p, v in zip(probs, vis)]
+    selft = self_tests(args, tok, probs, eps, vis) if args.self_tests > 0 else [[] for _ in probs]
+    vis_probe, probes = [], []
+    for v, st in zip(vis, selft):
+        calls = [probe_of(s, w) for s, w in v]
+        kept = [c for c in calls if c]
+        idx = iter(range(len(kept)))
+        vis_probe.append([next(idx) if c else None for c in calls])
+        probes.append(kept + st)
+    evals = [[] for _ in probs]
+    repairs = 0
     with concurrent.futures.ProcessPoolExecutor(args.jobs) as pool:
-        if args.samples > 1:
-            tests = [visible_tests(p["prompt"], p.get("entry_point")) for p in probs]
-            jobs = [(b, t, secrets.token_hex(8)) for bs, t in zip(bodies, tests) for b in bs]
-            scores = list(pool.map(visible_score, jobs, chunksize=4))
-            pick = [choose(scores[i * args.samples:(i + 1) * args.samples]) for i in range(len(probs))]
-        todo = sorted({(i, 0) for i in range(len(probs))} | {(i, pick[i]) for i in range(len(probs))}
-                      | ({(i, j) for i in range(len(probs)) for j in range(args.samples)} if args.oracle else set()))
+        def evaluate_new():
+            todo = [(i, k) for i in range(n) for k in range(len(evals[i]), len(bodies[i]))]
+            jobs = [(bodies[i][k], vis[i], probes[i], secrets.token_hex(8)) for i, k in todo]
+            for (i, _), e in zip(todo, pool.map(evaluate, jobs, chunksize=4)):
+                evals[i].append(e)
+
+        solved = lambda i: bool(vis[i]) and max(e["passed"] for e in evals[i]) == len(vis[i])
+        if thinking:
+            evaluate_new()
+            for r in range(1, args.rounds):  # more thinking only where the visible tests still fail
+                todo = [i for i in range(n) if not solved(i)]
+                for i, c in zip(todo, completions(args, tok, [texts[i] for i in todo], args.temperature,
+                                                  args.seed + r * STREAM, args.samples)):
+                    bodies[i] += [body(i, t) for t in c]
+                evaluate_new()
+            if args.repair:
+                todo = [i for i in range(n) if vis[i] and not solved(i)]
+                best = {i: choose(evals[i], len(selft[i])) for i in todo}
+                rp = {i: repair_prompt(probs[i], bodies[i][best[i]], evals[i][best[i]], vis[i], vis_probe[i]) for i in todo}
+                todo = [i for i in todo if rp[i]]
+                repairs = len(todo)
+                for i, c in zip(todo, completions(args, tok, [rp[i] for i in todo], args.temperature,
+                                                  args.seed + REPAIR * STREAM, args.samples)):
+                    bodies[i] += [body(i, t) for t in c]
+                evaluate_new()
+        picks = {"greedy": [0] * n}
+        if thinking:
+            picks["best_of_n_visible"] = [choose(evals[i][:args.samples], consensus=False) for i in range(n)]
+            picks["full"] = [choose(evals[i], len(selft[i])) for i in range(n)]
+        todo = sorted({(i, j) for pk in picks.values() for i, j in enumerate(pk)}
+                      | ({(i, j) for i in range(n) for j in range(len(bodies[i]))} if args.oracle else set()))
         hidden = dict(zip(todo, pool.map(hidden_pass, [(bodies[i][j] + probs[i]["tail"], CPU_S) for i, j in todo], chunksize=4)))
-    solved = sum(hidden[(i, pick[i])] for i in range(len(probs)))
-    n = max(1, len(probs))
-    result = {"ckpt": args.ckpt, "suite": args.suite, "problems": len(probs), "passed": solved, "pass@1": solved / n,
+    rate = {k: sum(hidden[(i, j)] for i, j in enumerate(pk)) for k, pk in picks.items()}
+    final = "full" if thinking else "greedy"
+    m = max(1, n)
+    result = {"ckpt": args.ckpt, "suite": args.suite, "problems": n, "passed": rate[final], "pass@1": rate[final] / m,
               "decoding": "greedy", "max_new_tokens": args.max_new}
-    if args.samples > 1:
-        result.update({"decoding": f"best-of-{args.samples}: greedy + {args.samples - 1} samples (T {args.temperature}, "
-                                   "top-k 40), picked by the prompt's own visible tests; hidden tests scored once",
-                       "samples": args.samples, "temperature": args.temperature, "seed": args.seed,
-                       "greedy_pass@1": sum(hidden[(i, 0)] for i in range(len(probs))) / n,
-                       "tasks_with_visible_tests": sum(bool(t) for t in tests),
-                       "picked_not_greedy": sum(j > 0 for j in pick)})
-    if args.oracle and args.samples > 1:
-        result["oracle_any_pass"] = sum(any(hidden[(i, j)] for j in range(args.samples)) for i in range(len(probs))) / n
-        result["sampled_pass@1"] = sum(hidden[(i, j)] for i in range(len(probs)) for j in range(1, args.samples)) / (n * (args.samples - 1))
+    if thinking:
+        result.update({"decoding": f"thinking: greedy + {args.samples - 1} samples (T {args.temperature}, top-k 40), "
+                                   f"{args.rounds} round(s), {args.self_tests} self-tests, repair {'on' if args.repair else 'off'}; "
+                                   "picked by the prompt's visible tests, then agreement with the self-tests; hidden tests scored once",
+                       "samples": args.samples, "rounds": args.rounds, "self_tests": args.self_tests, "repair": args.repair,
+                       "temperature": args.temperature, "seed": args.seed,
+                       "greedy_pass@1": rate["greedy"] / m,
+                       "ablation_pass@1": {k: v / m for k, v in rate.items()},
+                       "candidates_decoded": sum(map(len, bodies)), "self_tests_kept": sum(map(len, selft)),
+                       "repair_prompts": repairs, "tasks_with_visible_tests": sum(map(bool, vis)),
+                       "picked_not_greedy": sum(j > 0 for j in picks["full"])})
+    if args.oracle and thinking:
+        result["oracle_any_pass"] = sum(any(hidden[(i, j)] for j in range(len(bodies[i]))) for i in range(n)) / m
+        result["sampled_pass@1"] = (sum(hidden[(i, j)] for i in range(n) for j in range(1, len(bodies[i])))
+                                    / max(1, sum(len(b) - 1 for b in bodies)))
         result["oracle_note"] = "uses the hidden tests: a ceiling for search and RL, not a pass@1"
     print(json.dumps(result))
     return 0

@@ -164,6 +164,7 @@ Jede Stufe hat ein messbares Tor. Ohne bestandenes Tor beginnt die nächste Stuf
    Heute: Weg B (23B-Schritt) aus dem 300-€-Budget. Plan fürs Funding: `docs/PLAN_100B_MOE.md`
    (BTX, 108B gesamt, ≈ 26B aktiv, ≈ 56.500 $ in FP8). Daten: `data/build_corpus_v6.py`, zuerst als Pilot.
    Neue Quellen nur über das Wert-Tor (`data/build_ablation.py`). Auftrag an Grok: `docs/PROMPT_GROK_RUNPOD.md`.
+   Subagenten ab 13–15B (Rollen, Workflows, GPU-Rechnung): `docs/PLAN_SUBAGENTS.md`.
 4. Danach der volle s2-Lauf. Chinchilla-Ziel: etwa 19 Mrd. Tokens, also
    6 · 9,6e8 · 1,9e10 ≈ 1,1e20 FLOP. Das sind etwa 3 Tage auf einer H100 bei 40 % MFU oder
    etwa 10 Stunden auf 8 H100.
@@ -235,10 +236,14 @@ und nenne die ETA.
 - **Präzision:** kein 4-Bit-Training (NVFP4); FP8 und BF16 sind erlaubt.
 - **Evals:** Held-out-Sets verlassen die Box nie. Öffentliche Benchmarks auf Pods nur nach Owner-Ja
   (für das 1B, s2-run2 step 7500, erteilt am 20.10.2026).
-- **Denkzeit (Best-of-N):** `scripts/humaneval.py --samples N` erzeugt greedy plus N−1 Stichproben. Ausgewählt
-  wird nur mit den Tests, die im Prompt stehen; die verdeckten Tests laufen einmal auf der gewählten Lösung.
-  Berichtet werden immer greedy und Best-of-N nebeneinander, mit N. `oracle_any_pass` ist eine Obergrenze und
-  nie ein pass@1.
+- **Denkzeit:** `scripts/humaneval.py` bietet Stichproben, weitere Runden für ungelöste Aufgaben, eigene
+  Testzeilen des Modells und eine Reparaturrunde (`--samples --rounds --self-tests --repair`).
+  - Ausgewählt wird nur mit den Tests im Prompt und mit der Übereinstimmung der Lösungen untereinander.
+  - Die verdeckten Tests laufen einmal auf der gewählten Lösung.
+  - Berichtet werden immer `ablation_pass@1` (greedy, Best-of-N, voll) und die Zahl der dekodierten
+    Lösungen.
+  - `oracle_any_pass` ist eine Obergrenze und nie ein pass@1.
+  - Eine Stufe bleibt nur, wenn sie gemessen etwas bringt.
 - **Daten:** Code- und neue Daten nur bei hoher Qualität und nur mit bestandenem Wert-Tor
   (Ersatz-Ablation am 100M-Proxy, `docs/PLAN_100B_MOE.md` Abschnitt 6).
 

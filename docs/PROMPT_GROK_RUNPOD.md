@@ -74,22 +74,34 @@ for s in humaneval mbpp humaneval-hard mbpp-hard; do
 done
 ```
 
-**Denkzeit (Best-of-8).** Diesen Teil nur ausführen, wenn die Hochrechnung unter 80 % des Deckels bleibt: Er
-kostet etwa 7× die Dekodierzeit des greedy-Laufs. Die Auswahl nutzt nur die Tests aus dem Prompt. Die harten
-Varianten verwenden die gespeicherten Lösungen wieder und dekodieren nicht neu.
+**Denkzeit.** Diesen Teil nur ausführen, wenn die Hochrechnung unter 80 % des Deckels bleibt. Er dekodiert je Aufgabe
+bis zu 24 Lösungen und 16 kurze Testzeilen, also grob das 20- bis 25-Fache des greedy-Laufs. Darum zuerst
+HumanEval allein laufen lassen, die Zeit messen und erst dann MBPP hochrechnen.
+
+Ablauf:
+1. Runde 1: greedy plus 7 Stichproben.
+2. Runde 2: nur für Aufgaben, deren Prompt-Tests noch scheitern.
+3. Das Modell schreibt als Tester eigene Testzeilen.
+4. Eine Reparaturrunde: Das Modell sieht seinen besten Fehlversuch und den Test, an dem er scheitert.
+
+Ausgewählt wird nur über die Tests aus dem Prompt und über die Übereinstimmung mit den eigenen Tests. Die harten
+Varianten verwenden alle gespeicherten Lösungen wieder.
 
 ```bash
 for s in humaneval mbpp humaneval-hard mbpp-hard; do
   python3 scripts/humaneval.py /root/ckpt/s2-run2-s7500 --suite $s --tokenizer data/tokenizer.json \
-    --samples 8 --oracle --cache-dir /root/gens > runs/evals/s2-run2-s7500/$s-best8.json
+    --samples 8 --rounds 2 --self-tests 8 --repair --oracle --cache-dir /root/gens \
+    > runs/evals/s2-run2-s7500/$s-think.json
 done
 ```
 
 Ergebnis pushen: `runs/evals/s2-run2-s7500/*.json` und `EXPORT.json`. `/root/gens` nicht pushen.
 
 Melden:
-- pass@1 je Suite, greedy und Best-of-8 nebeneinander;
+- pass@1 je Suite;
+- `ablation_pass@1`: greedy, Best-of-8 und volle Denkzeit, aus denselben Lösungen;
 - `oracle_any_pass` als Obergrenze;
+- `candidates_decoded`;
 - den Abstand der harten zur normalen Suite;
 - Laufzeit und Kosten.
 
