@@ -1,6 +1,7 @@
 """Read-only inventory of a RunPod network volume: sizes per directory, large files, and the small checkpoint,
-export and data manifests (their JSON is copied into the report). Nothing is changed, nothing is followed
-through symlinks, and no other file content is read.
+export and data manifests (their JSON is copied into the report, except under rouge/ and darus/ paths). Nothing
+is changed, nothing is followed through symlinks, and no other file content is read. The report ends up in a
+public workflow log.
 
 Usage: python3 jobs/inventory.py ROOT OUT_DIR   (writes OUT_DIR/result.json)
 """
@@ -17,6 +18,7 @@ MAX_MANIFEST = 64 << 10
 BIG = 100 << 20
 DIR_DEPTH = 3
 LIMIT_S = 1200
+PRIVATE = ("rouge", "darus")  # restricted models: sizes only, no manifest content in the (public) report
 
 
 def inventory(root: Path) -> dict:
@@ -44,7 +46,8 @@ def inventory(root: Path) -> dict:
                 dirs[k][1] += 1
             if st.st_size >= BIG and len(big) < 3000:
                 big.append({"path": str(rel / fn), "bytes": st.st_size, "mtime": int(st.st_mtime)})
-            if fn in MANIFESTS and st.st_size <= MAX_MANIFEST and len(manifests) < 1000:
+            private = any(w in str(rel).lower() for w in PRIVATE)
+            if fn in MANIFESTS and st.st_size <= MAX_MANIFEST and len(manifests) < 1000 and not private:
                 text = p.read_text(errors="replace")
                 try:
                     manifests[str(rel / fn)] = json.loads(text)
