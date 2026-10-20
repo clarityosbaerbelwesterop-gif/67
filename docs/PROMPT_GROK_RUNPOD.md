@@ -12,7 +12,7 @@ Du arbeitest für das Projekt forge.
 - **RunPod-Netzwerk-Volume:** `3qlkuqnr1u` in `US-NC-2`.
 
 Weg B, der 23B-Schritt, hat beim 300-€-Budget Vorrang. Die drei Aufträge hier sind klein und gedeckelt, zusammen
-höchstens 25 $ plus Speicher. Nach jedem Auftrag berichtest du mit Zahlen.
+höchstens 25 $; Speicher läuft getrennt. Nach jedem Auftrag berichtest du mit Zahlen.
 
 ### Feste Regeln
 
@@ -79,8 +79,8 @@ zur normalen Suite, Laufzeit und Kosten.
 
 ### Auftrag 2: Pilot Corpus v6, nur Code mit hoher Qualität. Deckel 10 $ CPU, höchstens 100 GB Speicher.
 
-Das Volume hat heute 200 GB, der Pilot passt hinein. Der Owner plant das Upgrade auf 1 TB. Kostet das Upgrade mehr
-als den Pilot-Bedarf, vorher den Monatspreis melden.
+Das Volume hat heute 200 GB, der Pilot passt hinein. Das Upgrade auf 1 TB ist geplant. Speicher läuft nicht über das
+300-€-Budget.
 
 Pipeline: `data/build_corpus_v6.py`. Quellen: `data/sources_v6.json`.
 
