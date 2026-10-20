@@ -27,7 +27,7 @@ def test_inventory_lists_sizes_big_files_and_manifests(tmp_path, monkeypatch):
     assert inv.main([str(vol), str(out)]) == 0
     r = json.loads((out / "result.json").read_text())
     assert r["files"] == 5 and not r["partial"] and r["dirs"]["runs/rouge-2"]["files"] == 1
-    assert r["dirs"]["runs"]["bytes"] == 2048 + len((vol / "runs/s2/export/EXPORT.json").read_bytes())
+    assert r["dirs"]["runs"]["bytes"] == sum(len(p.read_bytes()) for p in (vol / "runs").rglob("*") if p.is_file())
     assert [b["path"] for b in r["big_files"]] == ["runs/s2/export/w.safetensors"]
     assert r["manifests"] == {"runs/s2/export/EXPORT.json": {"export": {"sha256": "ab", "step": 7500}}}
     assert "SECRET" not in (out / "result.json").read_text() and "private" not in (out / "result.json").read_text()
