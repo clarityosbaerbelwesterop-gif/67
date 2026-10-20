@@ -165,7 +165,9 @@ Jede Stufe hat ein messbares Tor. Ohne bestandenes Tor beginnt die nächste Stuf
    Heute: Weg B (23B-Schritt) aus dem 300-€-Budget. Plan fürs Funding: `docs/PLAN_100B_MOE.md`
    (BTX, 108B gesamt, ≈ 26B aktiv, ≈ 56.500 $ in FP8). Daten: `data/build_corpus_v6.py`, zuerst als Pilot.
    Neue Quellen nur über das Wert-Tor (`data/build_ablation.py`). Auftrag an Grok: `docs/PROMPT_GROK_RUNPOD.md`.
-   Subagenten ab 13–15B (Rollen, Workflows, GPU-Rechnung): `docs/PLAN_SUBAGENTS.md`.
+   Hauptziel seit 20.10.2026: Quasnir-10B dicht, 200–300 Mrd. Tokens, ≈ 18.500–27.800 $ (`docs/PLAN_10B.md`);
+   das 108B-MoE ist nur noch eine Option für später.
+   Subagenten (Rollen, Workflows, GPU-Rechnung): `docs/PLAN_SUBAGENTS.md`, mit dem 10B als Hauptmodell.
    Grok Bot ist seit 20.10.2026 ausgesetzt. Plan ohne Grok: `docs/PLAN_10_STEPS.md`. Owner-Ja zu E1–E4 am 20.10.2026:
    Ausführer ist Claude über Workflows (jeder Lauf mit Owner-Freigabe in `RUNPOD`); FineMath-4+ und Wikipedia ja;
    StackExchange nur aus einem Dump bis April 2024; Einweg-Testset für 23B auf dem Pod erlaubt.
