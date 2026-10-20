@@ -24,6 +24,15 @@ st() { python3 jobs/status.py "$OUT" "$@"; }
 left() { echo $(( DEADLINE - $(date +%s) )); }
 fail() { st "$1" failed "error=$2"; log "FAILED $1: $2"; exit 1; }
 runstatus() { python3 -c "import json,sys; print(json.load(open(sys.argv[1])).get('status'))" "$1" 2>/dev/null; }
+dims() {  # grown dim, ffn and layers for the 1B in state.json $1 (head grouping kept, about 10B)
+  $PY - "$1" <<'PY'
+import json, sys
+m = json.load(open(sys.argv[1]))["config"]["model"]
+step = (m["dim"] // m["n_heads"]) * (m["n_heads"] // m["n_kv_heads"])
+dim = max(m["dim"], round(4096 / step) * step)
+print(dim, max(m["ffn_hidden"], round(dim * 3.5 / 256) * 256), max(m["n_layers"], 44))
+PY
+}
 st plan ok "deadline=$DEADLINE" "minutes=$(( (DEADLINE - T0) / 60 ))" "cpus=$NCPU" "volume_free_gb=$(df -BG --output=avail "$V" | tail -1 | tr -dc 0-9)"
 
 # 1. setup ------------------------------------------------------------------------------------------------------
@@ -95,12 +104,26 @@ if [ -z "${SKIP_BENCH:-}" ]; then
   [ -n "$OLD" ] && { bench old-1b "$OLD" > "$OUT/bench-old.log" 2>&1 & BENCH_PIDS="${BENCH_PIDS:-} $!"; }
 fi
 
+# room for the 10B? grown f32 (4 B/param) + its final checkpoint with AdamW (12 B) + bf16 export (2 B) + 15 GB margin
+read -r DIM FFN LAYERS < <(dims "$INIT_1B/state.json")
+DIM=${GROW_DIM:-$DIM}; FFN=${GROW_FFN:-$FFN}; LAYERS=${GROW_LAYERS:-$LAYERS}
+N10=$($PY scripts/grow.py "$INIT_1B" "$OUT/.dry" --dim "$DIM" --ffn-hidden "$FFN" --n-layers "$LAYERS" --dry-run \
+      | $PY -c "import json,sys; print(json.load(sys.stdin)['grown_params'])")
+PER=18; [ -f "$G/model.safetensors" ] && PER=14
+NEED=$(( N10 * PER + 15000000000 )); FREE=$(df -B1 --output=avail "$V" | tail -1 | tr -dc 0-9)
+TEN=1
+if [ "$FREE" -lt "$NEED" ]; then
+  TEN=0; KEEP_10B_MIN=0
+  st storage short "free_gb=$(( FREE / 1000000000 ))" "need_gb=$(( NEED / 1000000000 ))" "action=1B only, no growth"
+fi
+
 # 3. 1B premium tokens -------------------------------------------------------------------------------------------
 B1="$W/1b"
 case "$(runstatus "$B1/DONE.json")" in ok|deadline) ;; *)
   t=$(date +%s); log 1b
   END1=$(( t + ${P1B_MIN:-60} * 60 ))
   KEEP=$(( ${KEEP_10B_MIN:-150} * 60 ))  # time kept for grow + 10B
+  [ "$TEN" = 1 ] || END1=$(( DEADLINE - 60 ))
   [ "$END1" -lt $(( DEADLINE - KEEP )) ] || END1=$(( DEADLINE - KEEP ))
   $JPY -m accel.run_s2 $TRAIN --init "$INIT_1B" --out "$B1" --deadline "$END1" --reserve-s "${RESERVE_1B:-300}" \
     --lr "${LR_1B:-1e-4}" --min-lr "${MINLR_1B:-1e-5}" > "$OUT/1b.jsonl" 2>"$OUT/1b.err"
@@ -113,24 +136,16 @@ NEWEXP=$(find "$B1/export" -name 'weights-bf16-*.safetensors' 2>/dev/null | sort
 if [ -z "${SKIP_BENCH:-}" ] && [ -n "$NEWEXP" ]; then bench new-1b "$NEWEXP" > "$OUT/bench-new.log" 2>&1 & BENCH_PIDS="${BENCH_PIDS:-} $!"; fi
 
 # 4. grow to about 10B -------------------------------------------------------------------------------------------
-if [ ! -f "$G/model.safetensors" ]; then
+if [ "$TEN" = 1 ] && [ ! -f "$G/model.safetensors" ]; then
   t=$(date +%s); log grow
-  read -r DIM FFN LAYERS < <($PY - "$NEW1B/state.json" <<'PY'
-import json, sys
-m = json.load(open(sys.argv[1]))["config"]["model"]
-step = (m["dim"] // m["n_heads"]) * (m["n_heads"] // m["n_kv_heads"])
-dim = max(m["dim"], round(4096 / step) * step)
-print(dim, max(m["ffn_hidden"], round(dim * 3.5 / 256) * 256), max(m["n_layers"], 44))
-PY
-)
-  DIM=${GROW_DIM:-$DIM}; FFN=${GROW_FFN:-$FFN}; LAYERS=${GROW_LAYERS:-$LAYERS}
   $PY scripts/grow.py "$NEW1B" "$G" --dim "$DIM" --ffn-hidden "$FFN" --n-layers "$LAYERS" > "$OUT/grow.json" || fail grow "grow.py"
   st grow ok "seconds=$(( $(date +%s) - t ))" "result=$(cat "$OUT/grow.json")"
 fi
 
 # 5. 10B -------------------------------------------------------------------------------------------------------
 B10="$W/10b"
-case "$(runstatus "$B10/DONE.json")" in ok|deadline) ;; *)
+[ "$TEN" = 1 ] || st 10b skipped "reason=storage"
+[ "$TEN" = 1 ] && case "$(runstatus "$B10/DONE.json")" in ok|deadline) ;; *)
   t=$(date +%s); log 10b
   $JPY -m accel.run_s2 $TRAIN --init "$G" --out "$B10" --deadline "$(( DEADLINE - 60 ))" --reserve-s "${RESERVE_10B:-1500}" \
     --lr "${LR_10B:-6e-5}" --min-lr "${MINLR_10B:-1e-5}" > "$OUT/10b.jsonl" 2>"$OUT/10b.err"
