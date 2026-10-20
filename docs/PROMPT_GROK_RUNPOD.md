@@ -32,7 +32,7 @@ höchstens 25 $ plus Speicher. Nach jedem Auftrag berichtest du mit Zahlen.
    nicht anfassen. Kein 4-Bit-Training.
 5. **Evals**
    - Held-out-Sets (L0–L2) verlassen die Box nie.
-   - Auf einem Pod laufen nur öffentliche Benchmarks, und nur nach ausdrücklichem Owner-Ja (Auftrag 1).
+   - Auf einem Pod laufen nur öffentliche Benchmarks. Für Auftrag 1 hat der Owner am 20.10.2026 Ja gesagt.
 6. **Daten**
    - Lizenzstufe A.
    - Stufe C (FineWeb-Edu, FineMath) erst nach ausdrücklichem Owner-Ja, und dann ebenfalls durch das Wert-Tor.
@@ -53,7 +53,7 @@ cd /root/67 && cargo build --release -p forge && pip install -q numpy pyarrow
 python3 -m pytest -q data/tests          # muss grün sein
 ```
 
-### Auftrag 1: Öffentliche Benchmarks des 1B (s2-run2, step 7500). Nur nach ausdrücklichem Owner-Ja. Deckel 5 $.
+### Auftrag 1: Öffentliche Benchmarks des 1B (s2-run2, step 7500). Owner-Ja liegt vor (20.10.2026). Deckel 5 $.
 
 Gemessen werden HumanEval, MBPP und die harten Varianten. Die harten Varianten bestehen aus öffentlichen Aufgaben plus
 generierten Zusatztests, die bereits im Repo liegen. ARC-AGI-2 entfällt, weil es für 1B wenig aussagt. Die Gewichte
@@ -79,25 +79,32 @@ zur normalen Suite, Laufzeit und Kosten.
 
 ### Auftrag 2: Pilot Corpus v6, nur Code mit hoher Qualität. Deckel 10 $ CPU, höchstens 100 GB Speicher.
 
+Das Volume hat heute 200 GB, der Pilot passt hinein. Der Owner plant das Upgrade auf 1 TB. Kostet das Upgrade mehr
+als den Pilot-Bedarf, vorher den Monatspreis melden.
+
 Pipeline: `data/build_corpus_v6.py`. Quellen: `data/sources_v6.json`.
 
-**0. Owner-Schritt.** Die BigCode-Bedingungen für `bigcode/the-stack-dedup` mit dem Hugging-Face-Konto des Owners
-akzeptieren und das Token als RunPod-Secret `HF_TOKEN` hinterlegen.
+**0. Reihenfolge.**
+- **Sofort:** `cp-stackv2-edu` (Common Pile Stack-Edu). Nicht gesperrt, Lizenz pro Datei, Qualitätsnote
+  `int_score` ≥ 3. Am 20.10. auf dem Hub geprüft.
+- **Danach:** `stack-python` und `stack-typescript`, sobald der Owner die BigCode-Bedingungen für
+  `bigcode/the-stack-dedup` selbst akzeptiert hat. Das Token kommt nur als RunPod-Secret `HF_TOKEN` an den Pod.
+  Dieser zweite Plan bekommt ein eigenes Verzeichnis: `/vol/data/v6-pilot-stack`.
 
 **1. Quellen prüfen.** Stimmt Repo, Dateimuster oder Feld nicht, korrigierst du `data/sources_v6.json` und committest
 das mit Begründung.
 
 ```bash
-python3 data/build_corpus_v6.py inspect --source stack-python
-python3 data/build_corpus_v6.py inspect --source stack-typescript
 python3 data/build_corpus_v6.py inspect --source cp-stackv2-edu
+# nach der BigCode-Freigabe:
+python3 data/build_corpus_v6.py inspect --source stack-python
 ```
 
 **2. Pilot**, höchstens 3 Mrd. Tokens je Quelle:
 
 ```bash
 O=/vol/data/v6-pilot; mkdir -p $O/logs
-python3 data/build_corpus_v6.py plan --out $O --tiers A --sources stack-python,stack-typescript,cp-stackv2-edu --pilot-tokens 3e9
+python3 data/build_corpus_v6.py plan --out $O --tiers A --sources cp-stackv2-edu --pilot-tokens 3e9
 for w in $(seq 0 31); do
   nohup python3 data/build_corpus_v6.py filter --out $O --worker $w --workers 32 > $O/logs/filter-$w.log 2>&1 &
 done
@@ -133,8 +140,7 @@ Frage: Bringt ein Token der neuen Code-Quelle dem Modell mindestens so viel wie 
      --frac 0.3 --tokens 1e9 --seed 1 --out /vol/data/ablation/code-pilot
    ```
 
-   Der Pilot-Store mischt drei Quellen. Ein Arm pro Quelle braucht je einen eigenen Pilot-Lauf; zuerst den
-   gemeinsamen Arm messen.
+   Ein Arm je Quelle: zuerst Stack-Edu, nach der BigCode-Freigabe der Arm aus `/vol/data/v6-pilot-stack/store`.
 2. **Läufe auf 1 GPU**, alle vom 100M-Champion (`quasnir-1015e-s5744`), mit gleichem Plan:
    - Arm A, Seed 1234
    - Arm A, Seed 4242 (Rauschen)

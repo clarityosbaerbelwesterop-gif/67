@@ -117,8 +117,8 @@ ersetzt. Das gilt für Code und genauso für Web-Daten.
 | Schritt | Kosten | Deckel | Wann |
 |---|---|---|---|
 | Weg B (23B-Schritt) | ≈ 190–215 $ | laut Groks Plan | jetzt, hat Vorrang |
-| Grok Auftrag 1: öffentliche Benchmarks des 1B auf dem Pod | CPU, wenige $ | 5 $ | nur nach ausdrücklichem Owner-Ja |
-| Grok Auftrag 2: Pilot Corpus v6, 3 Code-Quellen à ≤ 3 Mrd. Tokens | CPU; ≤ 100 GB Speicher ≈ 7 $/Monat | 10 $ CPU | jetzt |
+| Grok Auftrag 1: öffentliche Benchmarks des 1B auf dem Pod | CPU, wenige $ | 5 $ | jetzt (Owner-Ja vom 20.10.) |
+| Grok Auftrag 2: Pilot Corpus v6, zuerst Stack-Edu, nach BigCode-Freigabe Stack Python/TS, je ≤ 3 Mrd. Tokens | CPU; ≤ 100 GB auf dem 200-GB-Volume | 10 $ CPU | jetzt |
 | Grok Auftrag 3: Wert-Tor, 5 Proxyläufe 100M | GPU, Minuten | 10 $ | nach Weg B oder mit Owner-Ja |
 | Voller Corpus v6 (≈ 300 Mrd., mit Web ≈ 460 Mrd.) | CPU ≈ 60 $; ≈ 1 TB ≈ 50 $/Monat | – | nur Quellen, die das Wert-Tor bestehen; mit Funding |
 | Messtag 1× B300 | ≈ 25 $ | 30 $ | mit Funding |

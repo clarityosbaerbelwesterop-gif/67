@@ -233,7 +233,8 @@ und nenne die ETA.
   `python3 -m pytest -q accel/tests/test_parity.py`) und zuerst in einer separaten Arbeitskopie.
 - **Sicherheitsprüfungen:** Werden sie abgelehnt, nicht umgehen, sondern den Owner fragen.
 - **Präzision:** kein 4-Bit-Training (NVFP4); FP8 und BF16 sind erlaubt.
-- **Evals:** Held-out-Sets verlassen die Box nie. Öffentliche Benchmarks auf Pods nur nach Owner-Ja.
+- **Evals:** Held-out-Sets verlassen die Box nie. Öffentliche Benchmarks auf Pods nur nach Owner-Ja
+  (für das 1B, s2-run2 step 7500, erteilt am 20.10.2026).
 - **Daten:** Code- und neue Daten nur bei hoher Qualität und nur mit bestandenem Wert-Tor
   (Ersatz-Ablation am 100M-Proxy, `docs/PLAN_100B_MOE.md` Abschnitt 6).
 

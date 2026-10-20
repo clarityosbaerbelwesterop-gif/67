@@ -92,6 +92,9 @@ def test_licence_tiers():
     assert v6.licence_tier(["MIT", "Apache-2.0"], "code") == "A"
     assert v6.licence_tier(["MIT", "GPL-3.0"], "code") is None
     assert v6.licence_tier("", "code") is None and v6.licence_tier("other", "general") is None
+    # Semantic Scholar spelling (peS2o metadata.oa_license)
+    assert v6.licence_tier("CCBY", "general") == "A" and v6.licence_tier("CCBYSA", "general") == "B"
+    assert v6.licence_tier("CCBYNC", "general") is None and v6.licence_tier("Unlicense", "code") == "A"
 
 
 def test_sketcher_matches_corpus_v4():
