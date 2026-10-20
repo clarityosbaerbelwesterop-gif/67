@@ -88,10 +88,13 @@ Ausgewählt wird nur über die Tests aus dem Prompt und über die Übereinstimmu
 Varianten verwenden alle gespeicherten Lösungen wieder.
 
 ```bash
-for s in humaneval mbpp humaneval-hard mbpp-hard; do
-  python3 scripts/humaneval.py /root/ckpt/s2-run2-s7500 --suite $s --tokenizer data/tokenizer.json \
-    --samples 8 --rounds 2 --self-tests 8 --repair --oracle --cache-dir /root/gens \
-    > runs/evals/s2-run2-s7500/$s-think.json
+T="--tokenizer data/tokenizer.json --samples 8 --rounds 2 --self-tests 8 --repair --oracle --cache-dir /root/gens"
+for s in humaneval humaneval-hard; do      # die harte Variante kostet fast nichts extra
+  time python3 scripts/humaneval.py /root/ckpt/s2-run2-s7500 --suite $s $T > runs/evals/s2-run2-s7500/$s-think.json
+done
+# MBPP hat 500 statt 164 Aufgaben, also etwa 3× die HumanEval-Zeit. Nur starten, wenn das unter 80 % des Deckels bleibt.
+for s in mbpp mbpp-hard; do
+  python3 scripts/humaneval.py /root/ckpt/s2-run2-s7500 --suite $s $T > runs/evals/s2-run2-s7500/$s-think.json
 done
 ```
 
