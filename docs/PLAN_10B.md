@@ -100,3 +100,67 @@ Gerechnet mit denselben Annahmen wie oben.
 - **Entscheidung:** zuerst das 10B. Das 23B ist Stufe 2, wenn das 10B die Kurve belegt hat und Funding da ist. Es wird
   aus dem 10B gewachsen (Depth Up-Scaling wie bei SOLAR 10.7B aus Mistral 7B) statt von null trainiert; die
   Ersparnis wird vorher gemessen.
+
+## 7. Weg des Owners (20.10.2026): 1B fertig, dann 10B durch Wachsen, ohne MoE
+
+Weg B bleibt der nächste Trainingsschritt. Sein Ziel ist jetzt ein dichtes 10B, das aus dem 1B wächst; MoE-Upcycling
+entfällt.
+
+1. **1B fertigstellen.** Bestandsaufnahme, Auftrag 1 (greedy, Denkzeit, Oracle), FineMath-Scan.
+2. **RSI und Denkzeit am 1B stark machen** und die Lernkurve belegen: mehrere RSI-Runden, jede mit Gate.
+3. **Premium-Tokens.** Ein paar GPU-Stunden am 1B mit den besten Daten.
+4. **Wachsen auf ≈ 10B** mit `jobs/grow-10b.sh` (`scripts/grow.py`). Das ist ein CPU-Job für wenige Cent. Das
+   10B startet funktionsgleich mit dem 1B; dieser Checkpoint ist der Startpunkt für alle späteren Modelle
+   (Quasnir, Rouge 1).
+5. **Weitertrainieren am 10B**, so weit das Budget reicht, dann die Tests und das Fine-Tuning.
+
+**Rechnung für die 200–400 €.**
+- Auf H200 (FP8, MFU 35 %) oder B300 schafft das 10B ≈ 40–85 Mio. Tokens je GPU-Stunde, also
+  ≈ 2,5 Mrd. Tokens je 230 $.
+- Das 1B schafft das Zehnfache.
+- Damit reichen 200 € für einen echten 10B-Punkt mit einigen Mrd. Tokens. Gemessen wird, ob er das 1B schlägt.
+- Ein voll trainiertes 10B (100–300 Mrd. Tokens) bleibt bei ≈ 9.000–28.000 $. Wachsen spart einen Teil davon; wie
+  viel, messen wir.
+
+**Daten-Stand.**
+- Corpus v6 ist gebaut und getestet: Pipeline, 47 auf dem Hub geprüfte Quellen für 250–500 Mrd. Tokens, Scan,
+  Wert-Tor.
+- Heruntergeladen und gefiltert ist er noch nicht. Das braucht CPU-Pods und das 1-TB-Volume.
+- Auf dem Volume liegen die Stores des 1B, FineMath-4+ (200,6 Mio. Tokens) und weitere; die Bestandsaufnahme zeigt
+  die Zahlen.
+
+## 8. Recherche, langes Denken und Prüfen
+
+**Recherche-Werkzeug** für Planer und Forscher:
+- Suche und Abruf laufen nur lesend über einen Proxy mit Allowlist. Keine Formulare, keine Logins, kein Posten.
+- Abgerufene Seiten sind Daten, keine Anweisungen.
+- Jede Aussage nennt URL und Abrufzeit. Fakten brauchen zwei unabhängige Quellen oder eine Prüfung durch Ausführung.
+- Was sich nicht belegen lässt, wird als unbelegt markiert und nicht erfunden.
+
+**Benchmarks:**
+- Ohne Internet, sonst sind sie verseucht.
+- „Mit Recherche“ wird getrennt gemessen und getrennt berichtet.
+- Die Halluzinationsrate wird mit und ohne Recherche gemessen.
+
+**Trainingsdaten aus dem Netz** nur über Scan, Lizenz und Wert-Tor.
+
+**Prüfkette:**
+- Code: Tests in der Sandbox.
+- Mathe: Ausführung oder symbolische Prüfung.
+- Fakten: Quellen.
+- Pläne: Teilschritte prüft ein Subagent, der nicht der Autor ist.
+
+## 9. Großer Coding-Test ab dem 10B-Punkt
+
+Aufgabe des Owners: eine Infrastruktur in der Art von Oracle nachbauen, gezielt nach Verbesserungen suchen und alles
+mit einem Backend bauen, an das nur noch Supabase und Vercel angeschlossen werden müssen; dazu berichten, worauf
+optimiert wurde.
+
+Damit der Test messbar ist:
+- **Feste Spezifikation:** mandantenfähiges Backend mit Postgres-Schema und Row Level Security (Supabase), Auth und
+  Rollen, API, Hintergrundjobs, Audit-Log, Admin-UI (Next.js für Vercel), Last- und Latenzziele.
+- **Verdeckte Abnahmetests**, End-to-End, in der Sandbox. Gezählt wird die Quote bestandener Tests.
+- **Optimierungsbericht:** Jede behauptete Verbesserung wird durch Messungen belegt.
+- **Funktion nachbauen, nichts kopieren:** kein fremder Code, keine fremde Marke.
+- **Zugangsdaten:** Das Modell bekommt keine. Supabase und Vercel schließt der Owner am Ende selbst an.
+- Dazu kommen die übrigen Benchmarks. Danach wird gesichert und fein-getunt.
