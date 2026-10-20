@@ -44,6 +44,7 @@ Modell wird von Grund auf trainiert.
 
 Rouge und Darus sind auf Anweisung des Owners ausgeschaltet (`disabled_families`). Es läuft
 ein einziger maßgeblicher Lauf: Quasnir.
+Rouge und Darus entstehen später auf der Basis des fertigen, vortrainierten Quasnir (Owner, 20.10.2026).
 
 **Architektur der bisherigen Champions** (alle Familien gleich, 12.582.912 Parameter):
 dim 384, 6 Layer, 6 Heads, 2 KV-Heads, head_dim 64, FFN 1024, vocab 8192, Kontext 512,
