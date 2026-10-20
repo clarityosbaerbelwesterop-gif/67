@@ -38,6 +38,12 @@ Für jeden Pod gilt:
 
 ## Entscheidungen des Owners
 
+**Stand 20.10.2026: Der Owner hat E1–E4 mit Ja beantwortet.** Das Environment `RUNPOD` hat ihn als Required reviewer.
+- E1 geändert: Kai und Co. liefen über Grok Bot und fallen mit ihm weg. Ausführer ist jetzt Claude über
+  GitOps-Workflows in Osirus. Der Owner gibt jeden Lauf frei.
+- E3b: StackExchange nur aus einem Dump bis April 2024.
+
+
 | # | Frage | Empfehlung |
 |---|---|---|
 | E1 | Übernehmen AI Trainer und Kai Groks Aufgaben? | Ja. SSH, Volume und Daten liegen schon auf ihrer Box. |
