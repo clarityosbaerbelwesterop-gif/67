@@ -1,0 +1,56 @@
+{
+ "about": "Run train-1 (premium tokens for the 1B, then the grown 10B): a slice of Stack-Edu (code, tier A), FineMath-4+ (owner yes 2026-10-20) and verified reasoning traces. Built on the GPU pod by jobs/train-1.sh; @D@ is the run's data directory on the volume.",
+ "tiers": {
+  "A": "public domain, CC0, CC BY, permissive code licences (MIT, BSD, Apache, ISC, ...)",
+  "B": "share-alike (CC BY-SA): excluded by the current policy",
+  "C": "web crawl, dataset licence only (ODC-By): owner decision"
+ },
+ "sources": [
+  {
+   "name": "reasoning-traces",
+   "local": "@D@/reasoning/*.jsonl",
+   "kind": "reasoning",
+   "tier": "A",
+   "text": "t",
+   "source_licence": "CC0",
+   "priority": 90,
+   "note": "data/build_reasoning.py --docs-only: verified synthetic traces plus GSM8K/AQuA train (no test items)"
+  },
+  {
+   "name": "cp-stackv2-edu",
+   "repo": "common-pile/stackv2_edu_filtered",
+   "files": "*",
+   "kind": "code",
+   "tier": "A",
+   "text": "text",
+   "licence": "metadata.license",
+   "budget_tokens": 1000000000.0,
+   "priority": 80,
+   "note": "Common Pile v0.1 Stack-Edu: per-file licence (metadata.license, license_type permissive), educational-quality score int_score; not gated. Only int_score >= 3, no generated or vendored files.",
+   "path": "metadata.path",
+   "where": {
+    "int_score": {
+     ">=": 3
+    },
+    "metadata.is_generated": false,
+    "metadata.is_vendor": false
+   },
+   "checked": "2026-10-20: repo, file layout and fields checked on the Hugging Face Hub",
+   "max_bytes": 4000000000.0
+  },
+  {
+   "name": "finemath-4plus",
+   "repo": "HuggingFaceTB/finemath",
+   "files": "finemath-4plus/*.parquet",
+   "kind": "general",
+   "tier": "C",
+   "text": "text",
+   "dataset_licence": "ODC-By-1.0 (dataset)",
+   "budget_tokens": 350000000.0,
+   "priority": 29,
+   "note": "owner decision: math web pages",
+   "checked": "2026-10-20: repo, file layout and fields checked on the Hugging Face Hub",
+   "max_bytes": 1200000000.0
+  }
+ ]
+}

@@ -178,3 +178,27 @@ Damit der Test messbar ist:
 - **Funktion nachbauen, nichts kopieren:** kein fremder Code, keine fremde Marke.
 - **Zugangsdaten:** Das Modell bekommt keine. Supabase und Vercel schließt der Owner am Ende selbst an.
 - Dazu kommen die übrigen Benchmarks. Danach wird gesichert und fein-getunt.
+
+## 10. GPU-Lauf `train-1` (eine Freigabe, höchstens 300 Minuten)
+
+Gestartet wird er über `gpu-job/JOB` in Osirus (`runpod-job.yml`, Job `train-1`, z. B. `gpu=B300|B200x2@8.50`,
+`budget=105.00`). Der Runner legt die Laufzeit vor dem Start fest, höchstens 300 Minuten, und gibt sie dem Pod als
+`POD_DEADLINE` mit. Danach wird der Pod immer gelöscht.
+
+Ablauf auf dem Pod (`jobs/train-1.sh`):
+1. **Setup:** JAX für CUDA (0.11.2 wie bei Lauf 2, sonst die neueste cuda12- bzw. cuda13-Version), forge,
+   Rechentest auf jeder GPU.
+2. **Daten** (`jobs/train-1-sources.json`): Reasoning-Spuren (synthetisch, geprüft, GSM8K/AQuA-Train), ein Stück
+   Stack-Edu (bis 4 GB roh, 1 Mrd. Tokens) und FineMath-4+ (bis 1,2 GB roh, 0,35 Mrd. Tokens). Alles läuft durch
+   Filter, Dekontamination, Dedup und Pack und liegt danach auf dem Volume. Ein zweiter Lauf verwendet es wieder.
+3. **1B:** Premium-Tokens auf `quasnir/run2/step-007500`. Re-Warm auf 1e-4, WSD-Abklingen auf 1e-5, standardmäßig
+   60 Minuten.
+4. **Wachsen** auf 9,43 Mrd. Parameter (`scripts/grow.py`).
+5. **10B:** lr 6e-5 → 1e-5 bis zur Deadline. 25 Minuten bleiben für den finalen Checkpoint (≈ 113 GB) und den Export
+   (≈ 19 GB).
+6. **Nebenher auf den CPUs:** HumanEval, MBPP und die harten Varianten für das alte und das neue 1B.
+
+`result.json` kommt am Ende ins Log und ins Artefakt; die Checkpoints liegen unter `/workspace/runs/train-1`.
+
+Auf der CPU vollständig simuliert, mit einem Mini-Modell und lokalen Daten. Nicht simuliert sind die echte GPU, die
+Downloads vom Hub und die Größen.

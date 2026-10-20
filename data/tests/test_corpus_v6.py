@@ -162,3 +162,15 @@ def test_scan_reports_contamination_and_rules_without_changing_data(tmp_path):
     v6.main(["scan", "--out", str(out), "--files", str(tmp_path / "in" / "fm-*"), "--evals", str(tmp_path / "own")])
     rep = json.loads((out / "scan.json").read_text())
     assert rep["eval_sets"] == ["newset"] and rep["contaminated_by"] == {"newset": 1}, rep["contaminated_by"]
+
+
+def test_plan_max_bytes_takes_whole_files_up_to_the_cap(tmp_path):
+    (tmp_path / "src").mkdir()
+    for i in range(5):
+        (tmp_path / "src" / f"part-{i}.jsonl").write_text("x" * 100)
+    cfg = {"sources": [{"name": "s", "local": str(tmp_path / "src" / "*.jsonl"), "kind": "general", "tier": "A",
+                        "text": "text", "source_licence": "CC0", "max_bytes": 250}]}
+    (tmp_path / "cfg.json").write_text(json.dumps(cfg))
+    assert v6.main(["plan", "--out", str(tmp_path / "out"), "--config", str(tmp_path / "cfg.json")]) == 0
+    files = json.loads((tmp_path / "out" / "plan.json").read_text())["files"]
+    assert len(files) == 3 and sum(f["size"] for f in files) == 300

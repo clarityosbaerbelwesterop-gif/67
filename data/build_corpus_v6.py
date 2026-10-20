@@ -312,6 +312,12 @@ def stage_plan(out: Path, cfg: dict, tiers: set[str], only: set[str] | None, pil
         if src["tier"] not in tiers or (only and src["name"] not in only) or src.get("disabled"):
             continue
         fl = list_files(src)
+        if src.get("max_bytes"):  # a slice of a large source: whole files in listing order up to this raw size
+            cut, tot = 0, 0
+            while cut < len(fl) and tot < src["max_bytes"]:
+                tot += fl[cut]["size"]
+                cut += 1
+            fl = fl[:cut]
         log(f"{src['name']}: {len(fl)} files, {sum(f['size'] for f in fl) / 1e9:.1f} GB")
         if pilot:  # pilot run: small budget per source until the value gate has measured it (docs/PLAN_100B_MOE.md)
             src = {**src, "budget_tokens": min(src.get("budget_tokens", pilot), pilot)}

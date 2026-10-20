@@ -43,6 +43,8 @@ def main(argv=None) -> int:
     ap.add_argument("--seq", type=int, default=512); ap.add_argument("--seed", type=int, default=67102)
     ap.add_argument("--precision", default="bf16"); ap.add_argument("--attn", default="cudnn")
     ap.add_argument("--remat", type=int, default=1)
+    ap.add_argument("--lr", type=float, default=None, help="peak lr (default: the s2_run1 preset, 2e-4)")
+    ap.add_argument("--min-lr", type=float, default=None, help="final lr (default: the s2_run1 preset, 3e-5)")
     ap.add_argument("--mesh", default="", help="DATAxFSDP, default 1x<all devices>")
     ap.add_argument("--no-verify-sha", action="store_true", help="tests only")
     ap.add_argument("--tiny", action="store_true", help="tests only: tiny random model instead of --init")
@@ -63,7 +65,8 @@ def main(argv=None) -> int:
         d, f = (int(x) for x in a.mesh.split("x")) if a.mesh else (1, ndev)
         mesh = G.make_mesh(d, f)
         hp = G.HP.preset("s2_run1", batch=a.batch, accum=a.accum, seq=a.seq, seed=a.seed, precision=a.precision,
-                         attn=a.attn, remat=bool(a.remat), data=a.data, clean_tsv=a.clean_tsv, verify_sha=not a.no_verify_sha)
+                         attn=a.attn, remat=bool(a.remat), data=a.data, clean_tsv=a.clean_tsv, verify_sha=not a.no_verify_sha,
+                         **{k: v for k, v in (("lr", a.lr), ("min_lr", a.min_lr)) if v is not None})
         data = G.ShardedData(hp, mesh, 8192)        # fail-closed clean store (raises DataSafetyError)
         cks = sorted([c for c in out.glob("step-*") if (c / "state.json").exists()],
                      key=lambda c: int(c.name.split("-")[1]))
