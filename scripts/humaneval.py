@@ -20,13 +20,24 @@ HumanEval-hard and MBPP-hard (`--suite humaneval-hard|mbpp-hard`) use the same p
 extra differential tests per task from data/build_hardbench.py (data/benchmarks/*-hard.jsonl);
 a task passes only if the official tests and every extra test pass.
 
+Best-of-N (`--samples N`): greedy plus N-1 sampled completions per task. One is picked by the tests the
+prompt itself shows (MBPP's assert line, HumanEval's doctest or `f(x) => y` examples; 130 of 164
+HumanEval and all MBPP tasks have some), and only that one runs against the hidden tests, so the score
+is still a pass@1. `--oracle` also scores every candidate (a ceiling, not a pass@1). `--cache-dir`
+keeps completions so the -hard suites reuse those of their base suite.
+
 Usage: python3 scripts/humaneval.py runs/quasnir-1/FINAL [--suite humaneval|mbpp|humaneval-hard|mbpp-hard] [--limit N] [--max-new 192]
+       [--samples 8 --temperature 0.8 --seed 1 --oracle --cache-dir DIR]
 """
 import argparse
+import concurrent.futures
+import doctest
 import hashlib
 import json
 import os
+import re
 import resource
+import secrets
 import subprocess
 import sys
 import tempfile
@@ -44,7 +55,8 @@ def problems(suite: str) -> list:
         return [json.loads(l) for l in (ROOT / f"data/benchmarks/{suite}.jsonl").read_text().splitlines() if l.strip()]
     rows = [json.loads(l) for l in (ROOT / f"data/stores/evals/{suite}.jsonl").read_text().splitlines() if l.strip()]
     if suite == "humaneval":
-        return [{"prompt": p["prompt"], "tail": "\n\n" + p["test"] + f"\ncheck({p['entry_point']})\n"} for p in rows]
+        return [{"prompt": p["prompt"], "entry_point": p["entry_point"],
+                 "tail": "\n\n" + p["test"] + f"\ncheck({p['entry_point']})\n"} for p in rows]
     out = []
     for p in rows:
         if 11 <= p["task_id"] <= 510:
@@ -143,24 +155,162 @@ def arc_main(args, tok) -> int:
 
 
 CPU_S = 10
+VISIBLE_CPU_S = 3  # visible checks are a few small calls; a looping candidate must not stall the selection
 
 
-def limits() -> None:
-    resource.setrlimit(resource.RLIMIT_CPU, (CPU_S, CPU_S))
+def limits(cpu: int | None = None) -> None:
+    cpu = cpu or CPU_S
+    resource.setrlimit(resource.RLIMIT_CPU, (cpu, cpu))
     resource.setrlimit(resource.RLIMIT_AS, (1 << 30, 1 << 30))
     resource.setrlimit(resource.RLIMIT_FSIZE, (1 << 20, 1 << 20))
     resource.setrlimit(resource.RLIMIT_NPROC, (64, 64))
 
 
-def passes(program: str) -> bool:
+def run(program: str, cpu: int) -> tuple:
+    """(exit code 0, stdout) of `program` in the sandbox; a timeout keeps the output printed so far."""
     with tempfile.TemporaryDirectory() as d:
         f = Path(d) / "t.py"
         f.write_text(program)
         try:
-            r = subprocess.run([sys.executable, "-I", str(f)], cwd=d, env={}, capture_output=True, timeout=CPU_S + 5, preexec_fn=limits)
-        except subprocess.TimeoutExpired:
-            return False
-        return r.returncode == 0
+            r = subprocess.run([sys.executable, "-I", str(f)], cwd=d, env={}, capture_output=True, timeout=cpu + 5,
+                               preexec_fn=lambda: limits(cpu))
+        except subprocess.TimeoutExpired as e:
+            return False, (e.stdout or b"").decode(errors="replace")
+        return r.returncode == 0, r.stdout.decode(errors="replace")
+
+
+def passes(program: str, cpu: int | None = None) -> bool:
+    return run(program, cpu or CPU_S)[0]
+
+
+# Best-of-N: the model writes N candidates and picks one by the tests its prompt shows (MBPP's assert line,
+# HumanEval's doctest or `f(x) => y` examples). The hidden tests run once, on the picked candidate, so the
+# score stays a pass@1. Visible tests are the only signal a user of the model would also have.
+_ARROW = re.compile(r"\s*(?:==>|==|=>|->|➞|should return|returns?)\s*(.+?)[\s.,;]*$")
+
+
+def _compiles(src: str, mode: str) -> bool:
+    try:
+        compile(src, "<visible>", mode)
+        return True
+    except (SyntaxError, ValueError):
+        return False
+
+
+def _call_end(s: str) -> int:
+    """Index after the call that opens `s`, or -1."""
+    depth, quote, i = 0, None, 0
+    while i < len(s):
+        c = s[i]
+        if quote:
+            i += c == "\\"
+            quote = None if c == quote else quote
+        elif c in "'\"":
+            quote = c
+        elif c in "([{":
+            depth += 1
+        elif c in ")]}":
+            depth -= 1
+            if depth == 0:
+                return i + 1
+        i += 1
+    return -1
+
+
+def visible_tests(prompt: str, entry_point: str | None = None) -> list:
+    """[(source, expected)] taken from the prompt text only; expected None: the statement must not raise."""
+    out = [(ln.strip(), None) for ln in prompt.splitlines() if ln.strip().startswith("assert ") and _compiles(ln.strip(), "exec")]
+    try:
+        examples = doctest.DocTestParser().get_examples(prompt)
+    except ValueError:
+        examples = []
+    for e in examples:
+        src = e.source.strip()
+        want = "\n".join(re.split(r"\n\s*(?:\"\"\"|\'\'\')", "\n" + e.want)[0].splitlines()).strip()  # the docstring may close right after
+        if want and _compiles(src, "eval") and _compiles(want, "eval"):
+            out.append((src, want))
+        elif not want and _compiles(src, "eval") and "==" in src:
+            out.append((f"assert {src}", None))  # `>>> f(x) == y` written without an expected line
+        elif not want and _compiles(src, "exec"):
+            out.append((src, None))
+    if entry_point and not out:
+        for ln in prompt.splitlines():
+            s = ln.strip()
+            end = _call_end(s) if s.startswith(entry_point + "(") else -1
+            m = _ARROW.match(s[end:]) if end > 0 else None
+            if m and _compiles(s[:end], "eval") and _compiles(m.group(1), "eval"):
+                out.append((s[:end], m.group(1)))
+    return out
+
+
+CHECK = """
+
+
+def _forge_visible(_tests, _tag):
+    print(_tag, "loaded", flush=True)
+    for _src, _want in _tests:
+        try:
+            if _want is None:
+                exec(_src, globals())
+                _ok = True
+            else:
+                _ok = bool(eval(_src, globals()) == eval(_want, globals()))
+        except BaseException:
+            _ok = False
+        if _ok:
+            print(_tag, "pass", flush=True)
+
+
+_forge_visible({tests!r}, {tag!r})
+"""
+
+
+def visible_score(job: tuple) -> tuple:
+    """(visible tests passed, module loaded) of one candidate; `tag` is a fresh nonce the candidate cannot print."""
+    body, tests, tag = job
+    out = run(body + CHECK.format(tests=tests, tag=tag), VISIBLE_CPU_S)[1].splitlines()
+    return out.count(f"{tag} pass"), int(f"{tag} loaded" in out)
+
+
+def choose(scores: list) -> int:
+    """Most visible tests passed, then loads cleanly; ties keep the earlier candidate, greedy first."""
+    return max(range(len(scores)), key=lambda j: (scores[j], -j))
+
+
+def hidden_pass(job: tuple) -> bool:
+    return passes(*job)
+
+
+def ckpt_id(ckpt: str, tokenizer: str) -> list:
+    files = sorted(Path(ckpt).iterdir()) + [Path(tokenizer)]
+    return [str(Path(ckpt).resolve())] + [[f.name, f.stat().st_size, f.stat().st_mtime_ns] for f in files if f.is_file()]
+
+
+def completions(args, tok, texts: list, temperature: float, seed: int, copies: int) -> list:
+    """`copies` decoded completions per prompt (line j of the batch decodes with seed + j). With --cache-dir the
+    result is reused by any suite with the same prompts, so the -hard variants cost no extra decoding."""
+    key = hashlib.sha256(json.dumps([ckpt_id(args.ckpt, args.tokenizer), texts, args.max_new, temperature, seed,
+                                     copies]).encode()).hexdigest()[:32]
+    cache = Path(args.cache_dir) / f"{key}.json" if args.cache_dir else None
+    if cache and cache.exists():
+        return json.loads(cache.read_text())
+    with tempfile.NamedTemporaryFile("w", suffix=".jsonl", delete=False) as f:
+        for ids in tok.encode_many(texts):
+            f.write((json.dumps(ids) + "\n") * copies)
+        prompts = f.name
+    eos = len(tok.merges) + 256 + 1
+    cmd = [str(ROOT / "target/release/forge"), "generate", "--ckpt", args.ckpt, "--prompts-file", prompts,
+           "--max-new", str(args.max_new), "--stop-id", str(eos)]
+    if temperature > 0:
+        cmd += ["--temperature", str(temperature), "--seed", str(seed)]
+    out = subprocess.run(cmd, check=True, capture_output=True, text=True).stdout
+    os.unlink(prompts)
+    gens = [tok.decode([i for i in json.loads(l)["ids"] if i < 256 + len(tok.merges)]) for l in out.splitlines() if l.startswith("{")]
+    res = [gens[i * copies:(i + 1) * copies] for i in range(len(texts))]
+    if cache:
+        cache.parent.mkdir(parents=True, exist_ok=True)
+        cache.write_text(json.dumps(res))
+    return res
 
 
 def main() -> int:
@@ -170,6 +320,12 @@ def main() -> int:
     ap.add_argument("--limit", type=int, default=None)
     ap.add_argument("--max-new", type=int, default=192)
     ap.add_argument("--tokenizer", default=str(ROOT / "data/stores/base/tokenizer.json"))
+    ap.add_argument("--samples", type=int, default=1, help="candidates per task: greedy plus samples-1 sampled ones")
+    ap.add_argument("--temperature", type=float, default=0.8)
+    ap.add_argument("--seed", type=int, default=1)
+    ap.add_argument("--oracle", action="store_true", help="also run the hidden tests on every candidate (ceiling, not pass@1)")
+    ap.add_argument("--cache-dir", default=None)
+    ap.add_argument("--jobs", type=int, default=min(16, os.cpu_count() or 1))
     args = ap.parse_args()
     tok = Tokenizer(Path(args.tokenizer))
     if args.suite == "arc-agi-2":
@@ -178,22 +334,37 @@ def main() -> int:
     if args.suite.endswith("-hard"):
         CPU_S = 40  # the extra tests run inside the same sandboxed process
     probs = problems(args.suite)[: args.limit]
-    with tempfile.NamedTemporaryFile("w", suffix=".jsonl", delete=False) as f:
-        for ids in tok.encode_many([p["prompt"] for p in probs]):
-            f.write(json.dumps(ids) + "\n")
-        prompts = f.name
-    eos = len(tok.merges) + 256 + 1
-    out = subprocess.run([str(ROOT / "target/release/forge"), "generate", "--ckpt", args.ckpt, "--prompts-file", prompts,
-                          "--max-new", str(args.max_new), "--stop-id", str(eos)], check=True, capture_output=True, text=True).stdout
-    gens = [json.loads(l) for l in out.splitlines() if l.startswith("{")]
-    solved = 0
-    for p, g in zip(probs, gens):
-        text = tok.decode([i for i in g["ids"] if i < 256 + len(tok.merges)])
-        cut = min([text.find(s) for s in STOPS[args.suite.removesuffix("-hard")] if s in text] + [len(text)])
-        program = p["prompt"] + text[:cut] + p["tail"]
-        solved += passes(program)
-    result = {"ckpt": args.ckpt, "suite": args.suite, "problems": len(probs), "passed": solved, "pass@1": solved / max(1, len(probs)),
+    texts = [p["prompt"] for p in probs]
+    cands = completions(args, tok, texts, 0.0, 0, 1)
+    if args.samples > 1:
+        cands = [c + more for c, more in zip(cands, completions(args, tok, texts, args.temperature, args.seed, args.samples - 1))]
+    stops = STOPS[args.suite.removesuffix("-hard")]
+    bodies = [[p["prompt"] + t[:min([t.find(s) for s in stops if s in t] + [len(t)])] for t in c] for p, c in zip(probs, cands)]
+    pick = [0] * len(probs)
+    with concurrent.futures.ProcessPoolExecutor(args.jobs) as pool:
+        if args.samples > 1:
+            tests = [visible_tests(p["prompt"], p.get("entry_point")) for p in probs]
+            jobs = [(b, t, secrets.token_hex(8)) for bs, t in zip(bodies, tests) for b in bs]
+            scores = list(pool.map(visible_score, jobs, chunksize=4))
+            pick = [choose(scores[i * args.samples:(i + 1) * args.samples]) for i in range(len(probs))]
+        todo = sorted({(i, 0) for i in range(len(probs))} | {(i, pick[i]) for i in range(len(probs))}
+                      | ({(i, j) for i in range(len(probs)) for j in range(args.samples)} if args.oracle else set()))
+        hidden = dict(zip(todo, pool.map(hidden_pass, [(bodies[i][j] + probs[i]["tail"], CPU_S) for i, j in todo], chunksize=4)))
+    solved = sum(hidden[(i, pick[i])] for i in range(len(probs)))
+    n = max(1, len(probs))
+    result = {"ckpt": args.ckpt, "suite": args.suite, "problems": len(probs), "passed": solved, "pass@1": solved / n,
               "decoding": "greedy", "max_new_tokens": args.max_new}
+    if args.samples > 1:
+        result.update({"decoding": f"best-of-{args.samples}: greedy + {args.samples - 1} samples (T {args.temperature}, "
+                                   "top-k 40), picked by the prompt's own visible tests; hidden tests scored once",
+                       "samples": args.samples, "temperature": args.temperature, "seed": args.seed,
+                       "greedy_pass@1": sum(hidden[(i, 0)] for i in range(len(probs))) / n,
+                       "tasks_with_visible_tests": sum(bool(t) for t in tests),
+                       "picked_not_greedy": sum(j > 0 for j in pick)})
+    if args.oracle and args.samples > 1:
+        result["oracle_any_pass"] = sum(any(hidden[(i, j)] for j in range(args.samples)) for i in range(len(probs))) / n
+        result["sampled_pass@1"] = sum(hidden[(i, j)] for i in range(len(probs)) for j in range(1, args.samples)) / (n * (args.samples - 1))
+        result["oracle_note"] = "uses the hidden tests: a ceiling for search and RL, not a pass@1"
     print(json.dumps(result))
     return 0
 

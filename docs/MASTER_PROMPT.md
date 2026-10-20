@@ -235,6 +235,10 @@ und nenne die ETA.
 - **Präzision:** kein 4-Bit-Training (NVFP4); FP8 und BF16 sind erlaubt.
 - **Evals:** Held-out-Sets verlassen die Box nie. Öffentliche Benchmarks auf Pods nur nach Owner-Ja
   (für das 1B, s2-run2 step 7500, erteilt am 20.10.2026).
+- **Denkzeit (Best-of-N):** `scripts/humaneval.py --samples N` erzeugt greedy plus N−1 Stichproben. Ausgewählt
+  wird nur mit den Tests, die im Prompt stehen; die verdeckten Tests laufen einmal auf der gewählten Lösung.
+  Berichtet werden immer greedy und Best-of-N nebeneinander, mit N. `oracle_any_pass` ist eine Obergrenze und
+  nie ein pass@1.
 - **Daten:** Code- und neue Daten nur bei hoher Qualität und nur mit bestandenem Wert-Tor
   (Ersatz-Ablation am 100M-Proxy, `docs/PLAN_100B_MOE.md` Abschnitt 6).
 

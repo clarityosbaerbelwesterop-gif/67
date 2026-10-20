@@ -70,12 +70,28 @@ mkdir -p data/stores/evals && cp data/out/evals/*.jsonl data/stores/evals/
 mkdir -p runs/evals/s2-run2-s7500
 for s in humaneval mbpp humaneval-hard mbpp-hard; do
   python3 scripts/humaneval.py /root/ckpt/s2-run2-s7500 --suite $s --tokenizer data/tokenizer.json \
-    > runs/evals/s2-run2-s7500/$s.json
+    --cache-dir /root/gens > runs/evals/s2-run2-s7500/$s.json
 done
 ```
 
-Ergebnis pushen: `runs/evals/s2-run2-s7500/*.json` und `EXPORT.json`. Melden: pass@1 je Suite, den Abstand der harten
-zur normalen Suite, Laufzeit und Kosten.
+**Denkzeit (Best-of-8).** Diesen Teil nur ausführen, wenn die Hochrechnung unter 80 % des Deckels bleibt: Er
+kostet etwa 7× die Dekodierzeit des greedy-Laufs. Die Auswahl nutzt nur die Tests aus dem Prompt. Die harten
+Varianten verwenden die gespeicherten Lösungen wieder und dekodieren nicht neu.
+
+```bash
+for s in humaneval mbpp humaneval-hard mbpp-hard; do
+  python3 scripts/humaneval.py /root/ckpt/s2-run2-s7500 --suite $s --tokenizer data/tokenizer.json \
+    --samples 8 --oracle --cache-dir /root/gens > runs/evals/s2-run2-s7500/$s-best8.json
+done
+```
+
+Ergebnis pushen: `runs/evals/s2-run2-s7500/*.json` und `EXPORT.json`. `/root/gens` nicht pushen.
+
+Melden:
+- pass@1 je Suite, greedy und Best-of-8 nebeneinander;
+- `oracle_any_pass` als Obergrenze;
+- den Abstand der harten zur normalen Suite;
+- Laufzeit und Kosten.
 
 ### Auftrag 2: Pilot Corpus v6, nur Code mit hoher Qualität. Deckel 10 $ CPU, höchstens 100 GB Speicher.
 
