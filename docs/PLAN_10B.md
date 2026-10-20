@@ -122,6 +122,20 @@ entfällt.
 - Ein voll trainiertes 10B (100–300 Mrd. Tokens) bleibt bei ≈ 9.000–28.000 $. Wachsen spart einen Teil davon; wie
   viel, messen wir.
 
+**Bestandsaufnahme Volume `3qlkuqnr1u`** (20.10.2026, Osirus-Lauf 39467175129): 200 GB in US-NC-2, belegt 97,8 GB,
+frei ≈ 102 GB, 45 Dateien.
+- **`quasnir/run2`** (82,5 GB): Checkpoints step 2000–7000 und 7500 mit je 11,5 GB (Modell 3,8 GB, Optimizer 7,7 GB)
+  und der Export `weights-bf16-step007500` (1,9 GB, sha256 `0d5eecc2…`). Das ist der Champion.
+- **`quasnir/run1`** (13,4 GB): step 1000 und dessen Export.
+- **`quasnir/base-v4`** (1,8 GB): nur 4 von 510 Rohdateien von opc-fineweb-code.
+- **Klein:** `quasnir/cot`, `quasnir/handoff`.
+- **1B-Aufbau:** dim 1920, 24 Schichten, 30 Köpfe / 10 KV-Köpfe (head_dim 64), FFN 5120, Vokabular 8192, Kontext 512.
+  Das sind 0,96 Mrd. Parameter, trainiert mit ≈ 1,97 Mrd. Tokens (7500 × 128 × 512 × 4).
+- **Nicht auf dem Volume:** die Trainingsdaten von Lauf 2 (`data/mix`) und Kais FineMath- und StackExchange-Dateien
+  (`/workspace/pool-p1`). Sie lagen auf Groks Pod und müssen neu gebaut bzw. neu geladen werden.
+- **Wachstumsziel für dieses 1B** (`jobs/grow-10b.sh`): dim 4032, 63/21 Köpfe, FFN 14.080, 44 Schichten, also
+  9,43 Mrd. Parameter (37,7 GB in F32).
+
 **Daten-Stand.**
 - Corpus v6 ist gebaut und getestet: Pipeline, 47 auf dem Hub geprüfte Quellen für 250–500 Mrd. Tokens, Scan,
   Wert-Tor.
