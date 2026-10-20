@@ -165,6 +165,7 @@ Jede Stufe hat ein messbares Tor. Ohne bestandenes Tor beginnt die nächste Stuf
    (BTX, 108B gesamt, ≈ 26B aktiv, ≈ 56.500 $ in FP8). Daten: `data/build_corpus_v6.py`, zuerst als Pilot.
    Neue Quellen nur über das Wert-Tor (`data/build_ablation.py`). Auftrag an Grok: `docs/PROMPT_GROK_RUNPOD.md`.
    Subagenten ab 13–15B (Rollen, Workflows, GPU-Rechnung): `docs/PLAN_SUBAGENTS.md`.
+   Grok Bot ist seit 20.10.2026 ausgesetzt. Plan ohne Grok, offene Owner-Entscheidungen E1–E4: `docs/PLAN_10_STEPS.md`.
 4. Danach der volle s2-Lauf. Chinchilla-Ziel: etwa 19 Mrd. Tokens, also
    6 · 9,6e8 · 1,9e10 ≈ 1,1e20 FLOP. Das sind etwa 3 Tage auf einer H100 bei 40 % MFU oder
    etwa 10 Stunden auf 8 H100.
@@ -244,6 +245,7 @@ und nenne die ETA.
     Lösungen.
   - `oracle_any_pass` ist eine Obergrenze und nie ein pass@1.
   - Eine Stufe bleibt nur, wenn sie gemessen etwas bringt.
+- **Daten auf einer Maschine prüfen:** `python3 data/build_corpus_v6.py scan --files GLOB` (13-Gramm-Dekontamination und Inhaltsregeln, ändert nichts).
 - **Daten:** Code- und neue Daten nur bei hoher Qualität und nur mit bestandenem Wert-Tor
   (Ersatz-Ablation am 100M-Proxy, `docs/PLAN_100B_MOE.md` Abschnitt 6).
 

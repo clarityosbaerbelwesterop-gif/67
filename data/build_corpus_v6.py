@@ -265,7 +265,7 @@ def rows(path: Path, src: dict):
     if name.endswith(".parquet"):
         import pyarrow.parquet as pq
         pf = pq.ParquetFile(path)
-        cols = sorted({c.split(".")[0] for c in (src["text"], src.get("path"), src.get("licence"),
+        cols = sorted({c.split(".")[0] for c in (src["text"], src.get("path"), src.get("licence"), src.get("id"),
                                                    *src.get("where", {}).keys()) if c} & set(pf.schema_arrow.names))
         for batch in pf.iter_batches(batch_size=2048, columns=cols):
             yield from batch.to_pylist()
@@ -362,21 +362,28 @@ def stage_filter(out: Path, worker: int, workers: int, min_free_gb: float) -> No
         filter_file(out, f, src, banned, sk)
 
 
-def bc_banned() -> tuple[set[int], list[str]]:
-    if not all((EVALS / f"{n}.jsonl").exists() for n in ("humaneval", "mbpp", "gsm8k")):
+def banned_by_set(evals: Path | None = None) -> dict[str, set[int]]:
+    """The 13-gram hashes of every eval set (*.jsonl) in `evals` (default EVALS), by set name."""
+    if evals is None and not all((EVALS / f"{n}.jsonl").exists() for n in ("humaneval", "mbpp", "gsm8k")):
         bc.get_evals()  # fresh checkout: fetch the eval sets (raw.githubusercontent.com) into data/out/evals
-    banned, names = set(), []
-    for p in sorted(EVALS.glob("*.jsonl")):
-        names.append(p.stem)
+    by = {}
+    for p in sorted((evals or EVALS).glob("*.jsonl")):
+        b = set()
         for line in p.read_text().splitlines():
             if line.strip():
                 row = json.loads(line)
                 vals = [v for v in row.values() if isinstance(v, str)]
                 vals += [x for v in row.values() if isinstance(v, list) for x in v if isinstance(x, str)]
-                banned |= bc.ngrams(" ".join(vals))
-    if not {"humaneval", "mbpp", "gsm8k"} <= set(names):
-        raise SystemExit(f"eval sets missing in {EVALS}: decontamination impossible, refusing to run")
-    return banned, names
+                b |= bc.ngrams(" ".join(vals))
+        by[p.stem] = b
+    if not by or (evals is None and not {"humaneval", "mbpp", "gsm8k"} <= set(by)):
+        raise SystemExit(f"eval sets missing in {evals or EVALS}: decontamination impossible, refusing to run")
+    return by
+
+
+def bc_banned() -> tuple[set[int], list[str]]:
+    by = banned_by_set()
+    return set().union(*by.values()), list(by)
 
 
 def filter_file(out: Path, f: dict, src: dict, banned: set[int], sk: Sketcher) -> dict:
@@ -686,9 +693,90 @@ def stage_inspect(name: str, cfg: dict) -> None:
                      indent=1))
 
 
+_SCAN: dict = {}
+
+
+def _scan_init(banned_by: dict) -> None:
+    _SCAN["banned_by"] = banned_by
+
+
+def _scan_file(job: tuple) -> dict:
+    """Content rules and 13-gram decontamination of one local file; ids of the rows to exclude."""
+    path, src = job
+    banned_by = _SCAN["banned_by"]
+    stats = {"file": str(path), "rows": 0, "kept": 0, "kept_chars": 0, "reasons": {}, "contaminated_by": {}}
+    excluded = []
+    for i, row in enumerate(rows(Path(path), src)):
+        stats["rows"] += 1
+        text = _field(row, src["text"])
+        rid = _field(row, src["id"]) if src["id"] else None
+        rid = str(rid) if rid is not None else f"{Path(path).name}:{i}"
+        if not isinstance(text, str) or not text.strip():
+            why = "empty"
+        elif hit := sorted(n for grams in [bc.ngrams(text)] for n, b in banned_by.items() if grams & b):
+            why = "contaminated"
+            for n in hit:
+                stats["contaminated_by"][n] = stats["contaminated_by"].get(n, 0) + 1
+        else:
+            if src["kind"] == "code":
+                ok, why = premium.keep(text, "code", _field(row, src.get("path")) or "")
+            elif src["kind"] == "general":
+                ok, why = premium.keep_text(text)
+            else:  # reasoning traces: verified when generated
+                ok, why = len(text) <= premium.TEXT_MAX, "too-long"
+            why = "ok" if ok else why
+        if why == "ok":
+            stats["kept"] += 1
+            stats["kept_chars"] += len(text)
+        else:
+            excluded.append({"id": rid, "reason": why})
+        stats["reasons"][why] = stats["reasons"].get(why, 0) + 1
+    stats["excluded"] = excluded
+    return stats
+
+
+def stage_scan(out: Path, files: str, text: str, kind: str, rid: str, licence: str, workers: int,
+               evals: Path | None = None) -> dict:
+    """Check data that already lies on a machine (for example FineMath on the box) without building a store:
+    13-gram decontamination against HumanEval, MBPP and GSM8K test, the content rules of `kind`, and a list of
+    the rows to exclude. `evals` swaps in other sets, for example a new held-out set as JSONL. Nothing is
+    changed or deleted; the report goes to OUT/scan.json, the ids to OUT/excluded.jsonl."""
+    import glob
+    paths = sorted({p for g in files.split(",") for p in glob.glob(g.strip()) if Path(p).is_file()})
+    if not paths:
+        raise SystemExit(f"no files match {files}")
+    banned_by = banned_by_set(evals)
+    names = list(banned_by)
+    src = {"text": text, "kind": kind, "id": rid or None}
+    out.mkdir(parents=True, exist_ok=True)
+    t0 = time.time()
+    import multiprocessing as mp
+    with mp.Pool(max(1, min(workers, len(paths))), initializer=_scan_init, initargs=(banned_by,)) as pool:
+        per = pool.map(_scan_file, [(p, src) for p in paths], chunksize=1)
+    tot = {"rows": 0, "kept": 0, "kept_chars": 0, "reasons": {}, "contaminated_by": {}}
+    with open(out / "excluded.jsonl", "w") as f:
+        for st in per:
+            for e in st.pop("excluded"):
+                f.write(json.dumps({**e, "file": Path(st["file"]).name}) + "\n")
+            for k in ("rows", "kept", "kept_chars"):
+                tot[k] += st[k]
+            for k in ("reasons", "contaminated_by"):
+                for r, c in st[k].items():
+                    tot[k][r] = tot[k].get(r, 0) + c
+    rep = {"files": len(paths), "kind": kind, "licence": licence, "eval_sets": names, **tot,
+           "kept_tokens_est": int(tot["kept_chars"] / CHARS_PER_TOKEN), "yield": tot["kept"] / max(1, tot["rows"]),
+           "seconds": round(time.time() - t0, 1), "per_file": per,
+           "method": "13-gram decontamination (data/build_corpus.ngrams) against the eval sets above; content "
+                     f"rules of data/premium.py for kind {kind}; nothing changed or deleted"}
+    (out / "scan.json").write_text(json.dumps(rep, indent=1))
+    log(f"scan: {tot['rows']:,} rows, kept {tot['kept']:,}, contaminated {tot['reasons'].get('contaminated', 0):,} "
+        f"{tot['contaminated_by']}, report {out / 'scan.json'}")
+    return rep
+
+
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
-    ap.add_argument("stage", choices=["plan", "filter", "dedup", "tokenize", "pack", "status", "inspect"])
+    ap.add_argument("stage", choices=["plan", "filter", "dedup", "tokenize", "pack", "status", "inspect", "scan"])
     ap.add_argument("--out", type=Path, default=Path("/vol/data/v6"))
     ap.add_argument("--config", type=Path, default=CONFIG)
     ap.add_argument("--tiers", default="A")
@@ -701,6 +789,12 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--min-free-gb", type=float, default=30.0)
     ap.add_argument("--forge", type=Path, default=FORGE)
     ap.add_argument("--tokenizer", type=Path, default=TOKENIZER)
+    ap.add_argument("--files", default="", help="scan: comma-separated globs of local parquet/jsonl[.gz|.zst] files")
+    ap.add_argument("--text", default="text", help="scan: text field (dotted for nested)")
+    ap.add_argument("--kind", default="general", choices=["general", "code", "reasoning"])
+    ap.add_argument("--id", default="", help="scan: id field for excluded.jsonl (default file:row)")
+    ap.add_argument("--licence", default="", help="scan: dataset licence, recorded in the report")
+    ap.add_argument("--evals", type=Path, default=None, help="scan: directory of *.jsonl sets to check against")
     a = ap.parse_args(argv)
     cfg = load_config(a.config)
     if a.stage == "plan":
@@ -715,6 +809,8 @@ def main(argv: list[str] | None = None) -> int:
         stage_pack(a.out, a.tokenizer)
     elif a.stage == "status":
         stage_status(a.out)
+    elif a.stage == "scan":
+        stage_scan(a.out, a.files, a.text, a.kind, a.id, a.licence, a.workers, a.evals)
     else:
         stage_inspect(a.source, cfg)
     return 0

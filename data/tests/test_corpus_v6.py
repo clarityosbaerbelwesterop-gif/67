@@ -132,3 +132,33 @@ def test_end_to_end(tmp_path):
     assert rep["train_bin_sha256_expected"] == hashlib.sha256((s / "train.bin").read_bytes()).hexdigest()
     man = json.loads((s / "manifest.json").read_text())
     assert man["documents"] == len(kept) and sum(v["docs"] for v in man["per_source_tier"].values()) == 11
+
+
+def test_scan_reports_contamination_and_rules_without_changing_data(tmp_path):
+    import pyarrow as pa
+    import pyarrow.parquet as pq
+    gsm = json.loads((v6.EVALS / "gsm8k.jsonl").read_text().splitlines()[5])
+    leak = next(v for v in gsm.values() if isinstance(v, str) and len(v.split()) > 25)
+    good = [inspect.getdoc(importlib.import_module(m)) for m in ("argparse", "json", "heapq")]
+    texts = good + ["Worked example.\n\n" + leak + "\n\nThat is the answer.", "", "x" * 50]
+    (tmp_path / "in").mkdir()
+    pq.write_table(pa.table({"text": texts[:3], "id": ["a", "b", "c"]}), tmp_path / "in" / "fm-0.parquet")
+    with gzip.open(tmp_path / "in" / "fm-1.jsonl.gz", "wt") as f:
+        for i, t in enumerate(texts[3:]):
+            f.write(json.dumps({"text": t, "id": f"d{i}"}) + "\n")
+    before = {p.name: p.read_bytes() for p in (tmp_path / "in").iterdir()}
+    out = tmp_path / "scan"
+    assert v6.main(["scan", "--out", str(out), "--files", str(tmp_path / "in" / "fm-*"), "--id", "id",
+                    "--licence", "odc-by", "--workers", "2"]) == 0
+    rep = json.loads((out / "scan.json").read_text())
+    assert rep["rows"] == 6 and rep["files"] == 2 and rep["licence"] == "odc-by"
+    assert rep["reasons"]["contaminated"] == 1 and rep["contaminated_by"] == {"gsm8k": 1}, rep["reasons"]
+    assert rep["reasons"]["empty"] == 1 and rep["kept"] == 3, rep["reasons"]
+    ex = [json.loads(l) for l in (out / "excluded.jsonl").read_text().splitlines()]
+    assert {e["id"] for e in ex} == {"d0", "d1", "d2"} and {e["reason"] for e in ex} >= {"contaminated", "empty"}
+    assert before == {p.name: p.read_bytes() for p in (tmp_path / "in").iterdir()}  # nothing changed
+    (tmp_path / "own").mkdir()
+    (tmp_path / "own" / "newset.jsonl").write_text(json.dumps({"prompt": good[1]}) + "\n")
+    v6.main(["scan", "--out", str(out), "--files", str(tmp_path / "in" / "fm-*"), "--evals", str(tmp_path / "own")])
+    rep = json.loads((out / "scan.json").read_text())
+    assert rep["eval_sets"] == ["newset"] and rep["contaminated_by"] == {"newset": 1}, rep["contaminated_by"]
