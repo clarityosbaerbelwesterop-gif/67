@@ -71,6 +71,28 @@ Für jeden Pod gilt:
   6 MB/s statt 311 MB/s), Ursache offen.
 - HumanEval/MBPP greedy: altes 1B 0/0, neues 1B 0/164 und 2/500. Messung mit Denkzeit: Lauf eval-1-a.
 
+**Lauf eval-1-a** (1× A100, 1 h 45 min, 3,34 $), mit Denkzeit (Best-of-N, Selbsttests, Reparatur):
+
+| Modell | HumanEval | MBPP | MBPP-hard | Trainings-Loss |
+|---|---|---|---|---|
+| altes 1B | 0/164 | 0/500 | – | – |
+| neues 1B | 0/164 | 7/500 (1,4 %; greedy 0,4 %) | 4/500 | 2,17 → 1,58 |
+| 10B (bf16-Export) | 0/164 | 4/500 | 3/500 | 1,59 → 1,48 |
+
+Obergrenze (mindestens ein Versuch richtig) beim neuen 1B: 1,6 %. Die Schwelle für RSI liegt bei 5 %. Der
+Validierungs-Loss fehlt (Timeout beim Holen der Daten, inzwischen behoben in `jobs/volsync.py`); ohne ihn gibt es
+keinen Gate-Nachweis.
+
+## Eingefroren am 21.10.2026 (Owner)
+
+Quasnir ist eingefroren. Es läuft kein GPU-Lauf und es wird keiner vorbereitet, bis der Owner es aufhebt.
+- Gesichert auf dem Volume `3qlkuqnr1u`: `runs/train-1-f/1b` (vollständig), `runs/train-1-f/10b/export` (nur bf16),
+  `data/train-1/store` (1,55 Mrd. Tokens).
+- Der Champion bleibt unverändert, bis ein Gate mit Validierungs-Loss ihn ablöst.
+- `gpu-job/JOB` in Osirus zeigt auf den abgeschlossenen Lauf `eval-1-a` und startet nichts Neues.
+- Der lokale Langlauf bleibt angehalten.
+- Nächster Schritt: Alternativen zu Lauf 2 mit höchstens 50 € (`docs/ALTERNATIVEN_LAUF2.md`).
+
 **Entscheidungen des Owners (21.10.2026):**
 - Lösungen offener Modelle mit freier Lizenz (MIT, Apache-2.0) dürfen Trainingsdaten werden; geschlossene Modelle
   bleiben ausgeschlossen. Lizenz je Datensatz prüfen und im Manifest festhalten.
