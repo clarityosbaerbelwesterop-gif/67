@@ -235,6 +235,9 @@ def read_safetensors(path, allow=("F32",)) -> tuple[dict, dict | None, str]:
     for name, t in ts.items():
         if t["dtype"] not in allow:
             raise ValueError(f"{path}: {name}: only {'/'.join(allow)} is supported, not {t['dtype']}")
+        if t["dtype"] == "BF16":  # widened exactly, as forge's ckpt.rs does
+            out[name] = (np.frombuffer(t["data"], "<u2").astype(np.uint32) << 16).view(f32).reshape(t["shape"])
+            continue
         dt = {"F32": "<f4", "F16": "<f2", "F64": "<f8"}[t["dtype"]]
         out[name] = np.frombuffer(t["data"], dt).astype(f32).reshape(t["shape"])
     return out, meta, sha
@@ -257,10 +260,10 @@ def write_safetensors(path, arrays: dict, meta: dict) -> str:
 # ---------------------------------------------------------------------------------------------- checkpoints
 def load_checkpoint(d) -> tuple[dict, dict, str]:
     """What forge's CLI needs from a checkpoint (main.rs:146-159): (state.json, {name: f32}, sha256 of
-    model.safetensors)."""
+    model.safetensors). BF16 weights (an imported bf16 export) are widened to f32 exactly."""
     d = Path(d)
     state = json.loads((d / "state.json").read_text())
-    weights, _, sha = read_safetensors(d / "model.safetensors")
+    weights, _, sha = read_safetensors(d / "model.safetensors", allow=("F32", "BF16"))
     return state, weights, sha
 
 

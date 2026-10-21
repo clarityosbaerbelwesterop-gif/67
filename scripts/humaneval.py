@@ -47,6 +47,7 @@ import os
 import re
 import resource
 import secrets
+import shlex
 import subprocess
 import sys
 import tempfile
@@ -147,9 +148,9 @@ def arc_main(args, tok) -> int:
             prompts = f.name
         max_new = max(16, min(args.max_new, ctx - max(len(p) for _, p in fit)))
         for attempt, extra in enumerate((["--temperature", "0"], ["--temperature", "0.7", "--seed", "1"])):
-            out = subprocess.run([str(ROOT / "target/release/forge"), "generate", "--ckpt", args.ckpt, "--prompts-file", prompts,
-                                  "--max-new", str(max_new), "--stop-id", str(eos)] + extra,
-                                 check=True, capture_output=True, text=True).stdout
+            out = subprocess.run(generate_cmd(args.ckpt) + ["--prompts-file", prompts, "--max-new", str(max_new),
+                                                            "--stop-id", str(eos)] + extra,
+                                 check=True, capture_output=True, text=True, cwd=ROOT).stdout
             gens = [json.loads(l) for l in out.splitlines() if l.startswith("{")]
             for ((tid, i, _, want), _), g in zip(fit, gens):
                 got = arc_grid(tok.decode([x for x in g["ids"] if x < 256 + len(tok.merges)]))
@@ -372,6 +373,13 @@ def ckpt_id(ckpt: str, tokenizer: str) -> list:
     return [str(Path(ckpt).resolve())] + [[f.name, f.stat().st_size, f.stat().st_mtime_ns] for f in files if f.is_file()]
 
 
+def generate_cmd(ckpt: str) -> list:
+    """The decoder: forge generate (CPU), or the command in GEN_CMD that takes the same arguments, e.g.
+    GEN_CMD="python3 -m accel.generate --batch 128" for KV-cache decoding on GPUs (run from the repository root)."""
+    pre = shlex.split(os.environ.get("GEN_CMD", "")) or [str(ROOT / "target/release/forge"), "generate"]
+    return pre + ["--ckpt", str(Path(ckpt).resolve())]
+
+
 def completions(args, tok, texts: list, temperature: float, seed: int, copies: int, max_new: int | None = None) -> list:
     """`copies` decoded completions per prompt (line j of the batch decodes with seed + j). With --cache-dir the
     result is reused by any suite with the same prompts, so the -hard variants cost no extra decoding."""
@@ -388,11 +396,10 @@ def completions(args, tok, texts: list, temperature: float, seed: int, copies: i
             f.write((json.dumps(ids) + "\n") * copies)
         prompts = f.name
     eos = len(tok.merges) + 256 + 1
-    cmd = [str(ROOT / "target/release/forge"), "generate", "--ckpt", args.ckpt, "--prompts-file", prompts,
-           "--max-new", str(max_new), "--stop-id", str(eos)]
+    cmd = generate_cmd(args.ckpt) + ["--prompts-file", prompts, "--max-new", str(max_new), "--stop-id", str(eos)]
     if temperature > 0:
         cmd += ["--temperature", str(temperature), "--seed", str(seed)]
-    out = subprocess.run(cmd, check=True, capture_output=True, text=True).stdout
+    out = subprocess.run(cmd, check=True, capture_output=True, text=True, cwd=ROOT).stdout
     os.unlink(prompts)
     gens = [tok.decode([i for i in json.loads(l)["ids"] if i < 256 + len(tok.merges)]) for l in out.splitlines() if l.startswith("{")]
     res = [gens[i * copies:(i + 1) * copies] for i in range(len(texts))]
