@@ -2,6 +2,9 @@
 
 Stand 19.10.2026, nach Groks Prüfung überarbeitet.
 
+**Abgelöst am 21.10.2026** durch `docs/PLAN_250B_FOERDERUNG.md` (Ziel 250B-A35B mit Untermodell 1–10B, Owner).
+Die Architektur- und BTX-Überlegungen hier bleiben als Referenz.
+
 **Rolle dieses Plans.** Das ist der Plan für Funding und EuroHPC. Aus den 300 € läuft heute der 23B-Schritt (Weg B).
 Dieser Plan beginnt erst mit Funding.
 

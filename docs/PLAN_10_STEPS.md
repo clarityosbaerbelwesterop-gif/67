@@ -92,6 +92,8 @@ Quasnir ist eingefroren. Es läuft kein GPU-Lauf und es wird keiner vorbereitet,
 - `gpu-job/JOB` in Osirus zeigt auf den abgeschlossenen Lauf `eval-1-a` und startet nichts Neues.
 - Der lokale Langlauf bleibt angehalten.
 - Nächster Schritt: Alternativen zu Lauf 2 mit höchstens 50 € (`docs/ALTERNATIVEN_LAUF2.md`).
+- Ziel des Owners (21.10.2026, abends): Quasnir-MoE 250B-A35B mit Untermodell 1–10B, alle Verfahren bleiben.
+  Trainiert wird erst mit Förderung; bis dahin nur kostenlose Vorbereitung (`docs/PLAN_250B_FOERDERUNG.md`).
 
 **Entscheidungen des Owners (21.10.2026):**
 - Lösungen offener Modelle mit freier Lizenz (MIT, Apache-2.0) dürfen Trainingsdaten werden; geschlossene Modelle
