@@ -126,3 +126,18 @@ def test_cli_summary(gw, tmp_path):
     out = subprocess.run([sys.executable, str(ROOT / "jobs/volsync.py"), "health"], capture_output=True, text=True,
                          env=env)
     assert out.returncode == 0 and json.loads(out.stdout)["ok"]
+
+
+def test_pull_resumes_a_broken_download(gw, tmp_path):
+    url, vol = gw
+    data = os.urandom(3 * 1024 * 1024 + 5)
+    write(vol / "store/train.bin", data)
+    fresh = tmp_path / "fresh"
+    part = fresh / "store/train.bin.part"
+    write(part, data[:1_000_000])            # a download that broke after 1 MB
+    r = volsync.pull(url, fresh, ["store"], [], True, True)
+    assert r["pulled"] == ["store/train.bin"] and not r["bad"], r
+    assert (fresh / "store/train.bin").read_bytes() == data and not part.exists()
+    req = urllib.request.Request(f"{url}/f/store/train.bin", headers={"Range": "bytes=100-"})
+    with volsync.OPEN(req, timeout=10) as resp:
+        assert resp.status == 206 and resp.read() == data[100:]

@@ -7,7 +7,7 @@ is public, so every request carries the token as the first path part (/TOKEN/...
   GET  /T/health                          {"ok": true, "free": bytes}
   GET  /T/tree/REL                        [{"path": rel, "size": n}, ...] for every file under REL ([] if missing)
   GET  /T/sha/REL                         {"sha256": hex, "size": n}
-  GET  /T/f/REL                           the file
+  GET  /T/f/REL                           the file (Range: bytes=N- resumes from byte N)
   PUT  /T/f/REL?offset=O&size=S&sha256=H  one chunk of REL, written into REL.part at offset O (S = size of the whole
                                           file, H = sha256 of this chunk; the chunk counts only if H matches)
   POST /T/commit/REL?size=S&sha256=H      REL.part becomes REL once the chunks cover every byte; H = sha256 of the
@@ -112,12 +112,18 @@ class Handler(BaseHTTPRequestHandler):
                         h.update(b)
                 return self.reply(200, {"sha256": h.hexdigest(), "size": p.stat().st_size})
             if op == "f":
-                size = p.stat().st_size
-                self.send_response(200)
+                size, start = p.stat().st_size, 0
+                rng = self.headers.get("Range", "")
+                if rng.startswith("bytes=") and rng[6:].split("-")[0].isdigit():
+                    start = min(int(rng[6:].split("-")[0]), size)
+                self.send_response(206 if start else 200)
                 self.send_header("Content-Type", "application/octet-stream")
-                self.send_header("Content-Length", str(size))
+                self.send_header("Content-Length", str(size - start))
+                if start:
+                    self.send_header("Content-Range", f"bytes {start}-{size - 1}/{size}")
                 self.end_headers()
                 with open(p, "rb") as fh:
+                    fh.seek(start)
                     while b := fh.read(PIECE):
                         self.wfile.write(b)
                 return

@@ -71,6 +71,25 @@ def remote_tree(gw: str, rel: str) -> list:
     return t
 
 
+def fetch(gw: str, rel: str, size: int, tmp: Path, tries: int = 6) -> bool:
+    """Download into tmp, resuming after a broken connection (Range); True once tmp holds `size` bytes."""
+    url = f"{gw.rstrip('/')}/f/{quote(rel)}"
+    if tmp.exists() and tmp.stat().st_size > size:
+        tmp.unlink()
+    for i in range(tries):
+        have = tmp.stat().st_size if tmp.exists() else 0
+        if have == size:
+            return True
+        req = urllib.request.Request(url, headers={"Range": f"bytes={have}-"} if have else {})
+        try:
+            with OPEN(req, timeout=120) as r, open(tmp, "ab" if have and r.status == 206 else "wb") as fh:
+                while b := r.read(PIECE):
+                    fh.write(b)
+        except OSError:
+            time.sleep(min(2 ** i, 30))
+    return tmp.exists() and tmp.stat().st_size == size
+
+
 def pull(gw: str, root: Path, rels, names, verify: bool, require: bool) -> dict:
     done, kept, missing, bad = [], [], [], []
     t0, nbytes = time.time(), 0
@@ -85,12 +104,8 @@ def pull(gw: str, root: Path, rels, names, verify: bool, require: bool) -> dict:
                 continue
             dst.parent.mkdir(parents=True, exist_ok=True)
             tmp = dst.with_name(dst.name + ".part")
-            url = f"{gw.rstrip('/')}/f/{quote(f['path'])}"
-            with OPEN(url, timeout=600) as r, open(tmp, "wb") as fh:
-                while b := r.read(PIECE):
-                    fh.write(b)
-            if tmp.stat().st_size != f["size"]:
-                tmp.unlink()
+            if not fetch(gw, f["path"], f["size"], tmp):
+                tmp.unlink(missing_ok=True)
                 bad.append(f["path"])
                 continue
             if verify:
