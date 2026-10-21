@@ -60,6 +60,32 @@ Für jeden Pod gilt:
   lassen.
 - Das hier ist keine Rechtsberatung.
 
+## Stand 21.10.2026 und Reihenfolge bis zur Pre-Trained-Version
+
+**Lauf train-1-f** (2× B200, beliebiges Rechenzentrum, Gateway am Volume; 78,84 $):
+- Daten 1,55 Mrd. Tokens (Stack-Edu 553 Mio., FineMath-4+ 834 Mio., geprüfte Rechenwege 163 Mio.), auf dem Volume
+  unter `data/train-1/store`.
+- 1B: 2.704 Schritte, ≈ 222.000 Tokens/s (≈ 18 € je Mrd. Tokens), vollständig unter `runs/train-1-f/1b`.
+- Wachsen auf 9,43 Mrd. Parameter; 10B: 973 Schritte, ≈ 30.000 Tokens/s (≈ 137 € je Mrd. Tokens). Auf dem Volume nur
+  der bf16-Export (`runs/train-1-f/10b/export`); f32-Gewichte und AdamW gingen beim Zurückschreiben verloren (am Ende
+  6 MB/s statt 311 MB/s), Ursache offen.
+- HumanEval/MBPP greedy: altes 1B 0/0, neues 1B 0/164 und 2/500. Messung mit Denkzeit: Lauf eval-1-a.
+
+**Entscheidungen des Owners (21.10.2026):**
+- Lösungen offener Modelle mit freier Lizenz (MIT, Apache-2.0) dürfen Trainingsdaten werden; geschlossene Modelle
+  bleiben ausgeschlossen. Lizenz je Datensatz prüfen und im Manifest festhalten.
+- Kosten: so wenig je Mrd. Tokens wie möglich. 2 € je Mrd. sind nur für Modelle bis etwa 0,2 Mrd. Parameter möglich
+  (6 × Parameter Rechenschritte je Token); für 1B und 10B gilt daher ein fester Deckel je Lauf mit gemessenem Gewinn.
+- Agents und das 10B zum Ausführen auf einer RTX 4090/5090 (8-Bit-Gewichte); RSI später auf H200.
+
+**Reihenfolge (Owner):**
+1. Neuer Champion über das Gate (vor allem anderen).
+2. RSI und alle Verfahren: Denkzeit, Agents und Sub-Agents, Research mit Internet (nur lesen), Verifikation.
+3. 10B und 1B als Sub-Modell bereit, Agents bereit.
+4. Wenn alles steht: als Pre-Trained-Version speichern (eingefrorene Gewichte und Manifest).
+5. Fine-Tuning.
+6. Benchmark-Tests.
+
 ## Von Kai für Schritt 6
 
 - **Modell:** Schichten, d_model, Köpfe, Parameter gesamt und aktiv.
