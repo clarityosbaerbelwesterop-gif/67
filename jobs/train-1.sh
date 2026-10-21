@@ -111,10 +111,19 @@ N10=$($PY scripts/grow.py "$INIT_1B" "$OUT/.dry" --dim "$DIM" --ffn-hidden "$FFN
       | $PY -c "import json,sys; print(json.load(sys.stdin)['grown_params'])")
 PER=18; [ -f "$G/model.safetensors" ] && PER=14
 NEED=$(( N10 * PER + 15000000000 )); FREE=$(df -B1 --output=avail "$V" | tail -1 | tr -dc 0-9)
-TEN=1
+TEN=1; WHY=
 if [ "$FREE" -lt "$NEED" ]; then
-  TEN=0; KEEP_10B_MIN=0
+  TEN=0; KEEP_10B_MIN=0; WHY=storage
   st storage short "free_gb=$(( FREE / 1000000000 ))" "need_gb=$(( NEED / 1000000000 ))" "action=1B only, no growth"
+fi
+# does the 10B fit on these GPUs? f32 params, grads and AdamW (16 B/param) sharded over the GPUs + 30 GB activations,
+# at most 90 % of one GPU (one B200: no; two: yes)
+GMIB=$(nvidia-smi --query-gpu=memory.total --format=csv,noheader,nounits 2>/dev/null | head -1 | tr -dc 0-9)
+PERGPU=$(( N10 * 16 / NGPU + 30000000000 ))
+if [ "$TEN" = 1 ] && [ -n "$GMIB" ] && [ "$PERGPU" -gt $(( GMIB * 1048576 * 9 / 10 )) ]; then
+  TEN=0; KEEP_10B_MIN=0; WHY=gpu-memory
+  st gpu-memory short "gpus=$NGPU" "gpu_gb=$(( GMIB * 1048576 / 1000000000 ))" \
+    "need_gb_per_gpu=$(( PERGPU / 1000000000 ))" "action=1B only, no growth"
 fi
 
 # 3. 1B premium tokens -------------------------------------------------------------------------------------------
@@ -144,7 +153,7 @@ fi
 
 # 5. 10B -------------------------------------------------------------------------------------------------------
 B10="$W/10b"
-[ "$TEN" = 1 ] || st 10b skipped "reason=storage"
+[ "$TEN" = 1 ] || st 10b skipped "reason=$WHY"
 [ "$TEN" = 1 ] && case "$(runstatus "$B10/DONE.json")" in ok|deadline) ;; *)
   t=$(date +%s); log 10b
   $JPY -m accel.run_s2 $TRAIN --init "$G" --out "$B10" --deadline "$(( DEADLINE - 60 ))" --reserve-s "${RESERVE_10B:-1500}" \
