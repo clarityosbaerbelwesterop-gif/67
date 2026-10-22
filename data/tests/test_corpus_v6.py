@@ -174,3 +174,23 @@ def test_plan_max_bytes_takes_whole_files_up_to_the_cap(tmp_path):
     assert v6.main(["plan", "--out", str(tmp_path / "out"), "--config", str(tmp_path / "cfg.json")]) == 0
     files = json.loads((tmp_path / "out" / "plan.json").read_text())["files"]
     assert len(files) == 3 and sum(f["size"] for f in files) == 300
+
+
+def test_template_joins_task_and_answer_columns(tmp_path):
+    import pyarrow as pa
+    import pyarrow.parquet as pq
+    src = {"name": "oci", "template": "{input}\n\n{output}", "kind": "reasoning", "tier": "A",
+           "source_licence": "CC-BY-4.0", "where": {"average_test_score": ["1", "1.0"]}}
+    assert v6._template_fields(src) == ["input", "output"]
+    row = {"input": "Add two numbers.", "output": "```python\ndef add(a, b):\n    return a + b\n```",
+           "average_test_score": "1", "unused": "x"}
+    assert v6._text(row, src) == "Add two numbers.\n\n```python\ndef add(a, b):\n    return a + b\n```"
+    assert v6._text({"input": "only the task"}, src) is None            # a missing column gives no document
+    assert v6._text({"text": "plain"}, {"text": "text"}) == "plain"    # sources without a template are unchanged
+    kept = v6.keep_row(row, src, "reasoning", set())
+    assert kept[0].startswith("Add two numbers.") and kept[2] == "CC-BY-4.0"
+    assert v6.keep_row({**row, "average_test_score": "0.9"}, src, "reasoning", set()) == (None, "where")
+    p = tmp_path / "x.parquet"
+    pq.write_table(pa.Table.from_pylist([row]), p)
+    got = list(v6.rows(p, src))
+    assert got == [{"average_test_score": "1", "input": row["input"], "output": row["output"]}]  # only needed columns

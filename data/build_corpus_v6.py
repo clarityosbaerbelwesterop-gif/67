@@ -265,8 +265,9 @@ def rows(path: Path, src: dict):
     if name.endswith(".parquet"):
         import pyarrow.parquet as pq
         pf = pq.ParquetFile(path)
-        cols = sorted({c.split(".")[0] for c in (src["text"], src.get("path"), src.get("licence"), src.get("id"),
-                                                   *src.get("where", {}).keys()) if c} & set(pf.schema_arrow.names))
+        cols = sorted({c.split(".")[0] for c in (src.get("text"), src.get("path"), src.get("licence"), src.get("id"),
+                                                   *_template_fields(src), *src.get("where", {}).keys()) if c}
+                      & set(pf.schema_arrow.names))
         for batch in pf.iter_batches(batch_size=2048, columns=cols):
             yield from batch.to_pylist()
         return
@@ -281,6 +282,25 @@ def rows(path: Path, src: dict):
         for line in fh:
             if line.strip():
                 yield json.loads(line)
+
+
+_TEMPLATE_FIELD = re.compile(r"\{([A-Za-z0-9_.]+)\}")
+
+
+def _template_fields(src: dict) -> list:
+    return _TEMPLATE_FIELD.findall(src.get("template") or "")
+
+
+def _text(row: dict, src: dict):
+    """The document of a row: the field "text", or "template" with every {field} filled from the row (for sources
+    that keep a task and its answer in separate columns). None if a field is missing or not a string."""
+    tpl = src.get("template")
+    if not tpl:
+        return _field(row, src["text"])
+    vals = {f: _field(row, f) for f in _template_fields(src)}
+    if not all(isinstance(v, str) for v in vals.values()):
+        return None
+    return _TEMPLATE_FIELD.sub(lambda m: vals[m.group(1)], tpl)
 
 
 def _where(row: dict, cond: dict) -> bool:
@@ -434,7 +454,7 @@ def filter_file(out: Path, f: dict, src: dict, banned: set[int], sk: Sketcher) -
 
 def keep_row(row: dict, src: dict, kind: str, banned: set[int]):
     """(text, path, licence, tier) or (None, reason)."""
-    text = _field(row, src["text"])
+    text = _text(row, src)
     if not isinstance(text, str) or not text.strip():
         return None, "empty"
     if src.get("where") and not _where(row, src["where"]):
@@ -714,7 +734,7 @@ def _scan_file(job: tuple) -> dict:
     excluded = []
     for i, row in enumerate(rows(Path(path), src)):
         stats["rows"] += 1
-        text = _field(row, src["text"])
+        text = _text(row, src)
         rid = _field(row, src["id"]) if src["id"] else None
         rid = str(rid) if rid is not None else f"{Path(path).name}:{i}"
         if not isinstance(text, str) or not text.strip():

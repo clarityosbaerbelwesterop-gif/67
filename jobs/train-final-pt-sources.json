@@ -1,0 +1,70 @@
+{
+ "about": "Run train-final (owner, 22.10.2026): pre-training tokens that finish the 1B, built on the GPU pod by jobs/train-final.sh; @D@ is the run's data directory. Same rules as train-1: licence tiers, content rules, 13-gram decontamination against HumanEval, MBPP and GSM8K, dedup.",
+ "tiers": {
+  "A": "public domain, CC0, CC BY, permissive code licences (MIT, BSD, Apache, ISC, ...)",
+  "B": "share-alike (CC BY-SA): excluded by the current policy",
+  "C": "web crawl, dataset licence only (ODC-By): owner decision"
+ },
+ "sources": [
+  {
+   "name": "reasoning-traces",
+   "local": "@D@/reasoning/*.jsonl",
+   "kind": "reasoning",
+   "tier": "A",
+   "text": "t",
+   "source_licence": "CC0",
+   "priority": 90,
+   "note": "data/build_reasoning.py --docs-only: verified synthetic traces plus GSM8K/AQuA train (no test items)"
+  },
+  {
+   "name": "cp-stackv2-edu",
+   "repo": "common-pile/stackv2_edu_filtered",
+   "files": "*",
+   "kind": "code",
+   "tier": "A",
+   "text": "text",
+   "licence": "metadata.license",
+   "budget_tokens": 6000000000.0,
+   "priority": 80,
+   "note": "Common Pile v0.1 Stack-Edu: per-file licence (metadata.license, license_type permissive), educational-quality score int_score; not gated. Only int_score >= 3, no generated or vendored files.",
+   "path": "metadata.path",
+   "where": {
+    "int_score": {
+     ">=": 3
+    },
+    "metadata.is_generated": false,
+    "metadata.is_vendor": false
+   },
+   "checked": "2026-10-20: repo, file layout and fields checked on the Hugging Face Hub",
+   "max_bytes": 24000000000.0
+  },
+  {
+   "name": "finemath-4plus",
+   "repo": "HuggingFaceTB/finemath",
+   "files": "finemath-4plus/*.parquet",
+   "kind": "general",
+   "tier": "C",
+   "text": "text",
+   "dataset_licence": "ODC-By-1.0 (dataset)",
+   "budget_tokens": 2000000000.0,
+   "priority": 29,
+   "note": "owner decision: math web pages",
+   "checked": "2026-10-20: repo, file layout and fields checked on the Hugging Face Hub",
+   "max_bytes": 7000000000.0
+  },
+  {
+   "name": "opc-algorithmic",
+   "repo": "OpenCoder-LLM/opc-annealing-corpus",
+   "files": "algorithmic_corpus/*.jsonl",
+   "kind": "code",
+   "tier": "C",
+   "text": "text",
+   "dataset_licence": "ODC-By-1.0 (dataset)",
+   "budget_tokens": 800000000.0,
+   "priority": 60,
+   "max_bytes": 3200000000.0,
+   "note": "OpenCoder annealing corpus, part algorithmic_corpus: code from The Stack v2, no per-file licence, so tier C (owner yes 22.10.2026). The synthetic parts (Qwen2-72B, licence other) are not used.",
+   "checked": "2026-10-22: file layout (algorithmic_corpus/N.jsonl, fields type, lang, text) on the Hugging Face Hub"
+  }
+ ]
+}

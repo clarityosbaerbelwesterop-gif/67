@@ -1,0 +1,77 @@
+{
+ "about": "Run train-final (owner, 22.10.2026): fine-tuning data for the finished 1B (and the 10B if time is left). OpenCodeInstruct tasks with solutions that passed all of their unit tests, verified reasoning traces, and a little replay of the pre-training sources so nothing is forgotten.",
+ "tiers": {
+  "A": "public domain, CC0, CC BY, permissive code licences (MIT, BSD, Apache, ISC, ...)",
+  "B": "share-alike (CC BY-SA): excluded by the current policy",
+  "C": "web crawl, dataset licence only (ODC-By): owner decision"
+ },
+ "sources": [
+  {
+   "name": "opencodeinstruct",
+   "repo": "nvidia/OpenCodeInstruct",
+   "files": "data/*.parquet",
+   "template": "{input}\n\n{output}",
+   "kind": "reasoning",
+   "tier": "A",
+   "source_licence": "CC-BY-4.0",
+   "id": "id",
+   "where": {
+    "average_test_score": [
+     "1",
+     "1.0"
+    ]
+   },
+   "budget_tokens": 900000000.0,
+   "priority": 90,
+   "max_bytes": 7500000000.0,
+   "note": "CC BY 4.0. Tasks by Qwen2.5-32B-Instruct, solutions and unit tests by Qwen2.5-Coder-32B-Instruct (both Apache-2.0); only rows whose solution passed all of its tests (average_test_score 1). Kind reasoning: verified by execution, so the prose rules for web text do not apply. Owner yes 22.10.2026 (E7).",
+   "checked": "2026-10-22: file layout (data/train-000NN-of-00050.parquet) and fields (input, output, average_test_score as a string) on the Hugging Face Hub"
+  },
+  {
+   "name": "reasoning-traces",
+   "local": "@D@/reasoning/*.jsonl",
+   "kind": "reasoning",
+   "tier": "A",
+   "text": "t",
+   "source_licence": "CC0",
+   "priority": 90,
+   "note": "data/build_reasoning.py --docs-only: verified synthetic traces plus GSM8K/AQuA train (no test items)"
+  },
+  {
+   "name": "cp-stackv2-edu",
+   "repo": "common-pile/stackv2_edu_filtered",
+   "files": "*",
+   "kind": "code",
+   "tier": "A",
+   "text": "text",
+   "licence": "metadata.license",
+   "budget_tokens": 150000000.0,
+   "priority": 40,
+   "note": "replay of the pre-training code",
+   "path": "metadata.path",
+   "where": {
+    "int_score": {
+     ">=": 3
+    },
+    "metadata.is_generated": false,
+    "metadata.is_vendor": false
+   },
+   "checked": "2026-10-20: repo, file layout and fields checked on the Hugging Face Hub",
+   "max_bytes": 800000000.0
+  },
+  {
+   "name": "finemath-4plus",
+   "repo": "HuggingFaceTB/finemath",
+   "files": "finemath-4plus/*.parquet",
+   "kind": "general",
+   "tier": "C",
+   "text": "text",
+   "dataset_licence": "ODC-By-1.0 (dataset)",
+   "budget_tokens": 50000000.0,
+   "priority": 20,
+   "note": "replay of the pre-training math",
+   "checked": "2026-10-20: repo, file layout and fields checked on the Hugging Face Hub",
+   "max_bytes": 250000000.0
+  }
+ ]
+}
